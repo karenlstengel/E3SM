@@ -1,6 +1,9 @@
 include(${CMAKE_CURRENT_LIST_DIR}/common.cmake)
 common_setup()
 
+# Turn on the debugging logger
+set(CMAKE_BUILD_TYPE TRUE)
+
 set(EKAT_MACH_FILES_PATH ${CMAKE_CURRENT_LIST_DIR}/../../../../externals/ekat/cmake/machine-files)
 
 if (USE_CUDA)

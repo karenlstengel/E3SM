@@ -26,6 +26,7 @@ if (NOT EAMXX_ENABLE_GPU OR Kokkos_ENABLE_CUDA_RELOCATABLE_DEVICE_CODE OR Kokkos
     eti/gw_gw_common_init.cpp
     eti/gw_vd_lu_decomp.cpp
     eti/gw_vd_lu_solve.cpp
+    eti/gw_gw_convect_init.cpp
   ) # GW ETI SRCS
 endif()
 
@@ -35,7 +36,7 @@ target_include_directories(gw PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/impl
 )
-target_link_libraries(gw physics_share scream_share)
+target_link_libraries(gw eamxx_physics_share scream_share)
 
 if (NOT SCREAM_LIB_ONLY)
   add_subdirectory(tests)

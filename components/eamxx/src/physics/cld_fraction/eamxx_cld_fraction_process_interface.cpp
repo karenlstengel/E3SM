@@ -1,5 +1,6 @@
 #include "eamxx_cld_fraction_process_interface.hpp"
 #include "share/property_checks/field_within_interval_check.hpp"
+#include "share/field/field_utils.hpp"
 
 #include <ekat_assert.hpp>
 #include <ekat_units.hpp>
@@ -101,6 +102,24 @@ void CldFraction::run_impl (const double /* dt */)
   auto tot_cld_frac = get_field_out("cldfrac_tot");
   auto ice_cld_frac_4out = get_field_out("cldfrac_ice_for_analysis");
   auto tot_cld_frac_4out = get_field_out("cldfrac_tot_for_analysis");
+
+  // TODO - scale and print 
+  m_atm_logger->info("[EAMxx] cloud fraction run_impl: ");
+  // print value here 
+
+  auto tot_cld_frac_max = field_max<Real>(tot_cld_frac);
+  m_atm_logger->info("\t Total cloud fraction total before scaling (maximum value): " + std::to_string(tot_cld_frac_max));
+
+  tot_cld_frac.scale(2.0);
+  tot_cld_frac_max = field_max<Real>(tot_cld_frac);
+  m_atm_logger->info("\t Total cloud fraction total after scaling 2 (maximum value): " + std::to_string(tot_cld_frac_max));
+
+  // print value here
+  tot_cld_frac.scale(0.5);
+  tot_cld_frac_max = field_max<Real>(tot_cld_frac);
+  m_atm_logger->info("\t Total cloud fraction total after scaling by 1/2 (maximum value): " + std::to_string(tot_cld_frac_max));
+  // print value here
+
 #ifdef EAMXX_HAS_PYTHON
   if (has_py_module()) {
     // For now, we run Python code only on CPU

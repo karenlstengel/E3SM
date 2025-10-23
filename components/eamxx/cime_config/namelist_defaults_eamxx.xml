@@ -304,6 +304,14 @@ be lost if SCREAM_HACK_XML is not enabled.
     <!-- CLD fraction -->
     <cld_fraction inherit="atm_proc_base"/>
 
+    <!-- Stengel pretend physics package for eamxx -->
+    <stengel inherit="atm_proc_base"/>
+    <!-- Or can implement with extra options here 
+    <stengel inherit="atm_proc_base">
+      <var_name type="type" doc="Description of variable here">default value here</var_name>
+    </stengel> -->
+    <!-- End stengel physics package for eamxx -->
+
     <!-- MAM4xx namelist options -->
 
     <!-- MAM4xx-Aerosol-Microphysics -->
@@ -737,6 +745,7 @@ be lost if SCREAM_HACK_XML is not enabled.
     <perturbation_random_seed type="integer" doc="Random seed used for perturbation. Will be overridded by generate_perturbation_random_seed=true.">0</perturbation_random_seed>
     <perturbation_limit type="real" doc="Defines a range [1-x, 1+x] which perturbation will be taken from.">0.001</perturbation_limit>
     <perturbation_minimum_pressure type="real" doc="Minimum pressure (relative to a reference level pressure profile) for which perturbation will be applied.">900.0</perturbation_minimum_pressure>
+    <!-- would add initial conditions here for stengel package if using -->
   </initial_conditions>
 
   <!-- List of yaml files containing I/O output specs -->

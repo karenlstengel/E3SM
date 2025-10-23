@@ -27,7 +27,7 @@ set(ATM_SRC
   eamxx_cpl_indices.F90
   ${SCREAM_BASE_DIR}/../eam/src/physics/cam/physics_utils.F90
 )
-
+# add new physics package to list here
 set (SCREAM_LIBS
      scream_share
      scream_control
@@ -42,6 +42,7 @@ set (SCREAM_LIBS
      nudging
      diagnostics
      tms
+     stengel 
      )
 
 # ZM is not always on yet

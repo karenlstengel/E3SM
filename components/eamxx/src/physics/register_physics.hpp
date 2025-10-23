@@ -47,6 +47,9 @@
 #ifdef EAMXX_HAS_IOP_FORCING
 #include "physics/iop_forcing/eamxx_iop_forcing_process_interface.hpp"
 #endif
+#ifdef EAMXX_HAS_STENGEL
+#include "physics/stengel/eamxx_stengel_process_interface.hpp"
+#endif
 
 namespace scream {
 
@@ -94,6 +97,8 @@ inline void register_physics () {
 #ifdef EAMXX_HAS_IOP_FORCING
   proc_factory.register_product("iop_forcing",&create_atmosphere_process<IOPForcing>);
 #endif
+#ifdef EAMXX_HAS_STENGEL
+  proc_factory.register_product("stengel",&create_atmosphere_process<STENGEL>);
 
   // If no physics was enabled, silence compile warning about unused var
   (void) proc_factory;

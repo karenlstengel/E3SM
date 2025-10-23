@@ -40,7 +40,6 @@ set (SCREAM_LIBS
      spa
      iop_forcing
      nudging
-     diagnostics
      tms
      stengel 
      )

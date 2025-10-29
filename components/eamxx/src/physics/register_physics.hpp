@@ -98,7 +98,8 @@ inline void register_physics () {
   proc_factory.register_product("iop_forcing",&create_atmosphere_process<IOPForcing>);
 #endif
 #ifdef EAMXX_HAS_STENGEL
-  proc_factory.register_product("stengel",&create_atmosphere_process<STENGEL>);
+  proc_factory.register_product("stengel",&create_atmosphere_process<Stengel>);
+#endif
 
   // If no physics was enabled, silence compile warning about unused var
   (void) proc_factory;

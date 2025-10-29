@@ -1,7 +1,7 @@
 # List of all cpp source files 
 set(STENGEL_SRCS
   eamxx_stengel_process_interface.cpp
-  stengel.cpp
+  # stengel.cpp
 )
 
 # List of all hpp header files

@@ -32,41 +32,40 @@ Stengel::Stengel (const ekat::Comm& comm, const ekat::ParameterList& params)
 // =========================================================================================
 void Stengel::set_grids(const std::shared_ptr<const GridsManager> grids_manager)
 {
-  using namespace ekat::units;
-  using namespace ShortFieldTagsNames;
+  // using namespace ekat::units;
+  // using namespace ShortFieldTagsNames;
 
-  // The units of mixing ratio Q are technically non-dimensional.
-  // Nevertheless, for output reasons, we like to see 'kg/kg'.
+  m_atm_logger->info("[EAMxx] Stengel processes set grids");
+
+  // // The units of mixing ratio Q are technically non-dimensional.
+  // // Nevertheless, for output reasons, we like to see 'kg/kg'.
   // auto nondim = Units::nondimensional();
-  // constexpr auto Pa = ekat::units::Pa;
+  constexpr auto K = ekat::units::K;
+  constexpr auto Pa = ekat::units::Pa;
 
   // specify which grid to use
   m_grid = grids_manager->get_grid("physics");
   const auto& grid_name = m_grid->name();
-  // m_num_cols = m_grid->get_num_local_dofs(); // Number of columns on this rank
-  // m_num_levs = m_grid->get_num_vertical_levels();  // Number of levels per column
+  m_num_cols = m_grid->get_num_local_dofs(); // Number of columns on this rank
+  m_num_levs = m_grid->get_num_vertical_levels();  // Number of levels per column
 
-  // Define the different field layouts that will be used for this process
+  FieldLayout scalar3d_layout_mid = m_grid->get_3d_scalar_layout(true);
 
-  // Layout for 3D (2d horiz X 1d vertical) variable defined at mid-level and interfaces
-  // FieldLayout scalar3d_layout_mid { {COL,LEV}, {m_num_cols,m_num_levs} };
+  constexpr int ps = 1;
+  add_field<Updated>("T_mid", scalar3d_layout_mid, K, grid_name, ps);
+  add_field<Updated>("p_mid", scalar3d_layout_mid, Pa, grid_name, ps);
 
-  // Set of fields used strictly as input (Required)
+  // // Set of fields used strictly as input (Required)
   // constexpr int ps = Pack::n;
   // add_tracer<Required>("tracer1_in", m_grid, kg/kg, ps); // tracers are for advection I think
   // add_field<Required>("qi", scalar3d_layout_mid, nondim, grid_name,ps);
 
-  // Set of fields used strictly as output (Computed)
+  // // Set of fields used strictly as output (Computed)
   // add_field<Computed>("field1_out", scalar3d_layout_mid, Pa, grid_name,ps);
   // add_field<Computed>("field2_out", scalar3d_layout_mid, Pa, grid_name,ps); 
 
   // Set of fields used as input and output (Updated)
   // add_field<Updated>("field1_updated", scalar3d_layout_mid, Pa,grid_name, ps);
-
-  // FieldLayout scalar3d_layout_mid { {COL,LEV},     {m_num_cols,    m_num_levs  } };
-  // constexpr int ps = Spack::n;
-  // add_field<Required>("p_mid", scalar3d_layout_mid,  Pa,     grid_name, ps);
-
 
   // Gather parameters from parameter list:
   // stengel_var1 = m_params.get<double>("stengel_var1",1e-12);  // Default = 1e-12
@@ -100,8 +99,8 @@ void Stengel::initialize_impl (const RunType /* run_type */)
 void Stengel::run_impl (const double /* dt */)
 {
   // Pull in variables .
-  // auto p_mid   = get_field_in("p_mid");
-  // field1_in, field1_out, field2_out, field1_updated
+  auto T_mid   = get_field_out("T_mid");
+  auto p_mid   = get_field_out("p_mid"); // work?
   // auto field1_in = get_field_in("field1_in");
   // auto field1_out = get_field_out("field1_out");
   // auto field2_out = get_field_out("field2_out"); 
@@ -115,7 +114,33 @@ void Stengel::run_impl (const double /* dt */)
   // field1_updated_max.scale(2.0);
   // field1_updated_max = field_max<Real>(field1_updated);
   // m_atm_logger->info("\t max value for updated field 1 scaled by 2x: "+ std::to_string(field1_updated_max));
-  
+
+  // TODO - change p_mid value here and print like above
+  auto T_mid_max = field_max<Real>(T_mid);
+  m_atm_logger->info("\t max value for updated T_mid: "+ std::to_string(T_mid_max));
+
+  // Can't change value of p_mid directly since p_mid is read-only
+  T_mid.scale(2.0);
+  T_mid_max = field_max<Real>(T_mid);
+  m_atm_logger->info("\t max value for T_mid scaled by 2x: "+ std::to_string(T_mid_max));
+
+  T_mid.scale(0.5);
+  T_mid_max = field_max<Real>(T_mid);
+  m_atm_logger->info("\t max value for T_mid scaled by 0.5x: "+ std::to_string(T_mid_max));
+
+  // ------------------ try with p_mid
+  auto p_mid_max = field_max<Real>(p_mid);
+  m_atm_logger->info("\t max value for updated p_mid: "+ std::to_string(p_mid_max));
+
+  // Can't change value of p_mid directly since p_mid is read-only?
+  p_mid.scale(2.0);
+  p_mid_max = field_max<Real>(p_mid);
+  m_atm_logger->info("\t max value for p_mid scaled by 2x: "+ std::to_string(p_mid_max));
+
+  p_mid.scale(0.5);
+  p_mid_max = field_max<Real>(p_mid);
+  m_atm_logger->info("\t max value for p_mid scaled by 0.5x: "+ std::to_string(p_mid_max));
+
 }
 
 // =========================================================================================

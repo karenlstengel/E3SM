@@ -30,10 +30,10 @@ public:
   Stengel (const ekat::Comm& comm, const ekat::ParameterList& params);
 
   // The type of subcomponent
-  AtmosphereProcessType type () const { return AtmosphereProcessType::Physics; }
+  AtmosphereProcessType type () const override { return AtmosphereProcessType::Physics; }
 
   // The name of the subcomponent
-  std::string name () const { return "stengel"; }
+  std::string name () const override { return "stengel"; }
 
   void set_grids(
     const std::shared_ptr<const GridsManager> grids_manager) override;

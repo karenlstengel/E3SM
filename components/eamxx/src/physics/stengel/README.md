@@ -1,0 +1,309 @@
+# Adding new package to EAMxx
+
+### The code
+
+Create a new folder in `components/eamxx/src/physics/` with the name of your package: `components/eamxx/src/physics/PACKAGENAME`.
+
+In this folder, we must add the following files: 
+
+1. `eamxx_packagename_process_interface.cpp`
+  ```cpp
+  #include "eamxx_packagename_process_interface.hpp"
+  #include "share/property_checks/field_within_interval_check.hpp"
+  #include "share/field/field_utils.hpp"
+
+  #include <ekat_assert.hpp>
+  #include <ekat_units.hpp>
+
+  #include <array>
+
+  #ifdef EAMXX_HAS_PYTHON
+  #include "share/atm_process/atmosphere_process_pyhelpers.hpp"
+  #endif
+
+  namespace scream
+  {
+    using namespace packagename;
+  // =========================================================================================
+  //  Inputs (these are inherited from AtomoshpereProcess which means we can use the same logger):
+  //      comm - an EKAT communication group
+  //      params - a parameter list of options for the process.
+
+  Packagename::Packagename (const ekat::Comm& comm, const ekat::ParameterList& params)
+    : AtmosphereProcess(comm, params)
+  {
+    // Nothing to do here usually
+
+    // if we set any starting values for the code we can get them here with:
+    // var = params.get<std::type>("var_name");
+  }
+
+  // =========================================================================================
+  void Packagename::set_grids(const std::shared_ptr<const GridsManager> grids_manager)
+  {
+    // Note that we inherit the logger used by the overall atmospheric process
+    m_atm_logger->info("[EAMxx] Packagename processes set grids");
+
+    // Set units
+    // auto nondim = Units::nondimensional();
+    constexpr auto K = ekat::units::K;
+    constexpr auto Pa = ekat::units::Pa;
+
+    // specify which grid to use
+    m_grid = grids_manager->get_grid("physics");
+    const auto& grid_name = m_grid->name();
+    m_num_cols = m_grid->get_num_local_dofs(); // Number of columns on this rank
+    m_num_levs = m_grid->get_num_vertical_levels();  // Number of levels per column
+
+    FieldLayout scalar3d_layout_mid = m_grid->get_3d_scalar_layout(true);
+
+    constexpr int ps = 1; // constexpr int ps = Pack::n; for multilevel fields
+    add_field<Updated>("T_mid", scalar3d_layout_mid, K, grid_name, ps);
+    add_field<Updated>("p_mid", scalar3d_layout_mid, Pa, grid_name, ps);
+
+    // Set of fields used strictly as input (Required)
+
+    add_field<Required>("field1_in", m_grid, kg/kg, ps);
+
+    // Set of fields used strictly as output (Computed)
+    add_field<Computed>("field1_out", scalar3d_layout_mid, Pa, grid_name,ps);
+
+    // Set of fields used as input and output (Updated)
+    add_field<Updated>("field1_updated", scalar3d_layout_mid, Pa,grid_name, ps);
+
+    // Gather parameters from parameter list:
+    packagename_var1 = m_params.get<double>("packagename_var1",1e-12);  // Default = 1e-12
+  }
+
+  // =========================================================================================
+  void Packagename::initialize_impl (const RunType /* run_type */)
+  {
+    // NOTE: run_type tells us if this is an initial or restarted run,
+
+    // Set any universal things such as constants or masks (see Pompei example)
+
+    m_atm_logger->info("[EAMxx] packagename processes initialize_impl: ");
+
+    // This is where we can setup Kokkos functions 
+    // This is where we setup any starting physics
+  }
+
+  // =========================================================================================
+
+  // run_impl is called every timestep and where all of the physics happens
+  // Inputs:
+  //    - dt - the timestep for the current run step
+
+  void Packagename::run_impl (const double /* dt */)
+  {
+    // Pull in variables .
+    auto T_mid   = get_field_out("T_mid");
+    auto p_mid   = get_field_out("p_mid");
+    auto field1_in = get_field_in("field1_in"); // get_field_in() sets the field as read-only regardless of if it is required/computed/updated
+    auto field1_out = get_field_out("field1_out");
+    auto field1_updated = get_field_out("field1_updated"); // use this for updated fields too 
+
+    // Logger call 
+    m_atm_logger->info("[EAMxx] packagename run_impl: ");
+
+    // Scale and print p_mid as an example
+    auto p_mid_max = field_max<Real>(p_mid);
+    m_atm_logger->info("\t max value for updated p_mid: "+ std::to_string(p_mid_max));
+
+    p_mid.scale(2.0);
+    p_mid_max = field_max<Real>(p_mid);
+    m_atm_logger->info("\t max value for p_mid scaled by 2x: "+ std::to_string(p_mid_max));
+
+    p_mid.scale(0.5);
+    p_mid_max = field_max<Real>(p_mid);
+    m_atm_logger->info("\t max value for p_mid scaled by 0.5x: "+ std::to_string(p_mid_max));
+
+  }
+
+  // =========================================================================================
+  void Packagename::finalize_impl()
+  {
+    // Do nothing usually
+  }
+  // =========================================================================================
+
+  } // namespace scream
+  ```
+
+2. `eamxx_packagename_process_interface.hpp`
+  ```cpp
+  #ifndef SCREAM_PACKAGENAME_HPP
+  #define SCREAM_PACKAGENAME_HPP
+
+  #include "physics/packagename/packagename_functions.hpp"
+  #include "share/atm_process/atmosphere_process.hpp"
+
+  #include <ekat_parameter_list.hpp>
+
+  #include <string>
+
+  namespace scream
+  {
+
+  /*
+  * The class responsible to do packagename physics
+  *
+  * The AD should store exactly ONE instance of this class stored
+  * in its list of subcomponents (the AD should make sure of this).
+  */
+
+  class Packagename : public AtmosphereProcess
+  {
+  public:
+    using PackagenameFunc = packagename::PackagenameFunctions<Real, DefaultDevice>;
+    using Spack           = PackagenameFunc::Spack;
+    using Smask           = PackagenameFunc::Smask;
+    using Pack            = ekat::Pack<Real,Spack::n>;
+
+    // Constructors
+    Packagename (const ekat::Comm& comm, const ekat::ParameterList& params);
+
+    // The type of subcomponent
+    AtmosphereProcessType type () const override { return AtmosphereProcessType::Physics; }
+
+    // The name of the subcomponent
+    std::string name () const override { return "packagename"; }
+
+    void set_grids(
+      const std::shared_ptr<const GridsManager> grids_manager) override;
+    // Define the protected functions, usually at least initialize_impl, run_impl
+    // and finalize_impl, but others could be included.  See
+    // eamxx_template_process_interface.cpp for definitions of each of these.
+    #ifndef KOKKOS_ENABLE_CUDA
+    protected:
+    #endif
+      void initialize_impl(const RunType run_type) override;
+      void run_impl(const double dt) override;
+      void finalize_impl() override;
+
+    // Keep track of field dimensions and the iteration count
+    Int m_num_cols;
+    Int m_num_levs;
+
+    // Parameters here if needed. 
+    // These can be set in namelist_defaults_scream.xml (see below) for default values and etc
+    Real packagename_var1;
+    Real packagename_var2;
+
+    std::shared_ptr<const AbstractGrid> m_grid;
+  }; // class Packagename
+
+  } // namespace scream
+
+  #endif // SCREAM_PACKAGENAME_HPP
+  ```
+
+3. `CMakeLists.txt`
+  ```cmake
+      # List of all cpp source files needed for the package to work
+    set(PACKAGENAME_SRCS
+      eamxx_packagename_process_interface.cpp
+      # packagename.cpp
+    )
+
+    # List of all hpp header files needed for the package to work
+    set(PACKAGENAME_HEADERS
+      eamxx_packagename_process_interface.hpp
+      packagename_functions.hpp
+    )
+
+    # Adds the library to eamxx_physics 
+    add_library(packagename ${PACKAGENAME_SRCS})
+    target_compile_definitions(packagename PUBLIC EAMXX_HAS_PACKAGENAME)
+    target_link_libraries(packagename eamxx_physics_share scream_share)
+    target_compile_options(packagename PUBLIC)
+
+    if (TARGET eamxx_physics)
+      # Add this library to eamxx_physics
+      target_link_libraries(eamxx_physics INTERFACE packagename)
+    endif()
+  ```
+
+### Hooking up the noodles 
+
+In `components/eamxx/src/physics/CMakeLists.txt`:
+
+```cmake
+add_subdirectory(packagename)
+```
+
+In `components/eamxx/src/mct_coupling/CMakeLists.txt`:
+
+```cmake
+# add new physics package to list here
+set (SCREAM_LIBS
+     scream_share
+     scream_control
+     ${dynLibName}
+     p3
+     shoc
+     scream_rrtmgp
+     eamxx_cosp
+     cld_fraction
+     spa
+     iop_forcing
+     nudging
+     tms
+     packagename 
+     )
+```
+
+In `components/src/physics/register_physics.hpp`: 
+
+```cpp
+#ifndef EAMXX_HAS_PACKAGENAME
+#include "eamxx/src/physics/packagename/eamxx_packagename_process_interface.hpp"
+#endif
+
+// later in the file
+
+#ifndef EAMXX_HAS_PACKAGENAME
+  proc_factory.register_product("packagename", &create_atmosphere_process<PACKAGENAME>);
+```
+
+In `components/eamxx/cime_config/namelist_defaults_scream.xml`, add:
+
+```xml
+    <!-- Packagename -->
+    <packagename inherit="atm_proc_base">
+      <!-- Add in any required variables for the package here -->
+    </packagename>
+    <!-- later if needed  -->
+    <initial_conditions>
+    <variable               >default_value</variable>
+    <!-- Later -->
+
+    <mac_aero_mic inherit="atm_proc_group">
+      <atm_procs_list>shoc,cld_fraction,spa,p3,packagename</atm_procs_list>
+      <atm_procs_list hgrid=".*pg2">tms,shoc,cld_fraction,spa,p3,packagename</atm_procs_list> <!-- TMS only available for PG2 -->
+      <atm_procs_list COMPSET=".*SCREAM%MAM4xx.*" hgrid=".*pg2">tms,shoc,cld_fraction,mam4_aci,p3,packagename</atm_procs_list> <!-- TMS only available for PG2 -->
+      <atm_procs_list COMPSET=".*SCREAM.*noAero">shoc,cld_fraction,p3,packagename</atm_procs_list>
+      <atm_procs_list COMPSET=".*SCREAM.*noAero" hgrid=".*pg2">tms,shoc,cld_fraction,p3,packagename</atm_procs_list> <!-- TMS only available for PG2 -->
+      ...
+    </mac_aero_mic>
+```
+
+An alternative to adding the new package to the `atm_procs_list` is to add it at runtime as: 
+
+```bash
+    ./atmchange mac_aero_mic::atm_procs_list+=packagename
+```
+
+---
+
+## Bridges
+
+### Fortran
+
+TBD
+
+### Python
+
+TBD
+
+## Kokkos and GPU performance 

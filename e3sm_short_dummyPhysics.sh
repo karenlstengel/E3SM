@@ -17,7 +17,7 @@ MYCOMPILER=intel
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="dummy_2_eamxx_cpu"
+CASE_NAME="stengel_2_eamxx_cpu"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build

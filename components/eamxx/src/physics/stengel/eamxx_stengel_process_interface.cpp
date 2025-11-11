@@ -88,6 +88,7 @@ void Stengel::initialize_impl (const RunType /* run_type */)
 
   // This is where we can setup Kokkos functions 
   // This is where we setup any starting physics
+  Stengel::stengel_eamxx_bridge_init(m_pcol, m_nlev);
 }
 
 // =========================================================================================
@@ -140,6 +141,8 @@ void Stengel::run_impl (const double /* dt */)
   p_mid.scale(0.5);
   p_mid_max = field_max<Real>(p_mid);
   m_atm_logger->info("\t max value for p_mid scaled by 0.5x: "+ std::to_string(p_mid_max));
+
+  Stengel::stengel_eamxx_bridge_run(m_pcol, m_nlev, required_arguments); // TODO - required_arguments = p_mid, T_mid
 
 }
 

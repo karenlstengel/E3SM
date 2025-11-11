@@ -318,9 +318,9 @@ In `components/eamxx/src/physics/PACKAGENAME` add a subdirectory `fortran_bridge
       }
 
       void packagename_eamxx_bridge_run( Int ncol, Int pver,
-                                ZMF::packagename_input_state& packagename_input,
-                                ZMF::packagename_output_tend& packagename_output,
-                                ZMF::packagename_runtime_opt& packagename_opts
+                                PackageNameF::packagename_input_state& packagename_input,
+                                PackageNameF::packagename_output_tend& packagename_output,
+                                PackageNameF::packagename_runtime_opt& packagename_opts
                               ){
         //----------------------------------------------------------------------------
         // Need to transpose to match how Fortran handles things
@@ -352,12 +352,12 @@ In `components/eamxx/src/physics/PACKAGENAME` add a subdirectory `fortran_bridge
 
     #include "packagename_functions.hpp"
 
-    // Bridge functions to call fortran version of ZM functions from C++
+    // Bridge functions to call fortran version of Packagename functions from C++
 
     namespace scream {
     namespace packagename {
 
-    using ZMF = packagename::Functions<Real, DefaultDevice>;
+    using PackageNameF = packagename::Functions<Real, DefaultDevice>;
 
     // Glue functions to call fortran from from C++ with the Data struct
     void packagename_eamxx_bridge_init( Int pcols, Int pver );
@@ -432,7 +432,7 @@ set(PACKAGENAME_F90_SRCS
   ${SCREAM_BASE_DIR}/../../share/util/shr_assert_mod.F90.in
 
   # ----------------------------------------------------------------------------
-  # misc other fotran modules if needed
+  # misc other fortran modules if needed
   
   # ----------------------------------------------------------------------------
 )
@@ -619,7 +619,7 @@ Update `eamxx_packagename_process_interface.cpp` as follows:
   }
 ```
 
-WIP - how to run Python code on the GPU?
+To check: we can use `get_py_field_dev()` to get fields on the device and also use `sync_to_host()`. I am not sure why the examples specify to run python implementations only on the CPU.
 
 ## Kokkos and GPU performance 
 

@@ -142,8 +142,13 @@ void Stengel::run_impl (const double /* dt */)
   p_mid_max = field_max<Real>(p_mid);
   m_atm_logger->info("\t max value for p_mid scaled by 0.5x: "+ std::to_string(p_mid_max));
 
-  Stengel::stengel_eamxx_bridge_run(m_pcol, m_nlev, required_arguments); // TODO - required_arguments = p_mid, T_mid
+  Stengel::stengel_eamxx_bridge_run(m_pcol, m_nlev, p_mid, T_mid); 
 
+  T_mid_max = field_max<Real>(T_mid);
+  m_atm_logger->info("\t max value for T_mid after the Fortran bridge: "+ std::to_string(T_mid_max));
+  p_mid_max = field_max<Real>(p_mid);
+  m_atm_logger->info("\t max value for p_mid after the Fortran bridge: "+ std::to_string(p_mid_max));
+  
 }
 
 // =========================================================================================

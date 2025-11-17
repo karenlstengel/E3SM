@@ -1,4 +1,5 @@
-#include "stengel_eamxx_bridge.hpp"
+#include "stengelF_eamxx_bridge.hpp"
+#include "stengelF_functions.hpp"
 #include "share/core/eamxx_types.hpp"
 
 #include <ekat_pack_kokkos.hpp>
@@ -7,32 +8,28 @@
 using scream::Real;
 using scream::Int;
 
-// A C++ interface to stengel fortran calls and vice versa
+// A C++ interface to stengelF fortran calls and vice versa
 
 extern "C" {
-    void stengel_eamxx_bridge_init_c(Int pcol, Int pver );
+    void stengelF_eamxx_bridge_init_c(Int pcol, Int pver );
 
-    void stengel_eamxx_bridge_run_c(Int ncol, Real p_mid, Real T_mid);
+    void stengelF_eamxx_bridge_run_c(Int ncol, Real* p_mid, Real* T_mid);
 } // extern "C" : end _c decls
 
 namespace scream {
-    namespace stengel {
+    namespace stengelF {
 
-    void stengel_eamxx_bridge_init( Int pcol, Int pver ){
-        stengel_eamxx_bridge_init_c( pcol, pver );
+    void stengelF_eamxx_bridge_init( Int pcol, Int pver ){
+        stengelF_eamxx_bridge_init_c( pcol, pver );
     }
 
-    void stengel_eamxx_bridge_run( Int ncol, Int pver,
-                            const view_2d<Spack>& p_mid,
-                            const view_2d<Spack>& T_mid
+    void stengelF_eamxx_bridge_run( Int ncol, Int pver,
+                            const StengelFFunc::params
                             ){ // TODO - required_arguments = p_mid, T_mid
         //----------------------------------------------------------------------------
         // Need to transpose to match how Fortran handles things
         // see zm_input.transpose<ekat::TransposeDirection::c2f>(ncol,pver);
         // see zm_output.transpose<ekat::TransposeDirection::c2f>(ncol,pver);
-
-        view_2d<Real>& p_mid_f; 
-        view_2d<Real>& T_mid_f;
 
         for (Int i=0; i<ncol; ++i) {
             for (Int j=0; j<pver; ++j) {
@@ -41,9 +38,7 @@ namespace scream {
             }
         }
 
-        stengel_eamxx_bridge_run_c(ncol, p_mid_f, T_mid_f); // TODO - required_arguments = p_mid, T_mid
-
-        // TODO - print out max values in p_mid_f, T_mid_f
+        stengelF_eamxx_bridge_run_c(ncol, p_mid_f.data(), T_mid_f.data()); 
 
         // Transpose back to C++ convention
         // see zm_input.transpose<ekat::TransposeDirection::f2c>(ncol,pver);
@@ -54,5 +49,5 @@ namespace scream {
 
         // end _c impls
 
-    } // namespace stengel
+    } // namespace stengelF
 } // namespace scream

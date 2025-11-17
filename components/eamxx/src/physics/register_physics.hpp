@@ -50,6 +50,12 @@
 #ifdef EAMXX_HAS_STENGEL
 #include "physics/stengel/eamxx_stengel_process_interface.hpp"
 #endif
+#ifdef EAMXX_HAS_STENGELF
+#include "physics/stengelF/eamxx_stengelF_process_interface.hpp"
+#endif
+#ifdef EAMXX_HAS_STENGELP
+#include "physics/stengelP/eamxx_stengelP_process_interface.hpp"
+#endif
 
 namespace scream {
 
@@ -99,6 +105,12 @@ inline void register_physics () {
 #endif
 #ifdef EAMXX_HAS_STENGEL
   proc_factory.register_product("stengel",&create_atmosphere_process<Stengel>);
+#endif
+#ifdef EAMXX_HAS_STENGELF
+  proc_factory.register_product("stengelF",&create_atmosphere_process<StengelF>);
+#endif
+#ifdef EAMXX_HAS_STENGELP
+  proc_factory.register_product("stengelP",&create_atmosphere_process<StengelP>);
 #endif
 
   // If no physics was enabled, silence compile warning about unused var

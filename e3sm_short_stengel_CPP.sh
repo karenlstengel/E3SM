@@ -17,7 +17,7 @@ MYCOMPILER=intel
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="stengel_2_eamxx_cpu"
+CASE_NAME="stengel_cpp_eamxx_cpu"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -54,13 +54,11 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange DOUT_S=false
 # ./xmlchange DOUT_S_ROOT=${CASE_ARCHIVE_DIR}
 
-# ./atmchange atmosphere_processes::dummy #????
-
 ./case.setup
 
 ./xmlchange CAM_TARGET=$DYCORE
 ./xmlchange GMAKE_J='32'
-# ./xmlchange EAMXX_HAS_STENGEL=true
+./atmchange mac_aero_mic::atm_procs_list+=stengel
    
 ./case.build
 
@@ -92,4 +90,4 @@ cat << EOF >> user_nl_elm
 EOF
 fi
 
-./case.submit
+# ./case.submit

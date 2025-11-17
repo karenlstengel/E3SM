@@ -1,4 +1,5 @@
-#include "eamxx_stengel_process_interface.hpp"
+#include "eamxx_stengelF_process_interface.hpp"
+#include "stengelF_eamxx_bridge.hpp"
 #include "share/property_checks/field_within_interval_check.hpp"
 #include "share/field/field_utils.hpp"
 
@@ -13,29 +14,29 @@
 
 namespace scream
 {
-  using namespace stengel;
+  using namespace stengelF;
 // =========================================================================================
 //  Inputs (these are inherited from AtomoshpereProcess which means we can use the same logger):
 //      comm - an EKAT communication group
 //      params - a parameter list of options for the process.
 
-Stengel::Stengel (const ekat::Comm& comm, const ekat::ParameterList& params)
+StengelF::StengelF (const ekat::Comm& comm, const ekat::ParameterList& params)
   : AtmosphereProcess(comm, params)
 {
   // Nothing to do here usually
-  m_atm_logger->info("[EAMxx] Stengel processes constructor");
+  m_atm_logger->info("[EAMxx] StengelF processes constructor");
 
   // if we set any starting values for the code we can get them here with:
   // var = params.get<std::type>("var_name");
 }
 
 // =========================================================================================
-void Stengel::set_grids(const std::shared_ptr<const GridsManager> grids_manager)
+void StengelF::set_grids(const std::shared_ptr<const GridsManager> grids_manager)
 {
   // using namespace ekat::units;
   // using namespace ShortFieldTagsNames;
 
-  m_atm_logger->info("[EAMxx] Stengel processes set grids");
+  m_atm_logger->info("[EAMxx] StengelF processes set grids");
 
   // // The units of mixing ratio Q are technically non-dimensional.
   // // Nevertheless, for output reasons, we like to see 'kg/kg'.
@@ -68,11 +69,11 @@ void Stengel::set_grids(const std::shared_ptr<const GridsManager> grids_manager)
   // add_field<Updated>("field1_updated", scalar3d_layout_mid, Pa,grid_name, ps);
 
   // Gather parameters from parameter list:
-  // stengel_var1 = m_params.get<double>("stengel_var1",1e-12);  // Default = 1e-12
+  // stengelF_var1 = m_params.get<double>("stengelF_var1",1e-12);  // Default = 1e-12
 }
 
 // =========================================================================================
-void Stengel::initialize_impl (const RunType /* run_type */)
+void StengelF::initialize_impl (const RunType /* run_type */)
 {
   // NOTE: run_type tells us if this is an initial or restarted run,
 
@@ -84,10 +85,11 @@ void Stengel::initialize_impl (const RunType /* run_type */)
   // add_postcondition_check<Interval>(get_field_out("field2_out"),m_grid,0.0,1.0,false);
   // add_postcondition_check<Interval>(get_field_out("field1_updated"),m_grid,0.0,2.0,false);
 
-  m_atm_logger->info("[EAMxx] stengel processes initialize_impl: ");
+  m_atm_logger->info("[EAMxx] stengelF processes initialize_impl: ");
 
   // This is where we can setup Kokkos functions 
   // This is where we setup any starting physics
+  StengelF::stengelF_eamxx_bridge_init(m_num_cols, m_num_levs);
 }
 
 // =========================================================================================
@@ -96,7 +98,7 @@ void Stengel::initialize_impl (const RunType /* run_type */)
 // Inputs:
 //    - dt - the timestep for the current run step
 
-void Stengel::run_impl (const double /* dt */)
+void StengelF::run_impl (const double /* dt */)
 {
   // Pull in variables .
   auto T_mid   = get_field_out("T_mid");
@@ -107,7 +109,7 @@ void Stengel::run_impl (const double /* dt */)
   // auto field1_updated = get_field_out("field1_updated"); // use this for updated fields too 
 
   // // TODO - scale and print 
-  m_atm_logger->info("[EAMxx] stengel run_impl: ");
+  m_atm_logger->info("[EAMxx] stengelF run_impl: ");
   // auto field1_updated_max = field_max<Real>(field1_updated);
   // m_atm_logger->info("\t max value for updated field 1: "+ std::to_string(field1_updated_max));
 
@@ -141,13 +143,20 @@ void Stengel::run_impl (const double /* dt */)
   p_mid_max = field_max<Real>(p_mid);
   m_atm_logger->info("\t max value for p_mid scaled by 0.5x: "+ std::to_string(p_mid_max));
 
+  StengelF::stengelF_eamxx_bridge_run(m_pcol, m_nlev, p_mid, T_mid); 
+
+  T_mid_max = field_max<Real>(T_mid);
+  m_atm_logger->info("\t max value for T_mid after the Fortran bridge: "+ std::to_string(T_mid_max));
+  p_mid_max = field_max<Real>(p_mid);
+  m_atm_logger->info("\t max value for p_mid after the Fortran bridge: "+ std::to_string(p_mid_max));
+  
 }
 
 // =========================================================================================
-void Stengel::finalize_impl()
+void StengelF::finalize_impl()
 {
   // Do nothing
-  m_atm_logger->info("[EAMxx] Stengel processes clean up.");
+  m_atm_logger->info("[EAMxx] StengelF processes clean up.");
 }
 // =========================================================================================
 

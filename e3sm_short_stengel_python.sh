@@ -60,7 +60,7 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange GMAKE_J='32'
 ./atmchange mac_aero_mic::atm_procs_list+=stengelP
    
-./case.build
+./case.build --clean atm
 
 #####################################################################
 # Run E3SM

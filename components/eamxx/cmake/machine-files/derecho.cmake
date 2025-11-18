@@ -30,3 +30,14 @@ if ("${PROJECT_NAME}" STREQUAL "E3SM")
 else()
   set(CMAKE_Fortran_FLAGS "-fallow-argument-mismatch"  CACHE STRING "" FORCE) # only works with gnu v10 and above
 endif()
+
+# Set Python info
+# need to have pybind11 and mpi4py installed and Python >= 3.9.2
+OPTION(EAMXX_ENABLE_PYTHON "" ON)
+# Sets Python_EXECUTABLE.
+if ("${CMAKE_VERSION}" VERSION_LESS "3.12.0")
+  find_package(PythonInterp)
+else()
+  find_package(Python COMPONENTS Interpreter)
+  set(Python_EXECUTABLE ${Python_EXECUTABLE})
+endif()

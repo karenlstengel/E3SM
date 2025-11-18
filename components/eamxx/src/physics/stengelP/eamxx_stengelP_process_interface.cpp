@@ -55,20 +55,6 @@ void StengelP::set_grids(const std::shared_ptr<const GridsManager> grids_manager
   add_field<Updated>("T_mid", scalar3d_layout_mid, K, grid_name, ps);
   add_field<Updated>("p_mid", scalar3d_layout_mid, Pa, grid_name, ps);
 
-  // // Set of fields used strictly as input (Required)
-  // constexpr int ps = Pack::n;
-  // add_tracer<Required>("tracer1_in", m_grid, kg/kg, ps); // tracers are for advection I think
-  // add_field<Required>("qi", scalar3d_layout_mid, nondim, grid_name,ps);
-
-  // // Set of fields used strictly as output (Computed)
-  // add_field<Computed>("field1_out", scalar3d_layout_mid, Pa, grid_name,ps);
-  // add_field<Computed>("field2_out", scalar3d_layout_mid, Pa, grid_name,ps); 
-
-  // Set of fields used as input and output (Updated)
-  // add_field<Updated>("field1_updated", scalar3d_layout_mid, Pa,grid_name, ps);
-
-  // Gather parameters from parameter list:
-  // stengelP_var1 = m_params.get<double>("stengelP_var1",1e-12);  // Default = 1e-12
 }
 
 // =========================================================================================
@@ -78,13 +64,21 @@ void StengelP::initialize_impl (const RunType /* run_type */)
 
   // Set any universal things such as constants or masks (see Pompei example)
 
-  // Set property checks for fields in this process if needed
-  // using Interval = FieldWithinIntervalCheck;
-  // add_postcondition_check<Interval>(get_field_out("field1_out"),m_grid,0.0,1.0,false);
-  // add_postcondition_check<Interval>(get_field_out("field2_out"),m_grid,0.0,1.0,false);
-  // add_postcondition_check<Interval>(get_field_out("field1_updated"),m_grid,0.0,2.0,false);
-
   m_atm_logger->info("[EAMxx] stengelP processes initialize_impl: ");
+
+  #ifdef EAMXX_HAS_PYTHON
+      if (has_py_module()) {
+        try {
+          py_module_call("init");
+        } catch (const pybind11::error_already_set& e) {
+          std::cout << "[stengelP::initialize_impl] Error! Something went wrong while calling the python module's function 'init'.\n"
+                      " - module name: " + m_params.get<std::string>("py_module_name") + "\n"
+                      " - pybind11 error: " + std::string(e.what()) + "\n";
+          throw e;
+        }
+
+      }
+    #endif
 
   // This is where we can setup Kokkos functions 
   // This is where we setup any starting physics
@@ -101,45 +95,36 @@ void StengelP::run_impl (const double /* dt */)
   // Pull in variables .
   auto T_mid   = get_field_out("T_mid");
   auto p_mid   = get_field_out("p_mid"); // work?
-  // auto field1_in = get_field_in("field1_in");
-  // auto field1_out = get_field_out("field1_out");
-  // auto field2_out = get_field_out("field2_out"); 
-  // auto field1_updated = get_field_out("field1_updated"); // use this for updated fields too 
 
   // // TODO - scale and print 
   m_atm_logger->info("[EAMxx] stengelP run_impl: ");
-  // auto field1_updated_max = field_max<Real>(field1_updated);
-  // m_atm_logger->info("\t max value for updated field 1: "+ std::to_string(field1_updated_max));
+  
+  #ifdef EAMXX_HAS_PYTHON
+    if (has_py_module()) {
+      // For now, we run Python code only on CPU
+      const auto& T_mid          = get_py_field_host("T_mid");
+      const auto& p_mid          = get_py_field_host("p_mid");
 
-  // field1_updated_max.scale(2.0);
-  // field1_updated_max = field_max<Real>(field1_updated);
-  // m_atm_logger->info("\t max value for updated field 1 scaled by 2x: "+ std::to_string(field1_updated_max));
+      // Sync input to host
+      //field1_in.sync_to_host();
 
-  // TODO - change p_mid value here and print like above
-  auto T_mid_max = field_max<Real>(T_mid);
-  m_atm_logger->info("\t max value for updated T_mid: "+ std::to_string(T_mid_max));
+      // Read in any parameters
+      // double param_name = m_params.get<double>("param_name");
 
-  // Can't change value of p_mid directly since p_mid is read-only
-  T_mid.scale(2.0);
-  T_mid_max = field_max<Real>(T_mid);
-  m_atm_logger->info("\t max value for T_mid scaled by 2x: "+ std::to_string(T_mid_max));
+      try {
+        py_module_call("main", p_mid, T_mid);
+      } catch (const pybind11::error_already_set& e) {
+        std::cout << "[stengelP::run_impl] Error! Something went wrong while calling the python module's function 'main'.\n"
+                    " - module name: " + m_params.get<std::string>("py_module_name") + "\n"
+                    " - pybind11 error: " + std::string(e.what()) + "\n";
+        throw e;
+      }
 
-  T_mid.scale(0.5);
-  T_mid_max = field_max<Real>(T_mid);
-  m_atm_logger->info("\t max value for T_mid scaled by 0.5x: "+ std::to_string(T_mid_max));
-
-  // ------------------ try with p_mid
-  auto p_mid_max = field_max<Real>(p_mid);
-  m_atm_logger->info("\t max value for updated p_mid: "+ std::to_string(p_mid_max));
-
-  // Can't change value of p_mid directly since p_mid is read-only?
-  p_mid.scale(2.0);
-  p_mid_max = field_max<Real>(p_mid);
-  m_atm_logger->info("\t max value for p_mid scaled by 2x: "+ std::to_string(p_mid_max));
-
-  p_mid.scale(0.5);
-  p_mid_max = field_max<Real>(p_mid);
-  m_atm_logger->info("\t max value for p_mid scaled by 0.5x: "+ std::to_string(p_mid_max));
+      // Sync outputs to dev
+      T_mid.sync_to_dev();
+      p_mid.sync_to_dev();
+    } else
+    #endif
 
 }
 

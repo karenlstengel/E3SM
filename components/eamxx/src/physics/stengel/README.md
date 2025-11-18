@@ -527,6 +527,15 @@ Note: I think this is the bare bones for what would be needed to set this bridge
 
 ### Python
 
+In 'components/eamxx/cmake/machine-files/derecho.cmake' we turn on and add the Python binary location:
+
+```cmake
+# Set Python info
+# need to have pybind11 and mpi4py installed and Python >= 3.9.2
+OPTION(EAMXX_ENABLE_PYTHON "" ON)
+set(Python_EXECUTABLE /path/to/python)
+```
+
 In `components/eamxx/src/physics/PACKAGENAME` add `packagename.py`:
 
 ```python

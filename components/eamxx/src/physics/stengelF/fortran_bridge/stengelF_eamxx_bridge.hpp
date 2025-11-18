@@ -15,7 +15,7 @@ namespace stengelF {
 
     // Glue functions to call fortran from from C++ with the Data struct
     void stengelF_eamxx_bridge_init( Int pcols, Int pver );
-    void stengelF_eamxx_bridge_run( Int ncol, Int pver, const StengelFFunc::params); 
+    void stengelF_eamxx_bridge_run( Int pcols, Int pver, StengelFFunc::params &params); 
 
     extern "C" { // _f function decls
     }

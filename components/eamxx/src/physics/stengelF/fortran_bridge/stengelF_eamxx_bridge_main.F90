@@ -1,4 +1,4 @@
-module stengel_eamxx_bridge_main
+module stengelF_eamxx_bridge_main
 
   use iso_c_binding
   use cam_logfile,   only: iulog
@@ -8,8 +8,8 @@ module stengel_eamxx_bridge_main
   private
   !-----------------------------------------------------------------------------
   ! public methods
-  public :: stengel_eamxx_bridge_init_c
-  public :: stengel_eamxx_bridge_run_c
+  public :: stengelF_eamxx_bridge_init_c
+  public :: stengelF_eamxx_bridge_run_c
 
   ! Public variables?
   integer, public :: pcols
@@ -26,25 +26,25 @@ module stengel_eamxx_bridge_main
 contains
 !===================================================================================================
 
-subroutine stengel_eamxx_bridge_init_c( pcol, pver ) bind(C)
+subroutine stengelF_eamxx_bridge_init_c( pcol_in, pver_in ) bind(C, name=stengelF_eamxx_bridge_init_c)
   ! Define uses here
   !-----------------------------------------------------------------------------
   ! Arguments
-  integer(kind=c_int), value, intent(in) :: pcol
-  integer(kind=c_int), value, intent(in) :: pver
+  integer(kind=c_int), value, intent(in) :: pcol_in
+  integer(kind=c_int), value, intent(in) :: pver_in
 
   ! Set dimensions of fields
-  pcols = pcol
-  pver  = pver
+  pcols = pcol_in
+  pver  = pver_in
 
   ! Do stuff here - initialize fields to 0?
 
   return
-end subroutine stengel_eamxx_bridge_init_c
+end subroutine stengelF_eamxx_bridge_init_c
 
 !===================================================================================================
 
-subroutine stengel_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C)
+subroutine stengelF_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C, name=stengelF_eamxx_bridge_run_c)
   ! Define uses here
   !-----------------------------------------------------------------------------
   ! Arguments
@@ -77,8 +77,8 @@ subroutine stengel_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C)
   write(iulog,*) 'Fortran, max value of 2 T_mid ', T_mid_max
   
   return
-end subroutine stengel_eamxx_bridge_run_c
+end subroutine stengelF_eamxx_bridge_run_c
 
 !===================================================================================================
 
-end module stengel_eamxx_bridge_main
+end module stengelF_eamxx_bridge_main

@@ -33,11 +33,11 @@ endif()
 
 # Set Python info
 # need to have pybind11 and mpi4py installed and Python >= 3.9.2
-OPTION(EAMXX_ENABLE_PYTHON "" ON)
-# Sets Python_EXECUTABLE.
-if ("${CMAKE_VERSION}" VERSION_LESS "3.12.0")
-  find_package(PythonInterp)
-else()
-  find_package(Python COMPONENTS Interpreter)
-  set(Python_EXECUTABLE ${Python_EXECUTABLE})
-endif()
+# OPTION(EAMXX_ENABLE_PYTHON "" ON)
+# # Sets Python_EXECUTABLE.
+# if ("${CMAKE_VERSION}" VERSION_LESS "3.12.0")
+#   find_package(PythonInterp)
+# else()
+#   find_package(Python COMPONENTS Interpreter)
+#   set(Python_EXECUTABLE ${Python_EXECUTABLE})
+# endif()

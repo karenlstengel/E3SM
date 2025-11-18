@@ -23,7 +23,6 @@ class StengelF : public AtmosphereProcess
 public:
   using StengelFFunc = stengelF::StengelFFunctions<Real, DefaultDevice>;
   using Spack           = StengelFFunc::Spack;
-  using Smask           = StengelFFunc::Smask;
   using Pack            = ekat::Pack<Real,Spack::n>;
 
   // Constructors
@@ -37,25 +36,25 @@ public:
 
   void set_grids(
     const std::shared_ptr<const GridsManager> grids_manager) override;
+  
   // Define the protected functions, usually at least initialize_impl, run_impl
   // and finalize_impl, but others could be included.  See
   // eamxx_template_process_interface.cpp for definitions of each of these.
   #ifndef KOKKOS_ENABLE_CUDA
   protected:
   #endif
-    void initialize_impl(const RunType run_type) override;
-    void run_impl(const double dt) override;
-    void finalize_impl() override;
+  void initialize_impl(const RunType run_type) override;
+  void run_impl(const double dt) override;
+  void finalize_impl() override;
 
-  // Keep track of field dimensions and the iteration count
+  // Keep track of field dimensions
+  std::shared_ptr<const AbstractGrid> m_grid;
   Int m_num_cols;
   Int m_num_levs;
 
-  // Parameters for fun
-  Real stengelF_var1;
-  Real stengelF_var2;
+  // Parameters struct to pass through fortran bridge
+  StengelFFunc::params params;
 
-  std::shared_ptr<const AbstractGrid> m_grid;
 }; // class StengelF
 
 } // namespace scream

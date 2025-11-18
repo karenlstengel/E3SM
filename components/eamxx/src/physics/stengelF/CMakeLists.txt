@@ -18,7 +18,8 @@ set(STENGELF_F90_SRCS
 
   # ----------------------------------------------------------------------------
   # misc other fortran modules if needed
-  
+  ${SCREAM_BASE_DIR}/../eam/src/utils/cam_abortutils.F90
+  ${SCREAM_BASE_DIR}/../eam/src/control/cam_logfile.F90
   # ----------------------------------------------------------------------------
 )
 
@@ -37,6 +38,11 @@ set(STENGELF_HEADERS
 
 # Adds the library to eamxx_physics 
 add_library(stengelF ${STENGELF_F90_SRCS} ${STENGELF_SRCS})
+
+set_target_properties(stengelF PROPERTIES
+  Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/modules
+)
+
 target_compile_definitions(stengelF PUBLIC EAMXX_HAS_STENGELF)
 
 target_include_directories(stengelF PUBLIC

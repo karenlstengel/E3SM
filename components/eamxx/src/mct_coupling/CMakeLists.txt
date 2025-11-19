@@ -41,9 +41,9 @@ set (SCREAM_LIBS
      iop_forcing
      nudging
      tms
-     stengel
+    #  stengel
      stengelF
-     stengelP
+    #  stengelP
      )
 
 # ZM is not always on yet

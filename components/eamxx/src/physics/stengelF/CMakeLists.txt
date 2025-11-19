@@ -52,6 +52,9 @@ target_include_directories(stengelF PUBLIC
   # ${PATH_TO_LEGACY_STENGELF}
 )
 
+set_target_properties(stengelF PROPERTIES LINKER_LANGUAGE Fortran)
+target_link_libraries(stengelF Kokkos::kokkos)
+
 target_link_libraries(stengelF eamxx_physics_share scream_share)
 target_compile_options(stengelF PUBLIC)
 

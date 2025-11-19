@@ -60,7 +60,7 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange GMAKE_J='32'
 ./atmchange mac_aero_mic::atm_procs_list+=stengelF
    
-./case.build --clean atm # note that you need to have built this at least once successfully before using this flag
+./case.build #--clean atm # note that you need to have built this at least once successfully before using this flag
 
 #####################################################################
 # Run E3SM
@@ -90,4 +90,4 @@ cat << EOF >> user_nl_elm
 EOF
 fi
 
-# ./case.submit
+./case.submit

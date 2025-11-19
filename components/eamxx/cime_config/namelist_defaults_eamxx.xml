@@ -305,9 +305,9 @@ be lost if SCREAM_HACK_XML is not enabled.
     <cld_fraction inherit="atm_proc_base"/>
 
     <!-- Stengel pretend physics package for eamxx -->
-    <stengel inherit="atm_proc_base"/>
+    <!-- <stengel inherit="atm_proc_base"/> -->
     <stengelF inherit="atm_proc_base"/>
-    <stengelP inherit="atm_proc_base"/>
+    <!-- <stengelP inherit="atm_proc_base"/> -->
     <!-- Or can implement with extra options here 
     <stengel inherit="atm_proc_base">
       <var_name type="type" doc="Description of variable here">default value here</var_name>

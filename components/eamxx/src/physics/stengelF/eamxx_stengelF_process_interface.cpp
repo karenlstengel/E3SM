@@ -83,7 +83,10 @@ void StengelF::run_impl (const double /* dt */)
   params.p_mid = p_mid.get_view<Spack**, Host>();
   params.T_mid = T_mid.get_view<Spack**, Host>();
 
-  stengelF_eamxx_bridge_run(m_num_cols, m_num_levs, params); 
+  // Initialize fortran data holders in struct
+  // params.init(m_num_cols, m_num_levs);
+
+  // stengelF_eamxx_bridge_run(m_num_cols, m_num_levs, params); 
 
   // Update with the new (should be the same) values from the run
   // T_mid = params.T_mid; // will have to see if this is the correct way to do this

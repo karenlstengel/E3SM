@@ -26,7 +26,7 @@ module stengelF_eamxx_bridge_main
 contains
 !===================================================================================================
 
-subroutine stengelF_eamxx_bridge_init_c( pcol_in, pver_in ) bind(C, name=stengelF_eamxx_bridge_init_c)
+subroutine stengelF_eamxx_bridge_init_c( pcol_in, pver_in ) bind(C, name="stengelF_eamxx_bridge_init_c")
   ! Define uses here
   !-----------------------------------------------------------------------------
   ! Arguments
@@ -44,7 +44,7 @@ end subroutine stengelF_eamxx_bridge_init_c
 
 !===================================================================================================
 
-subroutine stengelF_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C, name=stengelF_eamxx_bridge_run_c)
+subroutine stengelF_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C, name="stengelF_eamxx_bridge_run_c")
   ! Define uses here
   !-----------------------------------------------------------------------------
   ! Arguments
@@ -56,7 +56,7 @@ subroutine stengelF_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C, name=stenge
   real(kind=c_real) :: p_mid_max, T_mid_max
 
   ! Do stuff here - scale both p_mid and T_mid by 0.5, print, and then by 2.0, print
-  p_mid = p_mid * 0.5 
+  p_mid = p_mid * 0.5 ! switch to loop syntax
   T_mid = T_mid * 0.5
 
   p_mid_max = MAXVAL(p_mid) 

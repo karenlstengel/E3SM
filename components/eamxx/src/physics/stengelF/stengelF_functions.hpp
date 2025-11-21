@@ -48,6 +48,10 @@ struct StengelFFunctions
     uview_2dl<Real>  f_p_mid;
     uview_2dl<Real>  f_T_mid;
 
+    // Set number of variables for ATMBufferManager
+    static constexpr int num_2d_midlv_c_views = 2;
+    static constexpr int num_2d_midlv_f_views = 2;
+
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     void init(int ncol_in, int pver_in) {
       Real init_fill_value = -999;

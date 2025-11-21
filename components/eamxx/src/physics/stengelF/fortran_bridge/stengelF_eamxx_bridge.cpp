@@ -11,6 +11,8 @@ using scream::Int;
 // A C++ interface to stengelF fortran calls and vice versa
 
 extern "C" {
+    void set_log_file_name_f90_c(const char** fname);
+
     void stengelF_eamxx_bridge_init_c(Int pcols, Int pver );
 
     void stengelF_eamxx_bridge_run_c(Int pcols, Real* p_mid, Real* T_mid);
@@ -18,6 +20,10 @@ extern "C" {
 
 namespace scream {
     namespace stengelF {
+
+    void set_log_file_name_f90(const char** logname){
+        set_log_file_name_f90_c(logname);
+    }
 
     void stengelF_eamxx_bridge_init( Int pcols, Int pver ){
         stengelF_eamxx_bridge_init_c( pcols, pver );

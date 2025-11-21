@@ -26,6 +26,10 @@ StengelF::StengelF (const ekat::Comm& comm, const ekat::ParameterList& params)
   // Nothing to do here usually
   m_atm_logger->info("[EAMxx] StengelF processes constructor");
 
+  // Set the log filename in the F90 interface
+  const char* logname = m_atm_logger->get_logfile_name().c_str();
+  set_log_file_name_f90(&logname);
+
 }
 
 // =========================================================================================
@@ -84,9 +88,9 @@ void StengelF::run_impl (const double /* dt */)
   params.T_mid = T_mid.get_view<Spack**, Host>();
 
   // Initialize fortran data holders in struct
-  // params.init(m_num_cols, m_num_levs);
+  params.init(m_num_cols, m_num_levs);
 
-  // stengelF_eamxx_bridge_run(m_num_cols, m_num_levs, params); 
+  stengelF_eamxx_bridge_run(m_num_cols, m_num_levs, params); 
 
   // Update with the new (should be the same) values from the run
   // T_mid = params.T_mid; // will have to see if this is the correct way to do this
@@ -107,4 +111,52 @@ void StengelF::finalize_impl()
 }
 // =========================================================================================
 
+size_t StengelF::requested_buffer_size_in_bytes() const
+{
+  const int nlevm_packs = ekat::npack<Spack>(m_num_levs);
+  size_t buffer_size = 0;
+
+  buffer_size+= StengelFFunc::params::num_2d_midlv_c_views * sizeof(Spack) * m_num_cols * nlevm_packs;
+  buffer_size+= StengelFFunc::params::num_2d_midlv_f_views * sizeof(Real)  * m_num_cols * m_num_levs;
+
+  return buffer_size;
+}
+
+/*------------------------------------------------------------------------------------------------*/
+
+void StengelF::init_buffers(const ATMBufferManager &buffer_manager)
+{
+  auto buffer_chk = ( buffer_manager.allocated_bytes() >= requested_buffer_size_in_bytes() );
+  EKAT_REQUIRE_MSG(buffer_chk,"Error! Buffers size not sufficient.\n");
+
+  const int nlevm_packs = ekat::npack<Spack>(m_num_levs);
+  const int nlevi_packs = ekat::npack<Spack>(m_num_levs+1);
+
+  constexpr auto num_2d_midlv_c_views = StengelFFunc::params::num_2d_midlv_c_views;
+  constexpr auto num_2d_midlv_f_views = StengelFFunc::params::num_2d_midlv_f_views;
+  
+  //----------------------------------------------------------------------------
+  Real* r_mem = reinterpret_cast<Real*>(buffer_manager.get_memory());
+  //----------------------------------------------------------------------------
+  // 2D "f_" views on mid-point levels
+  StengelFFunc::uview_2dl<Real>* midlv_f_ptrs[num_2d_midlv_f_views]  = { &params.f_p_mid, &params.f_T_mid};
+  for (int i=0; i<num_2d_midlv_f_views; ++i) {
+    *midlv_f_ptrs[i] = StengelFFunc::uview_2dl<Real>(r_mem, m_num_cols, m_num_levs);
+    r_mem += midlv_f_ptrs[i]->size();
+  }
+  //----------------------------------------------------------------------------
+  Spack* spk_mem = reinterpret_cast<Spack*>(r_mem);
+  //----------------------------------------------------------------------------
+  // 2D views on mid-point levels
+  StengelFFunc::view_2d<Spack>* midlv_c_ptrs[num_2d_midlv_c_views]  = { &params.p_mid, &params.T_mid};
+  for (int i=0; i<num_2d_midlv_c_views; ++i) {
+    *midlv_c_ptrs[i] = StengelFFunc::view_2d<Spack>(spk_mem, m_num_cols, nlevm_packs);
+    spk_mem += midlv_c_ptrs[i]->size();
+  }
+  //----------------------------------------------------------------------------
+  Real* total_mem = reinterpret_cast<Real*>(spk_mem);
+  size_t used_mem = (reinterpret_cast<Real*>(total_mem) - buffer_manager.get_memory())*sizeof(Real);
+  auto mem_chk = ( used_mem == requested_buffer_size_in_bytes() );
+  EKAT_REQUIRE_MSG(mem_chk,"Error! Used memory != requested memory for StengelF.");
+}
 } // namespace scream

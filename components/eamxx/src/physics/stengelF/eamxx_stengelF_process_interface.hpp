@@ -3,6 +3,7 @@
 
 #include "physics/stengelF/stengelF_functions.hpp"
 #include "share/atm_process/atmosphere_process.hpp"
+#include "share/atm_process/ATMBufferManager.hpp"
 
 #include <ekat_parameter_list.hpp>
 
@@ -22,8 +23,8 @@ class StengelF : public AtmosphereProcess
 {
 public:
   using StengelFFunc = stengelF::StengelFFunctions<Real, DefaultDevice>;
-  using Spack           = StengelFFunc::Spack;
-  using Pack            = ekat::Pack<Real,Spack::n>;
+  using Spack        = StengelFFunc::Spack;
+  using Pack         = ekat::Pack<Real,Spack::n>;
 
   // Constructors
   StengelF (const ekat::Comm& comm, const ekat::ParameterList& params);
@@ -46,6 +47,12 @@ public:
   void initialize_impl(const RunType run_type) override;
   void run_impl(const double dt) override;
   void finalize_impl() override;
+
+  // Computes bytes needed in buffers
+  size_t requested_buffer_size_in_bytes() const;
+
+  // Set the variables using memory provided by the ATMBufferManager. Needed for Fortran?
+  void init_buffers(const ATMBufferManager &buffer_manager);
 
   // Keep track of field dimensions
   std::shared_ptr<const AbstractGrid> m_grid;

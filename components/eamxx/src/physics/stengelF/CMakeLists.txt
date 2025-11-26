@@ -39,6 +39,10 @@ set(STENGELF_HEADERS
 # Adds the library to eamxx_physics 
 add_library(stengelF ${STENGELF_F90_SRCS} ${STENGELF_SRCS})
 
+SET(USE_OPENACC TRUE)
+SET(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} ${OPENACC_Fortran_FLAGS}")
+SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OPENACC_Linker_FLAGS}")
+
 set_target_properties(stengelF PROPERTIES
   Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/modules
 )

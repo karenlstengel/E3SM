@@ -1,6 +1,7 @@
 module stengelF_eamxx_bridge_main
 
   use iso_c_binding
+  use openacc
   use cam_logfile,   only: iulog ! kinds instead of cam_logfile?
   use shr_sys_mod,   only: shr_sys_flush
   !-----------------------------------------------------------------------------
@@ -19,11 +20,7 @@ module stengelF_eamxx_bridge_main
 
 !===================================================================================================
 #include "eamxx_config.f"
-#ifdef SCREAM_DOUBLE_PRECISION
 # define c_real c_double
-#else
-# define c_real c_float
-#endif
 !===================================================================================================
 contains
 !===================================================================================================
@@ -38,8 +35,6 @@ subroutine stengelF_eamxx_bridge_init_c( pcol_in, pver_in ) bind(C, name="stenge
   ! Set dimensions of fields
   pcols = pcol_in
   pver  = pver_in
-
-  ! Do stuff here - allocate fields?
 
   return
 end subroutine stengelF_eamxx_bridge_init_c
@@ -57,24 +52,43 @@ subroutine stengelF_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C, name="steng
   ! Vars to store max values 
   real(kind=c_real) :: p_mid_max, T_mid_max
 
-  ! Do stuff here - scale both p_mid and T_mid by 0.5, print, and then by 2.0, print
-  p_mid = p_mid * 0.5 ! switch to loop syntax
-  T_mid = T_mid * 0.5
+  ! Local variables for looping
+  integer :: i,k
 
+  ! Do stuff here - scale both p_mid and T_mid by 0.5
+  !$acc parallel deviceptr(p_mid, T_mid)
+  !$acc loop gang vector collapse(2)
+  do i = 1,pcols
+    do k = 1,pver
+      p_mid(i,k) = p_mid(i,k) * 0.5
+      T_mid(i,k) = T_mid(i,k) * 0.5
+    end do
+  end do
+  !$acc end parallel
+
+  ! get max value to print out
   p_mid_max = MAXVAL(p_mid) 
   T_mid_max = MAXVAL(T_mid) 
 
-  ! TODO - print but how? need to see how the logger works
+  ! TODO - need to fix this in terms of running in parallel. also newline?
   write(iulog,*) "Fortran, max value of 0.5 p_mid ", p_mid_max
   write(iulog,*) "Fortran, max value of 0.5 T_mid ", T_mid_max
 
-  p_mid = p_mid * 2.0 
-  T_mid = T_mid * 2.0
+  !$acc parallel deviceptr(p_mid, T_mid)
+  !$acc loop gang vector collapse(2)
+  do i = 1,pcols
+    do k = 1,pver
+      p_mid(i,k) = p_mid(i,k) * 2.0
+      T_mid(i,k) = T_mid(i,k) * 2.0
+    end do
+  end do
+  !$acc end parallel
 
+  ! get max value to print out
   p_mid_max = MAXVAL(p_mid) 
-  T_mid_max = MAXVAL(T_mid)
+  T_mid_max = MAXVAL(T_mid) 
 
-  ! TODO - print but how? need to see how the logger works
+  ! TODO - need to fix this in terms of running in parallel. also newline?
   write(iulog,*) "Fortran, max value of 2 p_mid ", p_mid_max
   write(iulog,*) "Fortran, max value of 2 T_mid ", T_mid_max
   

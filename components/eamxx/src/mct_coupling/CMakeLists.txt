@@ -41,10 +41,25 @@ set (SCREAM_LIBS
      iop_forcing
      nudging
      tms
-    #  stengel
-     stengelF
-    #  stengelP
      )
+
+# --------- 
+# Stengel parameterization versions go here
+# Regular C++ version
+if (TARGET stengel)
+  list(APPEND SCREAM_LIBS stengel)
+endif()
+
+# Fortran bridge version
+if (TARGET stengelF)
+  list(APPEND SCREAM_LIBS stengelF)
+endif()
+
+# Python bridge version
+if (TARGET stengelP)
+  list(APPEND SCREAM_LIBS stengelP)
+endif()
+# ---------
 
 # ZM is not always on yet
 if (TARGET zm)

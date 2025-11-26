@@ -24,6 +24,11 @@ if (SCREAM_ENABLE_MAM)
   add_subdirectory(mam)
 endif()
 add_subdirectory(gw)
-# add_subdirectory(stengel)
-add_subdirectory(stengelF)
+
+# ---------
+# Stengel parameterization versions go here (might need to change flags)
+# Regular C++ version
+add_subdirectory(stengel)
+# add_subdirectory(stengelF)
 # add_subdirectory(stengelP)
+# ---------

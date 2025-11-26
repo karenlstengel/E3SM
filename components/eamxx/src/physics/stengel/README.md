@@ -525,6 +525,8 @@ To finish linking everything together, we update:
 
 Note: I think this is the bare bones for what would be needed to set this bridge up. Will update as needed once I actually start setting this up.
 
+TODO - add in info for how to add the log output and also the ATMBufferManager!
+
 ### Python
 
 In 'components/eamxx/cmake/machine-files/derecho.cmake' we turn on and add the Python binary location:

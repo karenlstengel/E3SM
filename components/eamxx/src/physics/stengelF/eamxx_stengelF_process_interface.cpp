@@ -93,8 +93,15 @@ void StengelF::run_impl (const double /* dt */)
   stengelF_eamxx_bridge_run(m_num_cols, m_num_levs, params); 
 
   // Update with the new (should be the same) values from the run
-  // T_mid = params.T_mid; // will have to see if this is the correct way to do this
-  // p_mid = params.p_mid;
+  // TODO - figure out how to read the data from the params struct back into the fields on the C++ side.
+  // Look at ZM but also probably others
+
+  // for (int i=0; i<m_num_cols; ++i) {
+  //   for (int j=0; j<m_num_levs; ++j) {
+  //     p_mid(i,j) = params.p_mid(i,j);
+  //     T_mid(i,j) = params.T_mid(i,j);
+  //   }
+  // }
 
   // T_mid_max = field_max<Real>(T_mid);
   // m_atm_logger->info("\t max value for T_mid after the Fortran bridge: "+ std::to_string(T_mid_max));
@@ -130,7 +137,6 @@ void StengelF::init_buffers(const ATMBufferManager &buffer_manager)
   EKAT_REQUIRE_MSG(buffer_chk,"Error! Buffers size not sufficient.\n");
 
   const int nlevm_packs = ekat::npack<Spack>(m_num_levs);
-  const int nlevi_packs = ekat::npack<Spack>(m_num_levs+1);
 
   constexpr auto num_2d_midlv_c_views = StengelFFunc::params::num_2d_midlv_c_views;
   constexpr auto num_2d_midlv_f_views = StengelFFunc::params::num_2d_midlv_f_views;

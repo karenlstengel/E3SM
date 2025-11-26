@@ -96,8 +96,11 @@ void StengelP::run_impl (const double /* dt */)
   auto T_mid   = get_field_out("T_mid");
   auto p_mid   = get_field_out("p_mid"); // work?
 
-  // // TODO - scale and print 
+  // TODO - scale and print 
   m_atm_logger->info("[EAMxx] stengelP run_impl: ");
+
+  // Get log file name 
+  const char* logname = m_atm_logger->get_logfile_name().c_str();
   
   #ifdef EAMXX_HAS_PYTHON
     if (has_py_module()) {
@@ -112,7 +115,7 @@ void StengelP::run_impl (const double /* dt */)
       // double param_name = m_params.get<double>("param_name");
 
       try {
-        py_module_call("main", p_mid, T_mid);
+        py_module_call("main", p_mid, T_mid, &logname);
       } catch (const pybind11::error_already_set& e) {
         std::cout << "[stengelP::run_impl] Error! Something went wrong while calling the python module's function 'main'.\n"
                     " - module name: " + m_params.get<std::string>("py_module_name") + "\n"

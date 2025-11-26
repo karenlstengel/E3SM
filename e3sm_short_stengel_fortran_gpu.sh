@@ -13,11 +13,11 @@ COMPSET=F20TR-SCREAMv1
 RESOLUTION=ne30pg2_ne30pg2
 DYCORE=theta-l_kokkos
 MACH=derecho
-MYCOMPILER=intel
+MYCOMPILER=gnugpu
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="stengel_fortran_eamxx_cpu"
+CASE_NAME="stengel_fortran_eamxx_gpu"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -46,13 +46,15 @@ cd $CASE_SCRIPTS_DIR
 
 ./xmlchange DEBUG=TRUE
 
-./xmlchange NTASKS=128
+./xmlchange NTASKS=4
 ./xmlchange NTHRDS=1
-./xmlchange ROOTPE='0'
-
+./xmlchange NGPUS_PER_NODE=4
+./xmlchange GPU_TYPE=a100 # NVIDIA A100 GPUs in Derecho
 ./xmlchange OPENACC_GPU_OFFLOAD=TRUE
-
-# the next two lines control archiving 
+./xmlchange OPENMP_GPU_OFFLOAD=FALSE
+./xmlchange KOKKOS_GPU_OFFLOAD=TRUE
+./xmlchange OVERSUBSCRIBE_GPU=FALSE
+./xmlchange ROOTPE='0'
 ./xmlchange DOUT_S=false
 # ./xmlchange DOUT_S_ROOT=${CASE_ARCHIVE_DIR}
 

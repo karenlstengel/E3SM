@@ -151,9 +151,9 @@ In this folder, we must add the following files:
   class Packagename : public AtmosphereProcess
   {
   public:
-    using PackagenameFunc = packagename::PackagenameFunctions<Real, DefaultDevice>;
-    using Spack           = PackagenameFunc::Spack;
-    using Smask           = PackagenameFunc::Smask;
+    using PNF = packagename::PNFtions<Real, DefaultDevice>;
+    using Spack           = PNF::Spack;
+    using Smask           = PNF::Smask;
     using Pack            = ekat::Pack<Real,Spack::n>;
 
     // Constructors
@@ -287,196 +287,90 @@ In `components/eamxx/cime_config/namelist_defaults_scream.xml`, add:
 An alternative to adding the new package to the `atm_procs_list` is to add it at runtime as: 
 
 ```bash
-    ./atmchange mac_aero_mic::atm_procs_list+=packagename
+  ./atmchange mac_aero_mic::atm_procs_list+=packagename
 ```
 
 ---
 
-## Bridges
+## Kokkos and GPU performance 
 
-### Fortran
+At runtime we need to add/update the following to our submission script:
 
-In `components/eamxx/src/physics/PACKAGENAME` add a subdirectory `fortran_bridge`. In this subdirectory add:
+```bash
+  MYCOMPILER=gnugpu # previously intel
 
-1. `packagename_eamxx_bridge.cpp`
-    ```cpp
-    #include "packagename_eamxx_bridge.hpp"
+  # other setup calls
 
-    using scream::Real;
-    using scream::Int;
+  ./xmlchange NTASKS=4
+  ./xmlchange NTHRDS=1
+  ./xmlchange NGPUS_PER_NODE=4
+  ./xmlchange GPU_TYPE=a100 # NVIDIA A100 GPUs in Derecho
+  ./xmlchange OPENACC_GPU_OFFLOAD=FALSE
+  ./xmlchange OPENMP_GPU_OFFLOAD=FALSE
+  ./xmlchange KOKKOS_GPU_OFFLOAD=TRUE
+  ./xmlchange OVERSUBSCRIBE_GPU=FALSE
+  ./xmlchange ROOTPE='0'
+  ./xmlchange DOUT_S=false
 
-    // A C++ interface to packagename fortran calls and vice versa
-
-    extern "C" {packagename_eamxx_bridge_run_c( required_args);
-      } // extern "C" : end _c decls
-
-      namespace scream {
-      namespace packagename {
-
-      void packagename_eamxx_bridge_init( Int pcol, Int pver ){
-        packagename_eamxx_bridge_init_c( pcol, pver );
-      }
-
-      void packagename_eamxx_bridge_run( Int ncol, Int pver,
-                                PackageNameF::packagename_input_state& packagename_input,
-                                PackageNameF::packagename_output_tend& packagename_output,
-                                PackageNameF::packagename_runtime_opt& packagename_opts
-                              ){
-        //----------------------------------------------------------------------------
-        // Need to transpose to match how Fortran handles things
-        // packagename_input.transpose<ekat::TransposeDirection::c2f>(ncol,pver);
-        // packagename_output.transpose<ekat::TransposeDirection::c2f>(ncol,pver);
-
-        packagename_eamxx_bridge_run_c( required_arguments);
-
-        // Transpose back to C++ convention
-        // packagename_input.transpose<ekat::TransposeDirection::f2c>(ncol,pver);
-        // packagename_output.transpose<ekat::TransposeDirection::f2c>(ncol,pver);
-
-        //----------------------------------------------------------------------------
-      }
-
-      // end _c impls
-
-      } // namespace packagename
-      } // namespace scream
-    ```
-
-2. `packagename_eamxx_bridge.hpp`
-    ```cpp
-    #include "share/core/eamxx_types.hpp"
-
-    #include <array>
-    #include <utility>
-    #include <memory>   // for shared_ptr
-
-    #include "packagename_functions.hpp"
-
-    // Bridge functions to call fortran version of Packagename functions from C++
-
-    namespace scream {
-    namespace packagename {
-
-    using PackageNameF = packagename::Functions<Real, DefaultDevice>;
-
-    // Glue functions to call fortran from from C++ with the Data struct
-    void packagename_eamxx_bridge_init( Int pcols, Int pver );
-    void packagename_eamxx_bridge_run( Int ncol, Int pver, required_arguments);
-
-    extern "C" { // _f function decls
-    }
-
-    }  // namespace packagename
-    }  // namespace scream
-    ```
-
-3. `packagename_eamxx_bridge_main.F90` and any other `*.F90` modules you need:
-    ```fortran
-    module packagename_eamxx_bridge_main
-
-      use iso_c_binding
-      use cam_logfile,   only: iulog
-      use shr_sys_mod,   only: shr_sys_flush
-      use packagename_eamxx_bridge_params, only: masterproc, r8, pcols, pver, pverp, top_lev
-      !-----------------------------------------------------------------------------
-      implicit none
-      private
-      !-----------------------------------------------------------------------------
-      ! public methods
-      public :: packagename_eamxx_bridge_init_c
-      public :: packagename_eamxx_bridge_run_c
-
-    !===================================================================================================
-    #include "eamxx_config.f"
-    #ifdef SCREAM_DOUBLE_PRECISION
-    # define c_real c_double
-    #else
-    # define c_real c_float
-    #endif
-    !===================================================================================================
-    contains
-    !===================================================================================================
-
-    subroutine packagename_eamxx_bridge_init_c( pcol_in, pver_in ) bind(C)
-      ! Do stuff here
-    end subroutine packagename_eamxx_bridge_init_c
-
-    subroutine packagename_eamxx_bridge_run_c( pcol_in, pver_in ) bind(C)
-      ! Do stuff here
-    end subroutine packagename_eamxx_bridge_run_c
-  end module packagename_eamxx_bridge_main
-  ```
-
-Update `components/eamxx/src/physics/PACKAGENAME/CMakeLists.txt`:
-
-```cmake
-# Set a legacy path if needed 
-set(PATH_TO_LEGACY_PACKAGENAME ${SCREAM_BASE_DIR}/path/to/code/) 
-
-set(PACKAGENAME_F90_SRCS
-  # ----------------------------------------------------------------------------
-  # EAMxx side C++ bridge methods
-  ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge/packagename_eamxx_bridge.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge/packagename_eamxx_bridge_main.F90
-  # list others as needed
-
-  # ----------------------------------------------------------------------------
-  # Fortran PACKAGENAME code
-  ${PATH_TO_LEGACY_PACKAGENAME}/packagename_*.F90
-  # List all needed 
-
-  # ----------------------------------------------------------------------------
-  # shared fotran modules
-  ${SCREAM_BASE_DIR}/../../share/util/shr_sys_mod.F90
-  ${SCREAM_BASE_DIR}/../../share/util/shr_kind_mod.F90
-  ${SCREAM_BASE_DIR}/../../share/util/shr_assert_mod.F90.in
-
-  # ----------------------------------------------------------------------------
-  # misc other fortran modules if needed
-  
-  # ----------------------------------------------------------------------------
-)
-
-# List of all cpp source files needed for the package to work
-set(PACKAGENAME_CXX_SRCS
-  eamxx_packagename_process_interface.cpp
-)
-
-# List of all hpp header files needed for the package to work
-set(PACKAGENAME_CXX_HEADERS
-  eamxx_packagename_process_interface.hpp
-  packagename_functions.hpp
-)
-
-# Adds the library to eamxx_physics 
-# -----------------------------------------
-
-add_library(packagename ${PACKAGENAME_F90_SRCS} ${PACKAGENAME_CXX_SRCS})
-
-set_target_properties(packagename PROPERTIES
-  Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/modules
-)
-target_compile_definitions(packagename PUBLIC EAMXX_HAS_PACKAGENAME)
-
-target_include_directories(packagename PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge
-  ${CMAKE_CURRENT_BINARY_DIR}/modules
-  ${PATH_TO_LEGACY_PACKAGENAME}
-)
-
-target_link_libraries(packagename eamxx_physics_share scream_share)
-target_compile_options(packagename PUBLIC)
-
-if (TARGET eamxx_physics)
-  # Add this library to eamxx_physics
-  target_link_libraries(eamxx_physics INTERFACE packagename)
-endif()
+  # Previously:
+  # ./xmlchange NTASKS=128
+  # ./xmlchange NTHRDS=1
+  # ./xmlchange ROOTPE='0'  
 ```
 
-To finish linking everything together, we update: 
+In `components/eamxx/src/physics/PACKAGENAME/`, we then update the C++ as follows:
+1. `eamxx_packagename_process_interface.cpp`
+  ```cpp
+  #include "eamxx_packagename_process_interface.hpp"
+  #include "share/property_checks/field_within_interval_check.hpp"
+  #include "share/field/field_utils.hpp"
 
-```cpp
+  #include <ekat_assert.hpp>
+  #include <ekat_units.hpp>
+  #include <ekat_team_policy_utils.hpp>
+
+  #include <array>
+
+  namespace scream
+  {
+    using namespace packagename;
+  // =========================================================================================
+  //  Inputs (these are inherited from AtomoshpereProcess which means we can use the same logger):
+  //      comm - an EKAT communication group
+  //      params - a parameter list of options for the process.
+
+  Packagename::Packagename (const ekat::Comm& comm, const ekat::ParameterList& params)
+    : AtmosphereProcess(comm, params)
+  {
+    // Nothing to do here usually
+    m_atm_logger->info("[EAMxx] Packagename processes constructor");
+
+    // if we set any starting values for the code we can get them here with:
+    // var = params.get<std::type>("var_name");
+  }
+
+  // =========================================================================================
+  void Packagename::set_grids(const std::shared_ptr<const GridsManager> grids_manager)
+  {
+
+    m_atm_logger->info("[EAMxx] Packagename processes set grids");
+
+    constexpr auto K = ekat::units::K;
+    constexpr auto Pa = ekat::units::Pa;
+
+    // specify which grid to use
+    m_grid = grids_manager->get_grid("physics");
+    const auto& grid_name = m_grid->name();
+    m_num_cols = m_grid->get_num_local_dofs(); // Number of columns on this rank
+    m_num_levs = m_grid->get_num_vertical_levels();  // Number of levels per column
+
+    FieldLayout scalar3d_layout_mid = m_grid->get_3d_scalar_layout(true);
+
+    constexpr int ps = 1;
+    add_field<Updated>("T_mid", scalar3d_layout_mid, K, grid_name, ps);
+    add_field<Updated>("p_mid", scalar3d_layout_mid, Pa, grid_name, ps);
+  }
+
   // =========================================================================================
   void Packagename::initialize_impl (const RunType /* run_type */)
   {
@@ -486,9 +380,7 @@ To finish linking everything together, we update:
 
     m_atm_logger->info("[EAMxx] packagename processes initialize_impl: ");
 
-    // This is where we can setup Kokkos functions 
     // This is where we setup any starting physics
-    packagename::packagename_eamxx_bridge_init(m_pcol, m_nlev);
   }
 
   // =========================================================================================
@@ -499,139 +391,220 @@ To finish linking everything together, we update:
 
   void Packagename::run_impl (const double /* dt */)
   {
-    // Pull in variables .
-    auto T_mid   = get_field_out("T_mid");
-    auto p_mid   = get_field_out("p_mid");
-    auto field1_in = get_field_in("field1_in"); // get_field_in() sets the field as read-only regardless of if it is required/computed/updated
-    auto field1_out = get_field_out("field1_out");
-    auto field1_updated = get_field_out("field1_updated"); // use this for updated fields too 
 
-    // Logger call 
     m_atm_logger->info("[EAMxx] packagename run_impl: ");
+    
+    // Run with kokkos
+    #ifdef EAMXX_ENABLE_GPU
 
-    packagename::packagename_eamxx_bridge_run(m_pcol, m_nlev, required_arguments);
+      // Pull in variables .
+      auto T_mid   = get_field_out("T_mid").get_view<Spack**>();
+      auto p_mid   = get_field_out("p_mid").get_view<Spack**>(); // use this for updated fields too 
 
-    // Do anything else we need to do
+      m_atm_logger->info("\t running on GPU! ");
+      // TODO - need to open fields as view?
+      Real T_mid_max = 0.0;
+      Real p_mid_max = 0.0;
 
+      // Kokkos function to get the max value in the field
+      PNF::get_max_value(T_mid, T_mid_max);
+      m_atm_logger->info("\t\t max value for updated T_mid: "+ std::to_string(T_mid_max));
+
+      // Kokkos function to scale field by scalar value
+      PNF::scale_field_2d(T_mid, 2.0);
+      PNF::get_max_value(T_mid, T_mid_max);
+      m_atm_logger->info("\t\t max value for T_mid scaled by 2x: "+ std::to_string(T_mid_max));
+
+      PNF::scale_field_2d(T_mid, 0.5);
+      PNF::get_max_value(T_mid, T_mid_max);
+      m_atm_logger->info("\t\t max value for T_mid scaled by 0.5x: "+ std::to_string(T_mid_max));
+
+      //------------
+      // Repeat for p_mid
+      PNF::get_max_value(p_mid, p_mid_max);
+      m_atm_logger->info("\t\t max value for updated p_mid: "+ std::to_string(p_mid_max));
+
+      // Kokkos function to scale field by scalar value
+      PNF::scale_field_2d(p_mid, 2.0);
+      PNF::get_max_value(p_mid, p_mid_max);
+      m_atm_logger->info("\t\t max value for p_mid scaled by 2x: "+ std::to_string(p_mid_max));
+
+      PNF::scale_field_2d(p_mid, 0.5);
+      PNF::get_max_value(p_mid, p_mid_max);
+      m_atm_logger->info("\t\t max value for p_mid scaled by 0.5x: "+ std::to_string(p_mid_max));
+    #endif 
   }
 
   // =========================================================================================
   void Packagename::finalize_impl()
   {
-    // Do nothing usually
+    // Do nothing
+    m_atm_logger->info("[EAMxx] Packagename processes clean up.");
   }
   // =========================================================================================
-```
 
-Note: I think this is the bare bones for what would be needed to set this bridge up. Will update as needed once I actually start setting this up.
+  } // namespace scream
+  ```
 
-TODO - add in info for how to add the log output and also the ATMBufferManager!
+2. `eamxx_packagename_process_interface.hpp`
+  ```cpp
+  #ifndef SCREAM_PACKAGENAME_HPP
+  #define SCREAM_PACKAGENAME_HPP
 
-### Python
+  #include "physics/packagename/packagename_functions.hpp"
+  #include "share/atm_process/atmosphere_process.hpp"
 
-In 'components/eamxx/cmake/machine-files/derecho.cmake' we turn on and add the Python binary location:
+  #include <ekat_parameter_list.hpp>
 
-```cmake
-# Set Python info
-# need to have pybind11 and mpi4py installed and Python >= 3.9.2
-OPTION(EAMXX_ENABLE_PYTHON "" ON)
-set(Python_EXECUTABLE /path/to/python)
-```
+  #include <string>
 
-In `components/eamxx/src/physics/PACKAGENAME` add `packagename.py`:
-
-```python
-# Imports 
-import numpy as np
-
-# Any initialization step can be done here
-# This method is called during Packagename::initialize_impl
-def init ():
-    pass
-
-# Probably what we would call during run_impl
-def main (required_arguments):
-    # Do whatever physics needed 
-
-# Define any other needed functions
-
-```
-
-Update `eamxx_packagename_process_interface.cpp` as follows:
-
-```cpp
-  // All other imports here
-
-  #ifdef EAMXX_HAS_PYTHON
-  #include "share/atm_process/atmosphere_process_pyhelpers.hpp"
-  #endif
-
-  void Packagename::initialize_impl (const RunType /* run_type */)
+  namespace scream
   {
-    // Previously defined initialization steps 
 
-    #ifdef EAMXX_HAS_PYTHON
-      if (has_py_module()) {
-        try {
-          py_module_call("init");
-        } catch (const pybind11::error_already_set& e) {
-          std::cout << "[Packagename::initialize_impl] Error! Something went wrong while calling the python module's function 'init'.\n"
-                      " - module name: " + m_params.get<std::string>("py_module_name") + "\n"
-                      " - pybind11 error: " + std::string(e.what()) + "\n";
-          throw e;
-        }
+  /*
+  * The class responsible to do packagename physics
+  *
+  * The AD should store exactly ONE instance of this class stored
+  * in its list of subcomponents (the AD should make sure of this).
+  */
 
-      }
+  class Packagename : public AtmosphereProcess
+  {
+  public:
+    using KT    = ekat::KokkosTypes<DefaultDevice>;
+    using PNF   = packagename::PNFtions<Real, DefaultDevice>;
+    using Spack = PNF::Spack;
+    using Smask = PNF::Smask;
+    using Pack  = ekat::Pack<Real,Spack::n>;
+
+    // Constructors
+    Packagename (const ekat::Comm& comm, const ekat::ParameterList& params);
+
+    // The type of subcomponent
+    AtmosphereProcessType type () const override { return AtmosphereProcessType::Physics; }
+
+    // The name of the subcomponent
+    std::string name () const override { return "packagename"; }
+
+    void set_grids(
+      const std::shared_ptr<const GridsManager> grids_manager) override;
+    // Define the protected functions, usually at least initialize_impl, run_impl
+    // and finalize_impl, but others could be included.  See
+    // eamxx_template_process_interface.cpp for definitions of each of these.
+    #ifndef KOKKOS_ENABLE_CUDA
+    protected:
     #endif
-  }
+      void initialize_impl(const RunType run_type) override;
+      void run_impl(const double dt) override;
+      void finalize_impl() override;
 
-  void Packagename::run_impl (const double /* dt */)
-{
-  // Pull in variables.
-    auto T_mid          = get_field_out("T_mid");
-    auto p_mid          = get_field_out("p_mid");
-    auto field1_in      = get_field_in("field1_in"); // get_field_in() sets the field as read-only regardless of if it is required/computed/updated
-    auto field1_out     = get_field_out("field1_out");
-    auto field1_updated = get_field_out("field1_updated"); // use this for updated fields too 
+    // Keep track of field dimensions
+    Int m_num_cols;
+    Int m_num_levs;
 
-  #ifdef EAMXX_HAS_PYTHON
-    if (has_py_module()) {
-      // For now, we run Python code only on CPU
-      const auto& T_mid          = get_py_field_host("T_mid");
-      const auto& p_mid          = get_py_field_host("p_mid");
-      const auto& field1_in      = get_py_field_host("field1_in");
-      const auto& field1_out     = get_py_field_host("field1_out");
-      const auto& field1_updated = get_py_field_host("field1_updated");
+    std::shared_ptr<const AbstractGrid> m_grid;
+  }; // class Packagename
 
-      // Sync input to host
-      field1_in.sync_to_host();
+  } // namespace scream
 
-      // Read in any parameters
-      // double param_name = m_params.get<double>("param_name");
+  #endif // SCREAM_PACKAGENAME_HPP
+  ```
 
-      try {
-        py_module_call("main", required_arguments);
-      } catch (const pybind11::error_already_set& e) {
-        std::cout << "[Packagename::run_impl] Error! Something went wrong while calling the python module's function 'main'.\n"
-                    " - module name: " + m_params.get<std::string>("py_module_name") + "\n"
-                    " - pybind11 error: " + std::string(e.what()) + "\n";
-        throw e;
-      }
+3. `packagename_functions.hpp`
+  ```cpp
+  #ifndef PACKAGENAME_FUNCTIONS_HPP
+  #define PACKAGENAME_FUNCTIONS_HPP
 
-      // Sync outputs to dev
-      T_mid.sync_to_dev();
-      p_mid.sync_to_dev();
-      field1_in.sync_to_dev();
-      field1_out.sync_to_dev();
-      field1_updated.sync_to_dev();
-    } else
-    #endif
-    // Here is where the normal calls w/out python would go
-  }
-```
+  #include "share/core/eamxx_types.hpp"
 
-To check: we can use `get_py_field_dev()` to get fields on the device and also use `sync_to_host()`. I am not sure why the examples specify to run python implementations only on the CPU.
+  #include <ekat_pack_kokkos.hpp>
+  #include <ekat_workspace.hpp>
+  #include <ekat_team_policy_utils.hpp>
 
-## Kokkos and GPU performance 
+  namespace scream {
+  namespace packagename {
 
-TBD
+  template <typename ScalarT, typename DeviceT>
+  struct PNFtions
+  {
+
+    //
+    // ------- Types --------
+    //
+
+    using Scalar = ScalarT;
+    using Device = DeviceT;
+
+    template <typename S>
+    using BigPack = ekat::Pack<S,SCREAM_PACK_SIZE>;
+    template <typename S>
+    using SmallPack = ekat::Pack<S,SCREAM_SMALL_PACK_SIZE>;
+
+    using Pack = BigPack<Scalar>;
+    using Spack = SmallPack<Scalar>;
+
+    using Mask = ekat::Mask<BigPack<Scalar>::n>;
+    using Smask = ekat::Mask<SmallPack<Scalar>::n>;
+
+    // GPU/Kokkos related things
+    using KT = ekat::KokkosTypes<Device>;
+    using TeamPolicy  = typename KokkosTypes<Device>::TeamPolicy;
+
+    template <typename S>
+    using view_1d = typename KT::template view_1d<S>;
+    template <typename S>
+    using view_2d = typename KT::template view_2d<S>;
+
+    // KOKKOS_FUNCTION 
+    static void scale_field_2d(view_2d<Spack> &field, Real alpha);
+    // KOKKOS_FUNCTION 
+    static void get_max_value(view_2d<Spack> &field, Real &max_value);
+
+  }; // struct Functions
+
+  template<typename S, typename D>
+  // KOKKOS_FUNCTION
+  void PNFtions<S,D>::scale_field_2d(view_2d<Spack> &field, Real alpha) {
+
+    const int ni = static_cast<int>(field.extent(0));
+    const int nj = static_cast<int>(field.extent(1));
+
+    using MDPolicy = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+    MDPolicy mdp({0,0}, {ni,nj});
+
+    // create a device mirror and copy host->device, run kernel, copy device->host
+    auto field_dev = Kokkos::create_mirror_view_and_copy(DefaultDevice(), field); // or try HostDevice()
+    Kokkos::parallel_for(mdp, KOKKOS_LAMBDA(const int i, const int j) {
+        field_dev(i,j) *= alpha;
+    });
+    Kokkos::deep_copy(field, field_dev);
+  };
+
+  template<typename S, typename D>
+  // KOKKOS_FUNCTION
+  void PNFtions<S,D>::get_max_value(view_2d<Spack> &field, Real &max_value) {
+    // compute global max over all i,j in a single parallel_reduce (no nested lambdas)
+    const int ni = static_cast<int>(field.extent(0));
+    const int nj = static_cast<int>(field.extent(1));
+    Real global_max = -std::numeric_limits<Real>::infinity();
+
+    using MDPolicy = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+    MDPolicy mdp({0,0}, {ni,nj});
+
+    Kokkos::parallel_reduce("GetMaxValueMD", mdp,
+      KOKKOS_LAMBDA(const int i, const int j, Real &local_max) {
+        const Real v = field(i,j)[0];
+        if (v > local_max) local_max = v;
+      },
+      Kokkos::Max<Real>(global_max)
+    );
+
+    // store result on host
+    max_value = global_max;
+  };
+
+  } // namespace packagename
+  } // namespace scream
+
+  #endif // PACKAGENAME_FUNCTIONS_HPP
+  ```

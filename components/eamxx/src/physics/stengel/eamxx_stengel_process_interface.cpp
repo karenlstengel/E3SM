@@ -4,12 +4,9 @@
 
 #include <ekat_assert.hpp>
 #include <ekat_units.hpp>
+#include <ekat_team_policy_utils.hpp>
 
 #include <array>
-
-#ifdef EAMXX_HAS_PYTHON
-#include "share/atm_process/atmosphere_process_pyhelpers.hpp"
-#endif
 
 namespace scream
 {
@@ -55,18 +52,6 @@ void Stengel::set_grids(const std::shared_ptr<const GridsManager> grids_manager)
   add_field<Updated>("T_mid", scalar3d_layout_mid, K, grid_name, ps);
   add_field<Updated>("p_mid", scalar3d_layout_mid, Pa, grid_name, ps);
 
-  // // Set of fields used strictly as input (Required)
-  // constexpr int ps = Pack::n;
-  // add_tracer<Required>("tracer1_in", m_grid, kg/kg, ps); // tracers are for advection I think
-  // add_field<Required>("qi", scalar3d_layout_mid, nondim, grid_name,ps);
-
-  // // Set of fields used strictly as output (Computed)
-  // add_field<Computed>("field1_out", scalar3d_layout_mid, Pa, grid_name,ps);
-  // add_field<Computed>("field2_out", scalar3d_layout_mid, Pa, grid_name,ps); 
-
-  // Set of fields used as input and output (Updated)
-  // add_field<Updated>("field1_updated", scalar3d_layout_mid, Pa,grid_name, ps);
-
   // Gather parameters from parameter list:
   // stengel_var1 = m_params.get<double>("stengel_var1",1e-12);  // Default = 1e-12
 }
@@ -78,15 +63,8 @@ void Stengel::initialize_impl (const RunType /* run_type */)
 
   // Set any universal things such as constants or masks (see Pompei example)
 
-  // Set property checks for fields in this process if needed
-  // using Interval = FieldWithinIntervalCheck;
-  // add_postcondition_check<Interval>(get_field_out("field1_out"),m_grid,0.0,1.0,false);
-  // add_postcondition_check<Interval>(get_field_out("field2_out"),m_grid,0.0,1.0,false);
-  // add_postcondition_check<Interval>(get_field_out("field1_updated"),m_grid,0.0,2.0,false);
-
   m_atm_logger->info("[EAMxx] stengel processes initialize_impl: ");
 
-  // This is where we can setup Kokkos functions 
   // This is where we setup any starting physics
 }
 
@@ -98,49 +76,80 @@ void Stengel::initialize_impl (const RunType /* run_type */)
 
 void Stengel::run_impl (const double /* dt */)
 {
-  // Pull in variables .
-  auto T_mid   = get_field_out("T_mid");
-  auto p_mid   = get_field_out("p_mid"); // work?
-  // auto field1_in = get_field_in("field1_in");
-  // auto field1_out = get_field_out("field1_out");
-  // auto field2_out = get_field_out("field2_out"); 
-  // auto field1_updated = get_field_out("field1_updated"); // use this for updated fields too 
 
-  // // TODO - scale and print 
   m_atm_logger->info("[EAMxx] stengel run_impl: ");
-  // auto field1_updated_max = field_max<Real>(field1_updated);
-  // m_atm_logger->info("\t max value for updated field 1: "+ std::to_string(field1_updated_max));
+  
+  // Run with kokkos
+  #ifdef EAMXX_ENABLE_GPU
 
-  // field1_updated_max.scale(2.0);
-  // field1_updated_max = field_max<Real>(field1_updated);
-  // m_atm_logger->info("\t max value for updated field 1 scaled by 2x: "+ std::to_string(field1_updated_max));
+    // Pull in variables .
+    auto T_mid   = get_field_out("T_mid").get_view<Spack**>();
+    auto p_mid   = get_field_out("p_mid").get_view<Spack**>(); // use this for updated fields too 
 
-  // TODO - change p_mid value here and print like above
-  auto T_mid_max = field_max<Real>(T_mid);
-  m_atm_logger->info("\t max value for updated T_mid: "+ std::to_string(T_mid_max));
+    m_atm_logger->info("\t running on GPU! ");
+    // TODO - need to open fields as view?
+    Real T_mid_max = 0.0;
+    Real p_mid_max = 0.0;
 
-  // Can't change value of p_mid directly since p_mid is read-only
-  T_mid.scale(2.0);
-  T_mid_max = field_max<Real>(T_mid);
-  m_atm_logger->info("\t max value for T_mid scaled by 2x: "+ std::to_string(T_mid_max));
+    // Kokkos function to get the max value in the field
+    StengelFunc::get_max_value(T_mid, T_mid_max);
+    m_atm_logger->info("\t\t max value for updated T_mid: "+ std::to_string(T_mid_max));
 
-  T_mid.scale(0.5);
-  T_mid_max = field_max<Real>(T_mid);
-  m_atm_logger->info("\t max value for T_mid scaled by 0.5x: "+ std::to_string(T_mid_max));
+    // Kokkos function to scale field by scalar value
+    StengelFunc::scale_field_2d(T_mid, 2.0);
+    StengelFunc::get_max_value(T_mid, T_mid_max);
+    m_atm_logger->info("\t\t max value for T_mid scaled by 2x: "+ std::to_string(T_mid_max));
 
-  // ------------------ try with p_mid
-  auto p_mid_max = field_max<Real>(p_mid);
-  m_atm_logger->info("\t max value for updated p_mid: "+ std::to_string(p_mid_max));
+    StengelFunc::scale_field_2d(T_mid, 0.5);
+    StengelFunc::get_max_value(T_mid, T_mid_max);
+    m_atm_logger->info("\t\t max value for T_mid scaled by 0.5x: "+ std::to_string(T_mid_max));
 
-  // Can't change value of p_mid directly since p_mid is read-only?
-  p_mid.scale(2.0);
-  p_mid_max = field_max<Real>(p_mid);
-  m_atm_logger->info("\t max value for p_mid scaled by 2x: "+ std::to_string(p_mid_max));
+    //------------
+    // Repeat for p_mid
+    StengelFunc::get_max_value(p_mid, p_mid_max);
+    m_atm_logger->info("\t\t max value for updated p_mid: "+ std::to_string(p_mid_max));
 
-  p_mid.scale(0.5);
-  p_mid_max = field_max<Real>(p_mid);
-  m_atm_logger->info("\t max value for p_mid scaled by 0.5x: "+ std::to_string(p_mid_max));
+    // Kokkos function to scale field by scalar value
+    StengelFunc::scale_field_2d(p_mid, 2.0);
+    StengelFunc::get_max_value(p_mid, p_mid_max);
+    m_atm_logger->info("\t\t max value for p_mid scaled by 2x: "+ std::to_string(p_mid_max));
 
+    StengelFunc::scale_field_2d(p_mid, 0.5);
+    StengelFunc::get_max_value(p_mid, p_mid_max);
+    m_atm_logger->info("\t\t max value for p_mid scaled by 0.5x: "+ std::to_string(p_mid_max));
+
+  #else
+    m_atm_logger->info("\t running on CPU! ");
+    // Pull in variables .
+    auto T_mid   = get_field_out("T_mid");
+    auto p_mid   = get_field_out("p_mid"); // use this for updated fields too 
+
+    // TODO - change T_mid value here and print like above
+    auto T_mid_max = field_max<Real>(T_mid);
+    m_atm_logger->info("\t\t max value for updated T_mid: "+ std::to_string(T_mid_max));
+
+    // Can't change value of p_mid directly since p_mid is read-only
+    T_mid.scale(2.0);
+    T_mid_max = field_max<Real>(T_mid);
+    m_atm_logger->info("\t\t max value for T_mid scaled by 2x: "+ std::to_string(T_mid_max));
+
+    T_mid.scale(0.5);
+    T_mid_max = field_max<Real>(T_mid);
+    m_atm_logger->info("\t\t max value for T_mid scaled by 0.5x: "+ std::to_string(T_mid_max));
+
+    // ------------------ try with p_mid
+    auto p_mid_max = field_max<Real>(p_mid);
+    m_atm_logger->info("\t\t max value for updated p_mid: "+ std::to_string(p_mid_max));
+
+    // Can't change value of p_mid directly since p_mid is read-only?
+    p_mid.scale(2.0);
+    p_mid_max = field_max<Real>(p_mid);
+    m_atm_logger->info("\t\t max value for p_mid scaled by 2x: "+ std::to_string(p_mid_max));
+
+    p_mid.scale(0.5);
+    p_mid_max = field_max<Real>(p_mid);
+    m_atm_logger->info("\t\t max value for p_mid scaled by 0.5x: "+ std::to_string(p_mid_max));
+  #endif 
 }
 
 // =========================================================================================

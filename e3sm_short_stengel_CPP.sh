@@ -90,4 +90,4 @@ cat << EOF >> user_nl_elm
 EOF
 fi
 
-# ./case.submit
+./case.submit

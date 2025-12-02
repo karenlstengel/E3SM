@@ -21,10 +21,11 @@ namespace scream
 class Stengel : public AtmosphereProcess
 {
 public:
+  using KT          = ekat::KokkosTypes<DefaultDevice>;
   using StengelFunc = stengel::StengelFunctions<Real, DefaultDevice>;
-  using Spack           = StengelFunc::Spack;
-  using Smask           = StengelFunc::Smask;
-  using Pack            = ekat::Pack<Real,Spack::n>;
+  using Spack       = StengelFunc::Spack;
+  using Smask       = StengelFunc::Smask;
+  using Pack        = ekat::Pack<Real,Spack::n>;
 
   // Constructors
   Stengel (const ekat::Comm& comm, const ekat::ParameterList& params);
@@ -47,7 +48,7 @@ public:
     void run_impl(const double dt) override;
     void finalize_impl() override;
 
-  // Keep track of field dimensions and the iteration count
+  // Keep track of field dimensions
   Int m_num_cols;
   Int m_num_levs;
 

@@ -1,6 +1,6 @@
 # Adding new package to EAMxx
 
-### The code
+### The code with Python bridge
 
 Create a new folder in `components/eamxx/src/physics/` with the name of your package: `components/eamxx/src/physics/PACKAGENAME`.
 
@@ -17,6 +17,10 @@ In this folder, we must add the following files:
 
   #include <array>
 
+  #ifdef EAMXX_HAS_PYTHON
+  #include "share/atm_process/atmosphere_process_pyhelpers.hpp"
+  #endif
+
   namespace scream
   {
     using namespace packagename;
@@ -29,6 +33,7 @@ In this folder, we must add the following files:
     : AtmosphereProcess(comm, params)
   {
     // Nothing to do here usually
+    m_atm_logger->info("[EAMxx] Packagename processes constructor");
 
     // if we set any starting values for the code we can get them here with:
     // var = params.get<std::type>("var_name");
@@ -37,10 +42,13 @@ In this folder, we must add the following files:
   // =========================================================================================
   void Packagename::set_grids(const std::shared_ptr<const GridsManager> grids_manager)
   {
-    // Note that we inherit the logger used by the overall atmospheric process
+    // using namespace ekat::units;
+    // using namespace ShortFieldTagsNames;
+
     m_atm_logger->info("[EAMxx] Packagename processes set grids");
 
-    // Set units
+    // // The units of mixing ratio Q are technically non-dimensional.
+    // // Nevertheless, for output reasons, we like to see 'kg/kg'.
     // auto nondim = Units::nondimensional();
     constexpr auto K = ekat::units::K;
     constexpr auto Pa = ekat::units::Pa;
@@ -53,22 +61,10 @@ In this folder, we must add the following files:
 
     FieldLayout scalar3d_layout_mid = m_grid->get_3d_scalar_layout(true);
 
-    constexpr int ps = 1; // constexpr int ps = Pack::n; for multilevel fields
+    constexpr int ps = 1;
     add_field<Updated>("T_mid", scalar3d_layout_mid, K, grid_name, ps);
     add_field<Updated>("p_mid", scalar3d_layout_mid, Pa, grid_name, ps);
 
-    // Set of fields used strictly as input (Required)
-
-    add_field<Required>("field1_in", m_grid, kg/kg, ps);
-
-    // Set of fields used strictly as output (Computed)
-    add_field<Computed>("field1_out", scalar3d_layout_mid, Pa, grid_name,ps);
-
-    // Set of fields used as input and output (Updated)
-    add_field<Updated>("field1_updated", scalar3d_layout_mid, Pa,grid_name, ps);
-
-    // Gather parameters from parameter list:
-    packagename_var1 = m_params.get<double>("packagename_var1",1e-12);  // Default = 1e-12
   }
 
   // =========================================================================================
@@ -79,6 +75,20 @@ In this folder, we must add the following files:
     // Set any universal things such as constants or masks (see Pompei example)
 
     m_atm_logger->info("[EAMxx] packagename processes initialize_impl: ");
+
+    #ifdef EAMXX_HAS_PYTHON
+        if (has_py_module()) {
+          try {
+            py_module_call("init");
+          } catch (const pybind11::error_already_set& e) {
+            std::cout << "[packagename::initialize_impl] Error! Something went wrong while calling the python module's function 'init'.\n"
+                        " - module name: " + m_params.get<std::string>("py_module_name") + "\n"
+                        " - pybind11 error: " + std::string(e.what()) + "\n";
+            throw e;
+          }
+
+        }
+      #endif
 
     // This is where we can setup Kokkos functions 
     // This is where we setup any starting physics
@@ -94,32 +104,48 @@ In this folder, we must add the following files:
   {
     // Pull in variables .
     auto T_mid   = get_field_out("T_mid");
-    auto p_mid   = get_field_out("p_mid");
-    auto field1_in = get_field_in("field1_in"); // get_field_in() sets the field as read-only regardless of if it is required/computed/updated
-    auto field1_out = get_field_out("field1_out");
-    auto field1_updated = get_field_out("field1_updated"); // use this for updated fields too 
+    auto p_mid   = get_field_out("p_mid"); // work?
 
-    // Logger call 
+    // TODO - scale and print 
     m_atm_logger->info("[EAMxx] packagename run_impl: ");
 
-    // Scale and print p_mid as an example
-    auto p_mid_max = field_max<Real>(p_mid);
-    m_atm_logger->info("\t max value for updated p_mid: "+ std::to_string(p_mid_max));
+    // Get log file name 
+    const char* logname = m_atm_logger->get_logfile_name().c_str();
+    
+    #ifdef EAMXX_HAS_PYTHON
+      if (has_py_module()) {
+        // For now, we run Python code only on CPU
+        const auto& T_mid          = get_py_field_host("T_mid");
+        const auto& p_mid          = get_py_field_host("p_mid");
 
-    p_mid.scale(2.0);
-    p_mid_max = field_max<Real>(p_mid);
-    m_atm_logger->info("\t max value for p_mid scaled by 2x: "+ std::to_string(p_mid_max));
+        // Sync input to host
+        //field1_in.sync_to_host();
 
-    p_mid.scale(0.5);
-    p_mid_max = field_max<Real>(p_mid);
-    m_atm_logger->info("\t max value for p_mid scaled by 0.5x: "+ std::to_string(p_mid_max));
+        // Read in any parameters
+        // double param_name = m_params.get<double>("param_name");
+
+        try {
+          py_module_call("main", p_mid, T_mid, &logname);
+        } catch (const pybind11::error_already_set& e) {
+          std::cout << "[packagename::run_impl] Error! Something went wrong while calling the python module's function 'main'.\n"
+                      " - module name: " + m_params.get<std::string>("py_module_name") + "\n"
+                      " - pybind11 error: " + std::string(e.what()) + "\n";
+          throw e;
+        }
+
+        // Sync outputs to dev
+        T_mid.sync_to_dev();
+        p_mid.sync_to_dev();
+      } else
+      #endif
 
   }
 
   // =========================================================================================
   void Packagename::finalize_impl()
   {
-    // Do nothing usually
+    // Do nothing
+    m_atm_logger->info("[EAMxx] Packagename processes clean up.");
   }
   // =========================================================================================
 
@@ -181,8 +207,7 @@ In this folder, we must add the following files:
     Int m_num_cols;
     Int m_num_levs;
 
-    // Parameters here if needed. 
-    // These can be set in namelist_defaults_scream.xml (see below) for default values and etc
+    // Parameters for fun
     Real packagename_var1;
     Real packagename_var2;
 
@@ -194,31 +219,157 @@ In this folder, we must add the following files:
   #endif // SCREAM_PACKAGENAME_HPP
   ```
 
-3. `CMakeLists.txt`
-  ```cmake
-    # List of all cpp source files needed for the package to work
-    set(PACKAGENAME_SRCS
-      eamxx_packagename_process_interface.cpp
-      # packagename.cpp
-    )
+3. `packagename_functions.hpp`
+  ```cpp
+  #ifndef PACKAGENAME_FUNCTIONS_HPP
+  #define PACKAGENAME_FUNCTIONS_HPP
 
-    # List of all hpp header files needed for the package to work
-    set(PACKAGENAME_HEADERS
-      eamxx_packagename_process_interface.hpp
-      packagename_functions.hpp
-    )
+  #include "share/core/eamxx_types.hpp"
 
-    # Adds the library to eamxx_physics 
-    add_library(packagename ${PACKAGENAME_SRCS})
-    target_compile_definitions(packagename PUBLIC EAMXX_HAS_PACKAGENAME)
-    target_link_libraries(packagename eamxx_physics_share scream_share)
-    target_compile_options(packagename PUBLIC)
+  #include <ekat_pack_kokkos.hpp>
+  #include <ekat_workspace.hpp>
 
-    if (TARGET eamxx_physics)
-      # Add this library to eamxx_physics
-      target_link_libraries(eamxx_physics INTERFACE packagename)
-    endif()
+  namespace scream {
+  namespace packagename {
+
+  template <typename ScalarT, typename DeviceT>
+  struct PackagenameFunctions
+  {
+
+    //
+    // ------- Types --------
+    //
+
+    using Scalar = ScalarT;
+    using Device = DeviceT;
+
+    template <typename S>
+    using BigPack = ekat::Pack<S,SCREAM_PACK_SIZE>;
+    template <typename S>
+    using SmallPack = ekat::Pack<S,SCREAM_SMALL_PACK_SIZE>;
+
+    using Pack = BigPack<Scalar>;
+    using Spack = SmallPack<Scalar>;
+
+    using Mask = ekat::Mask<BigPack<Scalar>::n>;
+    using Smask = ekat::Mask<SmallPack<Scalar>::n>;
+
+    using KT = KokkosTypes<Device>;
+    using MemberType = typename KT::MemberType;
+
+    template <typename S>
+    using view_1d = typename KT::template view_1d<S>;
+    template <typename S>
+    using view_2d = typename KT::template view_2d<S>;
+    template <typename S>
+    using uview_1d = typename ekat::template Unmanaged<view_1d<S> >;
+
+  }; // struct Functions
+
+  } // namespace packagename
+  } // namespace scream
+
+  #endif // PACKAGENAME_FUNCTIONS_HPP
   ```
+
+4. `CMakeLists.txt`
+  ```cmake
+    # List of all cpp source files 
+  set(PACKAGENAME_SRCS
+    eamxx_packagename_process_interface.cpp
+    # packagename.cpp
+  )
+
+  # List of all hpp header files
+  set(PACKAGENAME_HEADERS
+    eamxx_packagename_process_interface.hpp
+    packagename_functions.hpp
+  )
+
+  # Python setup - from the ML correction package
+  include(ScreamUtils)
+      if(${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.11.0")
+      message(STATUS "Downloading Pybind11")
+      include(FetchContent)
+
+      FetchContent_Declare(pybind11 GIT_REPOSITORY https://github.com/pybind/pybind11.git GIT_TAG v3.0.1)
+      FetchContent_MakeAvailable(pybind11)
+  else()
+      message(FATAL_ERROR "pybind11 is missing. Use CMake >= 3.11 or download it")
+  endif()
+  find_package(Python REQUIRED COMPONENTS Interpreter Development)
+
+  # Adds the library to eamxx_physics 
+  add_library(packagename ${PACKAGENAME_SRCS})
+  target_compile_definitions(packagename PUBLIC EAMXX_HAS_PACKAGENAME)
+
+  target_include_directories(packagename PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+  target_include_directories(packagename SYSTEM PUBLIC ${PYTHON_INCLUDE_DIRS})
+
+  target_link_libraries(packagename eamxx_physics_share scream_share pybind11::pybind11 Python::Python)
+  target_compile_options(packagename PUBLIC)
+
+  if (TARGET eamxx_physics)
+    # Add this library to eamxx_physics
+    target_link_libraries(eamxx_physics INTERFACE packagename)
+  endif()
+  ```
+---
+
+## Python
+
+In `components/eamxx/src/physics/PACKAGENAME` add `packagename.py`:
+
+```python
+  # Imports 
+  import numpy as np
+
+  # Any initialization step can be done here
+  # This method is called during Packagename::initialize_impl
+  def init ():
+      pass
+
+  # Probably what we would call during run_impl
+  def main (p_mid, T_mid, fname=None):
+      # Print out max value of p_mid and T_mid
+      if fname is not None:
+          with open(fname, 'a') as log_file:
+              log_file.write("\t Python - Max value for p_mid: ", np.max(p_mid))
+              log_file.write("\t Python - Max value for T_mid: ", np.max(T_mid))
+
+              # scale both by 0.5
+              p_mid = p_mid * 0.5
+              T_mid = T_mid * 0.5
+
+              # log max values
+              log_file.write("\t Python - Max value for p_mid scaled by 0.5: ", np.max(p_mid))
+              log_file.write("\t Python - Max value for T_mid scaled by 0.5: ", np.max(T_mid))
+
+              #scale both by 2.0
+              p_mid = p_mid * 2.0
+              T_mid = T_mid * 2.0
+
+              # log max values
+              log_file.write("\t Python - Max value for p_mid scaled by 2.0: ", np.max(p_mid))
+              log_file.write("\t Python - Max value for T_mid scaled by 2.0: ", np.max(T_mid))
+
+      else:
+          # scale both by 0.5
+          p_mid = p_mid * 0.5
+          T_mid = T_mid * 0.5
+
+          #scale both by 2.0
+          p_mid = p_mid * 2.0
+          T_mid = T_mid * 2.0
+
+  # Define any other needed functions
+```
+
+To check: we can use `get_py_field_dev()` to get fields on the device and also use `sync_to_host()`. I am not sure why the examples specify to run python implementations only on the CPU.
+
+TODO - figure out how to pass the logfile name into python function
+
+---
 
 ### Hooking up the noodles 
 
@@ -290,337 +441,11 @@ An alternative to adding the new package to the `atm_procs_list` is to add it at
     ./atmchange mac_aero_mic::atm_procs_list+=packagename
 ```
 
----
-
-## Bridges
-
-### Fortran
-
-In `components/eamxx/src/physics/PACKAGENAME` add a subdirectory `fortran_bridge`. In this subdirectory add:
-
-1. `packagename_eamxx_bridge.cpp`
-    ```cpp
-    #include "packagename_eamxx_bridge.hpp"
-
-    using scream::Real;
-    using scream::Int;
-
-    // A C++ interface to packagename fortran calls and vice versa
-
-    extern "C" {packagename_eamxx_bridge_run_c( required_args);
-      } // extern "C" : end _c decls
-
-      namespace scream {
-      namespace packagename {
-
-      void packagename_eamxx_bridge_init( Int pcol, Int pver ){
-        packagename_eamxx_bridge_init_c( pcol, pver );
-      }
-
-      void packagename_eamxx_bridge_run( Int ncol, Int pver,
-                                PackageNameF::packagename_input_state& packagename_input,
-                                PackageNameF::packagename_output_tend& packagename_output,
-                                PackageNameF::packagename_runtime_opt& packagename_opts
-                              ){
-        //----------------------------------------------------------------------------
-        // Need to transpose to match how Fortran handles things
-        // packagename_input.transpose<ekat::TransposeDirection::c2f>(ncol,pver);
-        // packagename_output.transpose<ekat::TransposeDirection::c2f>(ncol,pver);
-
-        packagename_eamxx_bridge_run_c( required_arguments);
-
-        // Transpose back to C++ convention
-        // packagename_input.transpose<ekat::TransposeDirection::f2c>(ncol,pver);
-        // packagename_output.transpose<ekat::TransposeDirection::f2c>(ncol,pver);
-
-        //----------------------------------------------------------------------------
-      }
-
-      // end _c impls
-
-      } // namespace packagename
-      } // namespace scream
-    ```
-
-2. `packagename_eamxx_bridge.hpp`
-    ```cpp
-    #include "share/core/eamxx_types.hpp"
-
-    #include <array>
-    #include <utility>
-    #include <memory>   // for shared_ptr
-
-    #include "packagename_functions.hpp"
-
-    // Bridge functions to call fortran version of Packagename functions from C++
-
-    namespace scream {
-    namespace packagename {
-
-    using PackageNameF = packagename::Functions<Real, DefaultDevice>;
-
-    // Glue functions to call fortran from from C++ with the Data struct
-    void packagename_eamxx_bridge_init( Int pcols, Int pver );
-    void packagename_eamxx_bridge_run( Int ncol, Int pver, required_arguments);
-
-    extern "C" { // _f function decls
-    }
-
-    }  // namespace packagename
-    }  // namespace scream
-    ```
-
-3. `packagename_eamxx_bridge_main.F90` and any other `*.F90` modules you need:
-    ```fortran
-    module packagename_eamxx_bridge_main
-
-      use iso_c_binding
-      use cam_logfile,   only: iulog
-      use shr_sys_mod,   only: shr_sys_flush
-      use packagename_eamxx_bridge_params, only: masterproc, r8, pcols, pver, pverp, top_lev
-      !-----------------------------------------------------------------------------
-      implicit none
-      private
-      !-----------------------------------------------------------------------------
-      ! public methods
-      public :: packagename_eamxx_bridge_init_c
-      public :: packagename_eamxx_bridge_run_c
-
-    !===================================================================================================
-    #include "eamxx_config.f"
-    #ifdef SCREAM_DOUBLE_PRECISION
-    # define c_real c_double
-    #else
-    # define c_real c_float
-    #endif
-    !===================================================================================================
-    contains
-    !===================================================================================================
-
-    subroutine packagename_eamxx_bridge_init_c( pcol_in, pver_in ) bind(C)
-      ! Do stuff here
-    end subroutine packagename_eamxx_bridge_init_c
-
-    subroutine packagename_eamxx_bridge_run_c( pcol_in, pver_in ) bind(C)
-      ! Do stuff here
-    end subroutine packagename_eamxx_bridge_run_c
-  end module packagename_eamxx_bridge_main
-  ```
-
-Update `components/eamxx/src/physics/PACKAGENAME/CMakeLists.txt`:
+Finally, add the Python binary location in 'components/eamxx/cmake/machine-files/derecho.cmake':
 
 ```cmake
-# Set a legacy path if needed 
-set(PATH_TO_LEGACY_PACKAGENAME ${SCREAM_BASE_DIR}/path/to/code/) 
-
-set(PACKAGENAME_F90_SRCS
-  # ----------------------------------------------------------------------------
-  # EAMxx side C++ bridge methods
-  ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge/packagename_eamxx_bridge.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge/packagename_eamxx_bridge_main.F90
-  # list others as needed
-
-  # ----------------------------------------------------------------------------
-  # Fortran PACKAGENAME code
-  ${PATH_TO_LEGACY_PACKAGENAME}/packagename_*.F90
-  # List all needed 
-
-  # ----------------------------------------------------------------------------
-  # shared fotran modules
-  ${SCREAM_BASE_DIR}/../../share/util/shr_sys_mod.F90
-  ${SCREAM_BASE_DIR}/../../share/util/shr_kind_mod.F90
-  ${SCREAM_BASE_DIR}/../../share/util/shr_assert_mod.F90.in
-
-  # ----------------------------------------------------------------------------
-  # misc other fortran modules if needed
-  
-  # ----------------------------------------------------------------------------
-)
-
-# List of all cpp source files needed for the package to work
-set(PACKAGENAME_CXX_SRCS
-  eamxx_packagename_process_interface.cpp
-)
-
-# List of all hpp header files needed for the package to work
-set(PACKAGENAME_CXX_HEADERS
-  eamxx_packagename_process_interface.hpp
-  packagename_functions.hpp
-)
-
-# Adds the library to eamxx_physics 
-# -----------------------------------------
-
-add_library(packagename ${PACKAGENAME_F90_SRCS} ${PACKAGENAME_CXX_SRCS})
-
-set_target_properties(packagename PROPERTIES
-  Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/modules
-)
-target_compile_definitions(packagename PUBLIC EAMXX_HAS_PACKAGENAME)
-
-target_include_directories(packagename PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge
-  ${CMAKE_CURRENT_BINARY_DIR}/modules
-  ${PATH_TO_LEGACY_PACKAGENAME}
-)
-
-target_link_libraries(packagename eamxx_physics_share scream_share)
-target_compile_options(packagename PUBLIC)
-
-if (TARGET eamxx_physics)
-  # Add this library to eamxx_physics
-  target_link_libraries(eamxx_physics INTERFACE packagename)
-endif()
+# Set Python info
+# need to have pybind11 and mpi4py installed and Python >= 3.9.2
+OPTION(EAMXX_ENABLE_PYTHON "" ON)
+set(Python_EXECUTABLE /path/to/python)
 ```
-
-To finish linking everything together, we update: 
-
-```cpp
-  // =========================================================================================
-  void Packagename::initialize_impl (const RunType /* run_type */)
-  {
-    // NOTE: run_type tells us if this is an initial or restarted run,
-
-    // Set any universal things such as constants or masks (see Pompei example)
-
-    m_atm_logger->info("[EAMxx] packagename processes initialize_impl: ");
-
-    // This is where we can setup Kokkos functions 
-    // This is where we setup any starting physics
-    packagename::packagename_eamxx_bridge_init(m_pcol, m_nlev);
-  }
-
-  // =========================================================================================
-
-  // run_impl is called every timestep and where all of the physics happens
-  // Inputs:
-  //    - dt - the timestep for the current run step
-
-  void Packagename::run_impl (const double /* dt */)
-  {
-    // Pull in variables .
-    auto T_mid   = get_field_out("T_mid");
-    auto p_mid   = get_field_out("p_mid");
-    auto field1_in = get_field_in("field1_in"); // get_field_in() sets the field as read-only regardless of if it is required/computed/updated
-    auto field1_out = get_field_out("field1_out");
-    auto field1_updated = get_field_out("field1_updated"); // use this for updated fields too 
-
-    // Logger call 
-    m_atm_logger->info("[EAMxx] packagename run_impl: ");
-
-    packagename::packagename_eamxx_bridge_run(m_pcol, m_nlev, required_arguments);
-
-    // Do anything else we need to do
-
-  }
-
-  // =========================================================================================
-  void Packagename::finalize_impl()
-  {
-    // Do nothing usually
-  }
-  // =========================================================================================
-```
-
-Note: I think this is the bare bones for what would be needed to set this bridge up. Will update as needed once I actually start setting this up.
-
-### Python
-
-In `components/eamxx/src/physics/PACKAGENAME` add `packagename.py`:
-
-```python
-# Imports 
-import numpy as np
-
-# Any initialization step can be done here
-# This method is called during Packagename::initialize_impl
-def init ():
-    pass
-
-# Probably what we would call during run_impl
-def main (required_arguments):
-    # Do whatever physics needed 
-
-# Define any other needed functions
-
-```
-
-Update `eamxx_packagename_process_interface.cpp` as follows:
-
-```cpp
-  // All other imports here
-
-  #ifdef EAMXX_HAS_PYTHON
-  #include "share/atm_process/atmosphere_process_pyhelpers.hpp"
-  #endif
-
-  void Packagename::initialize_impl (const RunType /* run_type */)
-  {
-    // Previously defined initialization steps 
-
-    #ifdef EAMXX_HAS_PYTHON
-      if (has_py_module()) {
-        try {
-          py_module_call("init");
-        } catch (const pybind11::error_already_set& e) {
-          std::cout << "[Packagename::initialize_impl] Error! Something went wrong while calling the python module's function 'init'.\n"
-                      " - module name: " + m_params.get<std::string>("py_module_name") + "\n"
-                      " - pybind11 error: " + std::string(e.what()) + "\n";
-          throw e;
-        }
-
-      }
-    #endif
-  }
-
-  void Packagename::run_impl (const double /* dt */)
-{
-  // Pull in variables.
-    auto T_mid          = get_field_out("T_mid");
-    auto p_mid          = get_field_out("p_mid");
-    auto field1_in      = get_field_in("field1_in"); // get_field_in() sets the field as read-only regardless of if it is required/computed/updated
-    auto field1_out     = get_field_out("field1_out");
-    auto field1_updated = get_field_out("field1_updated"); // use this for updated fields too 
-
-  #ifdef EAMXX_HAS_PYTHON
-    if (has_py_module()) {
-      // For now, we run Python code only on CPU
-      const auto& T_mid          = get_py_field_host("T_mid");
-      const auto& p_mid          = get_py_field_host("p_mid");
-      const auto& field1_in      = get_py_field_host("field1_in");
-      const auto& field1_out     = get_py_field_host("field1_out");
-      const auto& field1_updated = get_py_field_host("field1_updated");
-
-      // Sync input to host
-      field1_in.sync_to_host();
-
-      // Read in any parameters
-      // double param_name = m_params.get<double>("param_name");
-
-      try {
-        py_module_call("main", required_arguments);
-      } catch (const pybind11::error_already_set& e) {
-        std::cout << "[Packagename::run_impl] Error! Something went wrong while calling the python module's function 'main'.\n"
-                    " - module name: " + m_params.get<std::string>("py_module_name") + "\n"
-                    " - pybind11 error: " + std::string(e.what()) + "\n";
-        throw e;
-      }
-
-      // Sync outputs to dev
-      T_mid.sync_to_dev();
-      p_mid.sync_to_dev();
-      field1_in.sync_to_dev();
-      field1_out.sync_to_dev();
-      field1_updated.sync_to_dev();
-    } else
-    #endif
-    // Here is where the normal calls w/out python would go
-  }
-```
-
-To check: we can use `get_py_field_dev()` to get fields on the device and also use `sync_to_host()`. I am not sure why the examples specify to run python implementations only on the CPU.
-
-## Kokkos and GPU performance 
-
-TBD

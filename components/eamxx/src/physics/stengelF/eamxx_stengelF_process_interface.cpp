@@ -84,8 +84,8 @@ void StengelF::run_impl (const double /* dt */)
   m_atm_logger->info("\t max value for updated p_mid: "+ std::to_string(p_mid_max));
 
   // Add the fields we pulled in to the params struct to pass to the bridge:
-  params.p_mid = p_mid.get_view<Spack**, Host>();
-  params.T_mid = T_mid.get_view<Spack**, Host>();
+  params.p_mid = p_mid.get_view<Spack**>();
+  params.T_mid = T_mid.get_view<Spack**>();
 
   // Initialize fortran data holders in struct
   params.init(m_num_cols, m_num_levs);
@@ -145,9 +145,9 @@ void StengelF::init_buffers(const ATMBufferManager &buffer_manager)
   Real* r_mem = reinterpret_cast<Real*>(buffer_manager.get_memory());
   //----------------------------------------------------------------------------
   // 2D "f_" views on mid-point levels
-  StengelFFunc::uview_2dl<Real>* midlv_f_ptrs[num_2d_midlv_f_views]  = { &params.f_p_mid, &params.f_T_mid};
+  StengelFFunc::view_2dl<Real>* midlv_f_ptrs[num_2d_midlv_f_views]  = { &params.f_p_mid, &params.f_T_mid};
   for (int i=0; i<num_2d_midlv_f_views; ++i) {
-    *midlv_f_ptrs[i] = StengelFFunc::uview_2dl<Real>(r_mem, m_num_cols, m_num_levs);
+    *midlv_f_ptrs[i] = StengelFFunc::view_2dl<Real>(r_mem, m_num_cols, m_num_levs);
     r_mem += midlv_f_ptrs[i]->size();
   }
   //----------------------------------------------------------------------------

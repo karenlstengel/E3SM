@@ -45,8 +45,8 @@ struct StengelFFunctions
     view_2d<Spack>  T_mid;
 
     // For fortran
-    uview_2dl<Real>  f_p_mid;
-    uview_2dl<Real>  f_T_mid;
+    view_2dl<Real>  f_p_mid;
+    view_2dl<Real>  f_T_mid;
 
     // Set number of variables for ATMBufferManager
     static constexpr int num_2d_midlv_c_views = 2;

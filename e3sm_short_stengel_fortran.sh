@@ -50,7 +50,7 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange NTHRDS=1
 ./xmlchange ROOTPE='0'
 
-./xmlchange OPENACC_GPU_OFFLOAD=TRUE
+./xmlchange OPENACC_GPU_OFFLOAD=FALSE
 
 # the next two lines control archiving 
 ./xmlchange DOUT_S=false

@@ -1,9 +1,10 @@
 module stengelF_eamxx_bridge_main
 
   use iso_c_binding
-  use openacc
+  use openacc_utils
   use cam_logfile,   only: iulog ! kinds instead of cam_logfile?
   use shr_sys_mod,   only: shr_sys_flush
+  use spmd_utils,      only: masterproc
   !-----------------------------------------------------------------------------
   implicit none
   private
@@ -55,42 +56,43 @@ subroutine stengelF_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C, name="steng
   ! Local variables for looping
   integer :: i,k
 
-  ! Do stuff here - scale both p_mid and T_mid by 0.5
-  !$acc parallel deviceptr(p_mid, T_mid)
+  ! initialize reduction scalars
+  p_mid_max = 0.0
+  T_mid_max = 0.0
+
+  ! Scale and get max value for each field
+  !$acc parallel deviceptr(p_mid, T_mid) reduction(max:p_mid_max, max:T_mid_max)
   !$acc loop gang vector collapse(2)
-  do i = 1,pcols
-    do k = 1,pver
+  do k = 1,pver
+    do i = 1,ncol
       p_mid(i,k) = p_mid(i,k) * 0.5
       T_mid(i,k) = T_mid(i,k) * 0.5
     end do
   end do
-  !$acc end parallel
-
-  ! get max value to print out
   p_mid_max = MAXVAL(p_mid) 
-  T_mid_max = MAXVAL(T_mid) 
+  T_mid_max = MAXVAL(T_mid)
+  !$acc end parallel 
 
   ! TODO - need to fix this in terms of running in parallel. also newline?
-  write(iulog,*) "Fortran, max value of 0.5 p_mid ", p_mid_max
-  write(iulog,*) "Fortran, max value of 0.5 T_mid ", T_mid_max
+  if (masterproc) write(iulog,*) "Fortran, max value of 0.5 p_mid ", p_mid_max
+  if (masterproc) write(iulog,*) "Fortran, max value of 0.5 T_mid ", T_mid_max
 
-  !$acc parallel deviceptr(p_mid, T_mid)
+  ! Scale and get max value for each field
+  !$acc parallel deviceptr(p_mid, T_mid) reduction(max:p_mid_max, max:T_mid_max)
   !$acc loop gang vector collapse(2)
-  do i = 1,pcols
-    do k = 1,pver
+  do k = 1,pver
+    do i = 1,ncol
       p_mid(i,k) = p_mid(i,k) * 2.0
       T_mid(i,k) = T_mid(i,k) * 2.0
     end do
   end do
+  p_mid_max = MAXVAL(p_mid) 
+  T_mid_max = MAXVAL(T_mid)
   !$acc end parallel
 
-  ! get max value to print out
-  p_mid_max = MAXVAL(p_mid) 
-  T_mid_max = MAXVAL(T_mid) 
-
   ! TODO - need to fix this in terms of running in parallel. also newline?
-  write(iulog,*) "Fortran, max value of 2 p_mid ", p_mid_max
-  write(iulog,*) "Fortran, max value of 2 T_mid ", T_mid_max
+  if (masterproc) write(iulog,*) "Fortran, max value of 2 p_mid ", p_mid_max
+  if (masterproc) write(iulog,*) "Fortran, max value of 2 T_mid ", T_mid_max
   
   return
 end subroutine stengelF_eamxx_bridge_run_c

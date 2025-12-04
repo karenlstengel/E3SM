@@ -1,3 +1,5 @@
+set(PATH_TO_LEGACY_EAM ${SCREAM_BASE_DIR}/../eam/src)
+
 set(STENGELF_F90_SRCS
   # ----------------------------------------------------------------------------
   # EAMxx side C++ bridge methods
@@ -8,13 +10,15 @@ set(STENGELF_F90_SRCS
   # ----------------------------------------------------------------------------
   # Fortran STENGELF code - legacy (DNE)
   # ${PATH_TO_LEGACY_STENGELF}/stengelF_main.F90
-  # List all needed 
+  # List all as needed 
 
   # ----------------------------------------------------------------------------
-  # shared fotran modules
+  # shared fortran modules
   ${SCREAM_BASE_DIR}/../../share/util/shr_sys_mod.F90
   ${SCREAM_BASE_DIR}/../../share/util/shr_kind_mod.F90
   ${SCREAM_BASE_DIR}/../../share/util/shr_assert_mod.F90.in
+  ${PATH_TO_LEGACY_EAM}/physics/crm/openacc_utils.F90
+  ${PATH_TO_LEGACY_EAM}/utils/spmd_utils.F90
 
   # ----------------------------------------------------------------------------
   # misc other fortran modules if needed
@@ -22,7 +26,6 @@ set(STENGELF_F90_SRCS
   ${SCREAM_BASE_DIR}/../eam/src/control/cam_logfile.F90
   # ----------------------------------------------------------------------------
 )
-
 
 # List of all cpp source files 
 set(STENGELF_SRCS
@@ -39,7 +42,7 @@ set(STENGELF_HEADERS
 # Adds the library to eamxx_physics 
 add_library(stengelF ${STENGELF_F90_SRCS} ${STENGELF_SRCS})
 
-SET(USE_OPENACC TRUE)
+SET(USE_OPENACC TRUE) # TODO - check that this is getting set correctly
 SET(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} ${OPENACC_Fortran_FLAGS}")
 SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OPENACC_Linker_FLAGS}")
 
@@ -53,7 +56,7 @@ target_include_directories(stengelF PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge
   ${CMAKE_CURRENT_BINARY_DIR}/modules
-  # ${PATH_TO_LEGACY_STENGELF}
+  ${PATH_TO_LEGACY_EAM}
 )
 
 set_target_properties(stengelF PROPERTIES LINKER_LANGUAGE Fortran)

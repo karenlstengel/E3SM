@@ -629,7 +629,7 @@
      </directives>
      <directives gpu_enabled="true">
        <directive default="/bin/bash" > -S {{ shell }} </directive>
-       <directive> -l select={{ num_nodes }}:ncpus={{ max_cputasks_per_gpu_node }}:mpiprocs={{ tasks_per_node }}:ompthreads={{ thread_count }}:mem=480GB:ngpus={{ ngpus_per_node }}:mps=1 </directive>
+       <directive> -l select={{ num_nodes }}:ncpus={{ max_cputasks_per_gpu_node }}:mpiprocs={{ tasks_per_node }}:ompthreads={{ thread_count }}:mem=480GB:ngpus={{ ngpus_per_node }}:gpu_type=a100 </directive>
      </directives>
      <directives>
        <directive> -l job_priority=regular </directive>

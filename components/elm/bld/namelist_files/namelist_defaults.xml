@@ -123,7 +123,7 @@ attributes from the config_cache.xml file (with keys converted to upper-case).
      for the CLM2 data in the CESM distribution -->
 <!-- Plant function types (relative to {csmdata}) -->
 <paramfile use_cn=".false." use_fates=".false." >lnd/clm2/paramdata/clm_params_c180301.nc</paramfile>
-<paramfile use_crop=".true." >lnd/clm2/paramdata/clm_params_c220224.nc</paramfile>
+<paramfile use_crop=".true." >lnd/clm2/paramdata/clm_params_c251006.nc</paramfile>
 <paramfile nu_com="ECA" use_fates=".true." use_crop=".false." >lnd/clm2/paramdata/clm_params.cbgc.c07292018.nc</paramfile>
 <paramfile nu_com="ECA" use_cn=".true." use_crop=".false." >lnd/clm2/paramdata/clm_params.cbgc.c07292018.nc</paramfile>
 <paramfile use_crop=".false." use_cn=".true."  >lnd/clm2/paramdata/clm_params_c211124.nc</paramfile>
@@ -515,9 +515,9 @@ lnd/clm2/surfdata_map/surfdata_conusx4v1_simyr2000_c160503.nc</fsurdat>
 
 <flanduse_timeseries hgrid="360x720cru"    sim_year_range="1850-2015"
  use_crop=".false." >lnd/clm2/surfdata_map/landuse.timeseries_360x720cru_hist_simyr1850-2015_c180220.nc</flanduse_timeseries>
-<flanduse_timeseries hgrid="0.9x1.25"      sim_year_range="1850-2015"
+<flanduse_timeseries hgrid="0.9x1.25"      
  use_crop=".false." >lnd/clm2/surfdata_map/landuse.timeseries_0.9x1.25_hist_simyr1850-2015_c180306.nc</flanduse_timeseries>
-<flanduse_timeseries hgrid="1.9x2.5"       sim_year_range="1850-2015"
+<flanduse_timeseries hgrid="1.9x2.5"
  use_crop=".false." >lnd/clm2/surfdata_map/landuse.timeseries_1.9x2.5_hist_simyr1850-2015_c180306.nc</flanduse_timeseries>
 <flanduse_timeseries hgrid="10x15"         sim_year_range="1850-2015"
  use_crop=".false." >lnd/clm2/surfdata_map/surfdata.pftdyn_10x15_rcp8.5_simyr1850-2100_c130524.nc</flanduse_timeseries>

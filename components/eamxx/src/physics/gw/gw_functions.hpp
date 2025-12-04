@@ -87,6 +87,36 @@ struct Functions
 
     // Minimum value of (u-c)**2.
     static inline constexpr Real ubmc2mn = 0.01;
+
+    // Useful to avoid promoting to 64-bit double in single prec
+    static constexpr Real half=0.5;
+
+    // Minimum value of Brunt-Vaisalla frequency squared.
+    static constexpr Real n2min = 1.e-8;
+
+    // Mysterious hardcoded value used in calculation of tndmax
+    static constexpr Real temp1 = 86400;
+
+    // spectrum averaging length [m]
+    static constexpr Real tau_avg_length = 100e3;
+
+    // Inverse Prandtl number.
+    static constexpr Real prndl=0.25;
+
+    // Integration interval to get bin average.
+    static constexpr Real dca  = 0.1;
+
+    // Width of gaussian in phase speed.
+    static constexpr Real c0   = 30;
+
+    // max altitude [m] to check for max heating
+    static constexpr Real heating_altitude_max = 20e3;
+
+    // min surface displacement height for orographic waves
+    static constexpr Real orohmin = 10;
+
+    // min wind speed for orographic waves
+    static constexpr Real orovmin = 2;
   };
 
   //
@@ -129,6 +159,9 @@ struct Functions
     // Effective horizontal wave number.
     Real kwv; // = huge(1._r8)
 
+    // 1/2 * horizontal wavenumber (for oro)
+    Real oroko2;
+
     // Interface levels for gravity wave sources.
     int ktop; // = huge(1)
     int kbotbg; // = huge(1)
@@ -160,6 +193,24 @@ struct Functions
 
     // Table of source spectra.
     view_3d<Real> mfcc;
+  };
+
+  struct GwFrontInit {
+    GwFrontInit() : initialized(false) {}
+
+    // Tell us if initialize has been called
+    bool initialized;
+
+    // Frontogenesis function critical threshold.
+    Real frontgfc;
+
+    // Level at which to check the frontogenesis function to determine when
+    // waves will be launched.
+    Int kfront;
+
+    // Average value of gaussian over gravity wave spectrum bins, multiplied by
+    // background source strength (taubgnd).
+    view_1d<Real> fav;
   };
 
   //
@@ -228,15 +279,21 @@ struct Functions
 
   static void gw_convect_init(
     // Inputs
-    const GwCommonInit& init,
     const Real& plev_src_wind,
     const uview_3d<const Real>& mfcc_in);
+
+  static void gw_front_init(
+    // Inputs
+    const Real& taubgnd,
+    const Real& frontgfc_in,
+    const Int& kfront_in);
 
   static void gw_finalize()
   {
     s_common_init.cref  = decltype(s_common_init.cref)();
     s_common_init.alpha = decltype(s_common_init.alpha)();
     s_convect_init.mfcc = decltype(s_convect_init.mfcc)();
+    s_front_init.fav    = decltype(s_front_init.fav)();
   }
 
   //
@@ -427,47 +484,50 @@ struct Functions
   KOKKOS_FUNCTION
   static void gw_front_project_winds(
     // Inputs
+    const MemberType& team,
     const Int& pver,
-    const Int& ncol,
     const Int& kbot,
-    const uview_1d<const Spack>& u,
-    const uview_1d<const Spack>& v,
+    const uview_1d<const Real>& u,
+    const uview_1d<const Real>& v,
     // Outputs
-    const uview_1d<Spack>& xv,
-    const uview_1d<Spack>& yv,
-    const uview_1d<Spack>& ubm,
-    const uview_1d<Spack>& ubi);
+    Real& xv,
+    Real& yv,
+    const uview_1d<Real>& ubm,
+    const uview_1d<Real>& ubi);
 
   KOKKOS_FUNCTION
   static void gw_front_gw_sources(
     // Inputs
-    const Int& pver,
+    const MemberType& team,
+    const GwFrontInit& finit,
     const Int& pgwv,
-    const Int& ncol,
+    const Int& pver,
     const Int& kbot,
-    const uview_1d<const Spack>& frontgf,
+    const uview_1d<const Real>& frontgf,
     // Outputs
-    const uview_1d<Spack>& tau);
+    const uview_2d<Real>& tau);
 
   KOKKOS_FUNCTION
   static void gw_cm_src(
     // Inputs
+    const MemberType& team,
+    const GwCommonInit& init,
+    const GwFrontInit& finit,
     const Int& pver,
     const Int& pgwv,
-    const Int& ncol,
     const Int& kbot,
-    const uview_1d<const Spack>& u,
-    const uview_1d<const Spack>& v,
-    const uview_1d<const Spack>& frontgf,
+    const uview_1d<const Real>& u,
+    const uview_1d<const Real>& v,
+    const uview_1d<const Real>& frontgf,
     // Outputs
-    const uview_1d<Int>& src_level,
-    const uview_1d<Int>& tend_level,
-    const uview_1d<Spack>& tau,
-    const uview_1d<Spack>& ubm,
-    const uview_1d<Spack>& ubi,
-    const uview_1d<Spack>& xv,
-    const uview_1d<Spack>& yv,
-    const uview_1d<Spack>& c);
+    Int& src_level,
+    Int& tend_level,
+    const uview_2d<Real>& tau,
+    const uview_1d<Real>& ubm,
+    const uview_1d<Real>& ubi,
+    Real& xv,
+    Real& yv,
+    const uview_1d<Real>& c);
 
   KOKKOS_FUNCTION
   static void gw_convect_project_winds(
@@ -616,27 +676,28 @@ struct Functions
   KOKKOS_FUNCTION
   static void gw_oro_src(
     // Inputs
+    const MemberType& team,
+    const GwCommonInit& init,
     const Int& pver,
     const Int& pgwv,
-    const Int& ncol,
-    const uview_1d<const Spack>& u,
-    const uview_1d<const Spack>& v,
-    const uview_1d<const Spack>& t,
-    const uview_1d<const Spack>& sgh,
-    const uview_1d<const Spack>& pmid,
-    const uview_1d<const Spack>& pint,
-    const uview_1d<const Spack>& dpm,
-    const uview_1d<const Spack>& zm,
-    const uview_1d<const Spack>& nm,
+    const uview_1d<const Real>& u,
+    const uview_1d<const Real>& v,
+    const uview_1d<const Real>& t,
+    const Real& sgh,
+    const uview_1d<const Real>& pmid,
+    const uview_1d<const Real>& pint,
+    const uview_1d<const Real>& dpm,
+    const uview_1d<const Real>& zm,
+    const uview_1d<const Real>& nm,
     // Outputs
-    const uview_1d<Int>& src_level,
-    const uview_1d<Int>& tend_level,
-    const uview_1d<Spack>& tau,
-    const uview_1d<Spack>& ubm,
-    const uview_1d<Spack>& ubi,
-    const uview_1d<Spack>& xv,
-    const uview_1d<Spack>& yv,
-    const uview_1d<Spack>& c);
+    Int& src_level,
+    Int& tend_level,
+    const uview_2d<Real>& tau,
+    const uview_1d<Real>& ubm,
+    const uview_1d<Real>& ubi,
+    Real& xv,
+    Real& yv,
+    const uview_1d<Real>& c);
 
   KOKKOS_FUNCTION
   static void vd_lu_decomp(
@@ -678,6 +739,7 @@ struct Functions
   //
   inline static GwCommonInit s_common_init;
   inline static GwConvectInit s_convect_init;
+  inline static GwFrontInit s_front_init;
 
 }; // struct Functions
 
@@ -688,27 +750,28 @@ struct Functions
 // to the translation unit; otherwise, ETI is used.
 #if defined(EAMXX_ENABLE_GPU) && !defined(KOKKOS_ENABLE_CUDA_RELOCATABLE_DEVICE_CODE) \
                                 && !defined(KOKKOS_ENABLE_HIP_RELOCATABLE_DEVICE_CODE)
-# include "impl/gw_gwd_compute_tendencies_from_stress_divergence_impl.hpp"
-# include "impl/gw_gw_prof_impl.hpp"
+# include "impl/gw_compute_tendencies_from_stress_divergence_impl.hpp"
+# include "impl/gw_prof_impl.hpp"
 # include "impl/gw_momentum_energy_conservation_impl.hpp"
-# include "impl/gw_gwd_compute_stress_profiles_and_diffusivities_impl.hpp"
-# include "impl/gw_gwd_project_tau_impl.hpp"
-# include "impl/gw_gwd_precalc_rhoi_impl.hpp"
-# include "impl/gw_gw_drag_prof_impl.hpp"
-# include "impl/gw_gw_front_project_winds_impl.hpp"
-# include "impl/gw_gw_front_gw_sources_impl.hpp"
-# include "impl/gw_gw_cm_src_impl.hpp"
-# include "impl/gw_gw_convect_project_winds_impl.hpp"
-# include "impl/gw_gw_heating_depth_impl.hpp"
-# include "impl/gw_gw_storm_speed_impl.hpp"
-# include "impl/gw_gw_convect_gw_sources_impl.hpp"
-# include "impl/gw_gw_beres_src_impl.hpp"
-# include "impl/gw_gw_ediff_impl.hpp"
-# include "impl/gw_gw_diff_tend_impl.hpp"
-# include "impl/gw_gw_oro_src_impl.hpp"
-# include "impl/gw_gw_common_init_impl.hpp"
+# include "impl/gw_compute_stress_profiles_and_diffusivities_impl.hpp"
+# include "impl/gw_project_tau_impl.hpp"
+# include "impl/gw_precalc_rhoi_impl.hpp"
+# include "impl/gw_drag_prof_impl.hpp"
+# include "impl/gw_front_project_winds_impl.hpp"
+# include "impl/gw_front_gw_sources_impl.hpp"
+# include "impl/gw_cm_src_impl.hpp"
+# include "impl/gw_convect_project_winds_impl.hpp"
+# include "impl/gw_heating_depth_impl.hpp"
+# include "impl/gw_storm_speed_impl.hpp"
+# include "impl/gw_convect_gw_sources_impl.hpp"
+# include "impl/gw_beres_src_impl.hpp"
+# include "impl/gw_ediff_impl.hpp"
+# include "impl/gw_diff_tend_impl.hpp"
+# include "impl/gw_oro_src_impl.hpp"
+# include "impl/gw_common_init_impl.hpp"
 # include "impl/gw_vd_lu_decomp_impl.hpp"
 # include "impl/gw_vd_lu_solve_impl.hpp"
-# include "impl/gw_gw_convect_init_impl.hpp"
+# include "impl/gw_convect_init_impl.hpp"
+# include "impl/gw_front_init_impl.hpp"
 #endif // GPU && !KOKKOS_ENABLE_*_RELOCATABLE_DEVICE_CODE
 #endif // P3_FUNCTIONS_HPP

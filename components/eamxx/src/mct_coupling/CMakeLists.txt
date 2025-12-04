@@ -43,6 +43,11 @@ set (SCREAM_LIBS
      tms
 )
 
+# Turn on Kessler if enabled
+if (TARGET kessler)
+  list(APPEND SCREAM_LIBS kessler)
+endif()
+
 # ZM is not always on yet
 if (TARGET zm)
   list(APPEND SCREAM_LIBS zm)

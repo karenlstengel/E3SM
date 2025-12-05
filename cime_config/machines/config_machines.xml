@@ -4046,11 +4046,12 @@
         <command name="load">cuda/12.3.2</command>
         <command name="load">kokkos</command>
       </modules>
-      <modules compiler="nvidia*">
+      <modules compiler="nvidia.*">
         <command name="load">nvhpc/24.11</command>
       </modules>
       <modules compiler="nvidiagpu">
         <command name="load">cuda/12.3.2</command>
+        <!-- <command name="load">kokkos</command> -->
       </modules>
       <modules>
 	      <command name="load">ncarcompilers/1.0.0</command>
@@ -4077,6 +4078,9 @@
       <env name="NETCDF_PATH">$ENV{NETCDF}</env>
     </environment_variables>
     <environment_variables compiler="gnugpu">
+      <env name="NCAR_LIBS_CUDA">-lcuda -lcudart</env>
+    </environment_variables>
+    <environment_variables compiler="nvidiagpu">
       <env name="NCAR_LIBS_CUDA">-lcuda -lcudart</env>
     </environment_variables>
   </machine>

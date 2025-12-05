@@ -18,7 +18,7 @@ set(STENGELF_F90_SRCS
   ${SCREAM_BASE_DIR}/../../share/util/shr_kind_mod.F90
   ${SCREAM_BASE_DIR}/../../share/util/shr_assert_mod.F90.in
   ${PATH_TO_LEGACY_EAM}/physics/crm/openacc_utils.F90
-  ${PATH_TO_LEGACY_EAM}/utils/spmd_utils.F90
+  # ${PATH_TO_LEGACY_EAM}/utils/spmd_utils.F90
 
   # ----------------------------------------------------------------------------
   # misc other fortran modules if needed
@@ -42,9 +42,21 @@ set(STENGELF_HEADERS
 # Adds the library to eamxx_physics 
 add_library(stengelF ${STENGELF_F90_SRCS} ${STENGELF_SRCS})
 
-SET(USE_OPENACC TRUE) # TODO - check that this is getting set correctly
+SET(USE_OPENACC TRUE)
+SET(OPENACC_Fortran_FLAGS "-acc -gpu=cc80 -Minfo=accel")
+SET(OPENACC_Linker_FLAGS "-acc -gpu=cc80 -Minfo=accel")
+# -acc -gpu=cc80 -Minfo=accel 
+
+# From HOMME build
+# -DOPENACC_Fortran_FLAGS="-acc -ta=tesla,pin,cc35,cuda7.5 -Minfo=accel"
+# -DOPENACC_Linker_FLAGS="-acc -ta=tesla,pin,cc35,cuda7.5 -Mcuda"
+
 SET(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} ${OPENACC_Fortran_FLAGS}")
 SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OPENACC_Linker_FLAGS}")
+
+message(STATUS "USE_OPENACC = ${USE_OPENACC}")
+message(STATUS "OPENACC_Fortran_FLAGS = ${OPENACC_Fortran_FLAGS}")
+message(STATUS "OPENACC_Linker_FLAGS = ${OPENACC_Linker_FLAGS}")
 
 set_target_properties(stengelF PROPERTIES
   Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/modules

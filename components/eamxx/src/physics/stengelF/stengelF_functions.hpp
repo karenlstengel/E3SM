@@ -34,9 +34,9 @@ struct StengelFFunctions
   template <typename S> using view_1d   = typename KT::template view_1d<S>;
   template <typename S> using view_2d   = typename KT::template view_2d<S>;
   template <typename S> using view_2dl  = typename KT::template lview<S**>;
-  template <typename S> using uview_1d  = typename ekat::template Unmanaged<view_1d<S> >;
-  template <typename S> using uview_2d  = typename ekat::template Unmanaged<view_2d<S> >;
-  template <typename S> using uview_2dl = typename ekat::template Unmanaged<view_2dl<S> >;
+  // template <typename S> using uview_1d  = typename ekat::template Unmanaged<view_1d<S> >;
+  // template <typename S> using uview_2d  = typename ekat::template Unmanaged<view_2d<S> >;
+  // template <typename S> using uview_2dl = typename ekat::template Unmanaged<view_2dl<S> >;
   // ----------------------------------------
   // Structs
   struct params {

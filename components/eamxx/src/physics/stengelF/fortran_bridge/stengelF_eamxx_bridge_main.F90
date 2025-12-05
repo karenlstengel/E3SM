@@ -4,7 +4,6 @@ module stengelF_eamxx_bridge_main
   use openacc_utils
   use cam_logfile,   only: iulog ! kinds instead of cam_logfile?
   use shr_sys_mod,   only: shr_sys_flush
-  use spmd_utils,      only: masterproc
   !-----------------------------------------------------------------------------
   implicit none
   private
@@ -73,9 +72,9 @@ subroutine stengelF_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C, name="steng
   T_mid_max = MAXVAL(T_mid)
   !$acc end parallel 
 
-  ! TODO - need to fix this in terms of running in parallel. also newline?
-  if (masterproc) write(iulog,*) "Fortran, max value of 0.5 p_mid ", p_mid_max
-  if (masterproc) write(iulog,*) "Fortran, max value of 0.5 T_mid ", T_mid_max
+  ! TODO - need to fix this in terms of running in parallel. (if (masterproc) write...)
+  write(iulog,*) "Fortran, max value of 0.5 p_mid ", p_mid_max
+  write(iulog,*) "Fortran, max value of 0.5 T_mid ", T_mid_max
 
   ! Scale and get max value for each field
   !$acc parallel deviceptr(p_mid, T_mid) reduction(max:p_mid_max, max:T_mid_max)
@@ -91,8 +90,8 @@ subroutine stengelF_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C, name="steng
   !$acc end parallel
 
   ! TODO - need to fix this in terms of running in parallel. also newline?
-  if (masterproc) write(iulog,*) "Fortran, max value of 2 p_mid ", p_mid_max
-  if (masterproc) write(iulog,*) "Fortran, max value of 2 T_mid ", T_mid_max
+  write(iulog,*) "Fortran, max value of 2 p_mid ", p_mid_max
+  write(iulog,*) "Fortran, max value of 2 T_mid ", T_mid_max
   
   return
 end subroutine stengelF_eamxx_bridge_run_c

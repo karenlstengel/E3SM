@@ -4057,7 +4057,7 @@
         <command name="load">kokkos</command>
       </modules>
       <modules compiler="nvidia.*">
-        <command name="load">nvhpc/24.11</command>
+        <command name="load">nvhpc/25.9</command>
       </modules>
       <modules compiler="nvidiagpu">
         <command name="load">cuda/12.3.2</command>
@@ -4075,7 +4075,7 @@
         <command name="load">netcdf/4.9.2</command>
       </modules>
       <modules mpilib="!mpi-serial">
-        <command name="load">netcdf-mpi/4.9.2</command>
+        <command name="load">netcdf-mpi/4.9.3</command>
         <command name="load">parallel-netcdf/1.14.0</command>
       </modules>
     </module_system>

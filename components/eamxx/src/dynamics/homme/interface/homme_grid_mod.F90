@@ -17,6 +17,7 @@ module homme_grid_mod
   public :: get_num_local_elems_f90, get_num_global_elems_f90
   public :: get_np_f90, get_nlev_f90
   public :: is_planar_geometry_f90
+  public :: check_grids_inited
 
 contains
 

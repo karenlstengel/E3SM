@@ -16,6 +16,7 @@ set(STENGELF_F90_SRCS
   # shared fortran modules
   ${SCREAM_BASE_DIR}/../../share/util/shr_sys_mod.F90
   ${SCREAM_BASE_DIR}/../../share/util/shr_kind_mod.F90
+  ${SCREAM_BASE_DIR}/../../share/util/shr_file_mod.F90
   ${SCREAM_BASE_DIR}/../../share/util/shr_assert_mod.F90.in
   ${PATH_TO_LEGACY_EAM}/physics/crm/openacc_utils.F90
   # ${PATH_TO_LEGACY_EAM}/utils/spmd_utils.F90

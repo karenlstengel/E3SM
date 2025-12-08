@@ -2,8 +2,10 @@ module stengelF_eamxx_bridge_main
 
   use iso_c_binding
   use openacc_utils
-  use cam_logfile,   only: iulog ! kinds instead of cam_logfile?
+  use mpi
+  use cam_logfile,   only: iulog
   use shr_sys_mod,   only: shr_sys_flush
+  use shr_file_mod
   !-----------------------------------------------------------------------------
   implicit none
   private
@@ -17,6 +19,7 @@ module stengelF_eamxx_bridge_main
   integer, public            :: pcols
   integer, public            :: pver
   character(len=256), public :: log_fname = ""
+  logical, public :: masterproc
 
 !===================================================================================================
 #include "eamxx_config.f"
@@ -32,9 +35,16 @@ subroutine stengelF_eamxx_bridge_init_c( pcol_in, pver_in ) bind(C, name="stenge
   integer(kind=c_int), value, intent(in) :: pcol_in
   integer(kind=c_int), value, intent(in) :: pver_in
 
+  ! Local variables
+  integer :: mpi_rank, ierror
+
   ! Set dimensions of fields
   pcols = pcol_in
   pver  = pver_in
+
+  call mpi_comm_rank(MPI_COMM_WORLD, mpi_rank, ierror)
+  masterproc = .false.
+  if (mpi_rank==0) masterproc = .true.
 
   return
 end subroutine stengelF_eamxx_bridge_init_c
@@ -60,7 +70,7 @@ subroutine stengelF_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C, name="steng
   T_mid_max = 0.0
 
   ! Scale and get max value for each field
-  !$acc parallel deviceptr(p_mid, T_mid) reduction(max:p_mid_max, max:T_mid_max)
+  !$acc parallel deviceptr(p_mid, T_mid) reduction(max: p_mid_max, T_mid_max)
   !$acc loop gang vector collapse(2)
   do k = 1,pver
     do i = 1,ncol
@@ -73,11 +83,13 @@ subroutine stengelF_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C, name="steng
   !$acc end parallel 
 
   ! TODO - need to fix this in terms of running in parallel. (if (masterproc) write...)
-  write(iulog,*) "Fortran, max value of 0.5 p_mid ", p_mid_max
-  write(iulog,*) "Fortran, max value of 0.5 T_mid ", T_mid_max
+  if (masterproc) then
+    write(iulog,*) "Fortran, max value of 0.5 p_mid ", p_mid_max
+    write(iulog,*) "Fortran, max value of 0.5 T_mid ", T_mid_max
+  end if
 
   ! Scale and get max value for each field
-  !$acc parallel deviceptr(p_mid, T_mid) reduction(max:p_mid_max, max:T_mid_max)
+  !$acc parallel deviceptr(p_mid, T_mid) reduction(max: p_mid_max, T_mid_max)
   !$acc loop gang vector collapse(2)
   do k = 1,pver
     do i = 1,ncol
@@ -90,9 +102,11 @@ subroutine stengelF_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C, name="steng
   !$acc end parallel
 
   ! TODO - need to fix this in terms of running in parallel. also newline?
-  write(iulog,*) "Fortran, max value of 2 p_mid ", p_mid_max
-  write(iulog,*) "Fortran, max value of 2 T_mid ", T_mid_max
-  
+  if (masterproc) then
+    write(iulog,*) "Fortran, max value of 2 p_mid ", p_mid_max
+    write(iulog,*) "Fortran, max value of 2 T_mid ", T_mid_max
+  end if
+
   return
 end subroutine stengelF_eamxx_bridge_run_c
 
@@ -121,13 +135,14 @@ subroutine set_log_file_name_f90_c(c_str) bind(C, name="set_log_file_name_f90_c"
 
     log_fname = trim(path)//fname
 
-    ! Create the log file on root rank...
-    open (unit=iulog,file=trim(log_fname), &
-          action='WRITE', access='SEQUENTIAL', position="append")
-    
-    write(iulog,*) " ---- STENGELF TEST ----"
-    flush(iulog)
-
+    iulog = shr_file_getunit()
+    if (masterproc) then
+      ! Set the log file on root rank...
+      open (unit=iulog,file=trim(log_fname), &
+            action='WRITE', access='SEQUENTIAL', position="append")
+      write(iulog,*) " ---- STENGELF ----"
+      flush(iulog)
+    endif
   endif
 end subroutine set_log_file_name_f90_c
 !===================================================================================================

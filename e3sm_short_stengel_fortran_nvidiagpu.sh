@@ -9,7 +9,7 @@ scratch=/glade/derecho/scratch/$user/E3SM
 # Machine, compset, etc.
 ####################################################################
 CCSMROOT=$scratch/E3SM
-COMPSET=F20TR-SCREAMv1
+COMPSET=F2000-SCREAMv1-AQP1-noAero #F20TR-SCREAMv1
 RESOLUTION=ne30pg2_ne30pg2
 DYCORE=theta-l_kokkos
 MACH=derecho
@@ -28,7 +28,8 @@ export NETCDF_PATH=$NETCDF
 ####################################################################
 # Create a new case 
 ####################################################################
-rm -rf $CASE_ROOT
+rm -rf $CASE_ROOT 
+# rm -rf $CASE_SCRIPTS_DIR # incremental build?
 
 cd $CCSMROOT/cime/scripts
 

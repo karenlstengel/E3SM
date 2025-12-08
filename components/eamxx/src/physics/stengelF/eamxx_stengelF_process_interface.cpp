@@ -25,8 +25,11 @@ StengelF::StengelF (const ekat::Comm& comm, const ekat::ParameterList& params)
 {
   // Nothing to do here usually
   m_atm_logger->info("[EAMxx] StengelF processes constructor");
+  m_atm_logger->info("[EAMxx] ATM file name: " + m_atm_logger->get_logfile_name());
 
   // Set the log filename in the F90 interface
+  // std::string logname_str = m_atm_logger->get_logfile_name() + "_F90";
+  // const char* logname = logname_str.c_str();
   const char* logname = m_atm_logger->get_logfile_name().c_str();
   set_log_file_name_f90(&logname);
 
@@ -78,10 +81,10 @@ void StengelF::run_impl (const double /* dt */)
 
   m_atm_logger->info("[EAMxx] stengelF run_impl: ");
   
-  auto T_mid_max = field_max<Real>(T_mid);
-  m_atm_logger->info("\t max value for updated T_mid: "+ std::to_string(T_mid_max));
-  auto p_mid_max = field_max<Real>(p_mid);
-  m_atm_logger->info("\t max value for updated p_mid: "+ std::to_string(p_mid_max));
+  // auto T_mid_max = field_max(T_mid);
+  // m_atm_logger->info("\t max value for updated T_mid: "+ std::to_string(T_mid_max));
+  // auto p_mid_max = field_max(p_mid);
+  // m_atm_logger->info("\t max value for updated p_mid: "+ std::to_string(p_mid_max));
 
   // Add the fields we pulled in to the params struct to pass to the bridge:
   params.p_mid = p_mid.get_view<Spack**>();

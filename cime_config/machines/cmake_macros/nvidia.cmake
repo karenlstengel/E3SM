@@ -22,4 +22,5 @@ string(APPEND CMAKE_Fortran_FORMAT_FIXED_FLAG " -Mfixed")
 string(APPEND CMAKE_Fortran_FORMAT_FREE_FLAG " -Mfree")
 string(APPEND CMAKE_EXE_LINKER_FLAGS " -Wl,--allow-multiple-definition -lstdc++")
 set(E3SM_LINK_WITH_FORTRAN "TRUE")
+set(HOMME_QUAD_PREC FALSE CACHE BOOL "") # nvidia does not seem to support QUAD 
 

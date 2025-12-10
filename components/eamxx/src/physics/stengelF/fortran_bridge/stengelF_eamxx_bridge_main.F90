@@ -19,7 +19,7 @@ module stengelF_eamxx_bridge_main
   integer, public            :: pcols
   integer, public            :: pver
   character(len=256), public :: log_fname = ""
-  logical, public :: masterproc
+  logical, public            :: masterproc
 
 !===================================================================================================
 #include "eamxx_config.f"
@@ -76,16 +76,16 @@ subroutine stengelF_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C, name="steng
     do i = 1,ncol
       p_mid(i,k) = p_mid(i,k) * 0.5
       T_mid(i,k) = T_mid(i,k) * 0.5
+      p_mid_max = max(p_mid_max,p_mid(i,k))
+      t_mid_max = max(t_mid_max,t_mid(i,k))
     end do
   end do
-  p_mid_max = MAXVAL(p_mid) 
-  T_mid_max = MAXVAL(T_mid)
   !$acc end parallel 
 
   ! TODO - need to fix this in terms of running in parallel. (if (masterproc) write...)
   if (masterproc) then
-    write(iulog,*) "Fortran, max value of 0.5 p_mid ", p_mid_max
-    write(iulog,*) "Fortran, max value of 0.5 T_mid ", T_mid_max
+    write(*,*) "Fortran, max value of 0.5 p_mid ", p_mid_max
+    write(*,*) "Fortran, max value of 0.5 T_mid ", T_mid_max
   end if
 
   ! Scale and get max value for each field
@@ -95,16 +95,16 @@ subroutine stengelF_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C, name="steng
     do i = 1,ncol
       p_mid(i,k) = p_mid(i,k) * 2.0
       T_mid(i,k) = T_mid(i,k) * 2.0
+      p_mid_max = max(p_mid_max,p_mid(i,k))
+      t_mid_max = max(t_mid_max,t_mid(i,k))
     end do
   end do
-  p_mid_max = MAXVAL(p_mid) 
-  T_mid_max = MAXVAL(T_mid)
   !$acc end parallel
 
   ! TODO - need to fix this in terms of running in parallel. also newline?
   if (masterproc) then
-    write(iulog,*) "Fortran, max value of 2 p_mid ", p_mid_max
-    write(iulog,*) "Fortran, max value of 2 T_mid ", T_mid_max
+    write(*,*) "Fortran, max value of 2 p_mid ", p_mid_max
+    write(*,*) "Fortran, max value of 2 T_mid ", T_mid_max
   end if
 
   return

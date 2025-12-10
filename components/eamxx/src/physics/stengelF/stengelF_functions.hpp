@@ -5,6 +5,7 @@
 
 #include <ekat_pack_kokkos.hpp>
 #include <ekat_workspace.hpp>
+#include <ekat_team_policy_utils.hpp>
 
 namespace scream {
 namespace stengelF {
@@ -28,8 +29,12 @@ struct StengelFFunctions
   using Pack = BigPack<Scalar>;
   using Spack = SmallPack<Scalar>;
 
-  using KT = KokkosTypes<Device>;
-  using MemberType = typename KT::MemberType;
+  using Mask = ekat::Mask<BigPack<Scalar>::n>;
+  using Smask = ekat::Mask<SmallPack<Scalar>::n>;
+
+  // GPU/Kokkos related things
+  using KT = ekat::KokkosTypes<Device>;
+  using TeamPolicy  = typename KokkosTypes<Device>::TeamPolicy;
 
   template <typename S> using view_1d   = typename KT::template view_1d<S>;
   template <typename S> using view_2d   = typename KT::template view_2d<S>;

@@ -13,11 +13,11 @@ COMPSET=F2000-SCREAMv1-AQP1-noAero #F20TR-SCREAMv1
 RESOLUTION=ne30pg2_ne30pg2
 DYCORE=theta-l_kokkos
 MACH=derecho
-MYCOMPILER=nvidiagpu
+MYCOMPILER=nvidia
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="stengel_cpp_eamxx_nvidiagpu"
+CASE_NAME="stengel_fortran_eamxx_nvidiacpu_testing"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -28,7 +28,7 @@ export NETCDF_PATH=$NETCDF
 ####################################################################
 # Create a new case 
 ####################################################################
-rm -rf $CASE_ROOT
+rm -rf $CASE_ROOT 
 # rm -rf $CASE_SCRIPTS_DIR # incremental build?
 
 cd $CCSMROOT/cime/scripts
@@ -47,24 +47,20 @@ cd $CASE_SCRIPTS_DIR
 
 ./xmlchange DEBUG=TRUE
 
-./xmlchange NTASKS=4
+./xmlchange NTASKS=128
 ./xmlchange NTHRDS=1
-./xmlchange NGPUS_PER_NODE=4
-./xmlchange GPU_TYPE=a100 # NVIDIA A100 GPUs in Derecho
-./xmlchange OPENACC_GPU_OFFLOAD=FALSE
-./xmlchange OPENMP_GPU_OFFLOAD=FALSE
-./xmlchange KOKKOS_GPU_OFFLOAD=TRUE
-./xmlchange OVERSUBSCRIBE_GPU=FALSE
 ./xmlchange ROOTPE='0'
-./xmlchange DOUT_S=false
-# ./xmlchange DOUT_S_ROOT=${CASE_ARCHIVE_DIR}
+
+./xmlchange OPENACC_GPU_OFFLOAD=FALSE
 
 ./case.setup
 
 ./xmlchange CAM_TARGET=$DYCORE
 ./xmlchange GMAKE_J='32'
 ./atmchange initial_conditions::topography_filename=/glade/derecho/scratch/kstengel/inputdata/atm/cam/topo/USGS-gtopo30_ne30np4pg2_x6t-SGH.c20210614.nc
-./atmchange mac_aero_mic::atm_procs_list+=stengel
+./atmchange mac_aero_mic::atm_procs_list+=stengelF
+
+./atmquery --grep topography
    
 ./case.build #--clean atm # note that you need to have built this at least once successfully before using this flag
 

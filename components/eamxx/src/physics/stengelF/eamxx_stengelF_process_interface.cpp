@@ -30,8 +30,8 @@ StengelF::StengelF (const ekat::Comm& comm, const ekat::ParameterList& params)
   // Set the log filename in the F90 interface
   // std::string logname_str = m_atm_logger->get_logfile_name() + "_F90";
   // const char* logname = logname_str.c_str();
-  const char* logname = m_atm_logger->get_logfile_name().c_str();
-  set_log_file_name_f90(&logname);
+  // const char* logname = m_atm_logger->get_logfile_name().c_str();
+  // set_log_file_name_f90(logname);
 
 }
 
@@ -64,7 +64,9 @@ void StengelF::initialize_impl (const RunType /* run_type */)
 {
   m_atm_logger->info("[EAMxx] stengelF processes initialize_impl: ");
 
-  stengelF::stengelF_eamxx_bridge_init(m_num_cols, m_num_levs);
+  // stengelF::stengelF_eamxx_bridge_init(m_num_cols, m_num_levs);
+
+  m_atm_logger->info("[EAMxx] stengelF processes initialize_impl end: ");
 }
 
 // =========================================================================================
@@ -76,6 +78,7 @@ void StengelF::initialize_impl (const RunType /* run_type */)
 void StengelF::run_impl (const double /* dt */)
 {
   // Pull in variables .
+  m_atm_logger->info("[EAMxx] before getting fields: ");
   auto T_mid   = get_field_out("T_mid");
   auto p_mid   = get_field_out("p_mid");
 
@@ -90,8 +93,12 @@ void StengelF::run_impl (const double /* dt */)
   params.p_mid = p_mid.get_view<Spack**>();
   params.T_mid = T_mid.get_view<Spack**>();
 
+  m_atm_logger->info("[EAMxx] after getting views of fields: ");
+
   // Initialize fortran data holders in struct
   params.init(m_num_cols, m_num_levs);
+
+  m_atm_logger->info("[EAMxx] after init: ");
 
   stengelF_eamxx_bridge_run(m_num_cols, m_num_levs, params); 
 
@@ -139,6 +146,7 @@ void StengelF::init_buffers(const ATMBufferManager &buffer_manager)
   auto buffer_chk = ( buffer_manager.allocated_bytes() >= requested_buffer_size_in_bytes() );
   EKAT_REQUIRE_MSG(buffer_chk,"Error! Buffers size not sufficient.\n");
 
+  std::cout << "start of init_buffers" << std::endl;
   const int nlevm_packs = ekat::npack<Spack>(m_num_levs);
 
   constexpr auto num_2d_midlv_c_views = StengelFFunc::params::num_2d_midlv_c_views;
@@ -167,5 +175,6 @@ void StengelF::init_buffers(const ATMBufferManager &buffer_manager)
   size_t used_mem = (reinterpret_cast<Real*>(total_mem) - buffer_manager.get_memory())*sizeof(Real);
   auto mem_chk = ( used_mem == requested_buffer_size_in_bytes() );
   EKAT_REQUIRE_MSG(mem_chk,"Error! Used memory != requested memory for StengelF.");
+  std::cout << "end of init_buffers" << std::endl;
 }
 } // namespace scream

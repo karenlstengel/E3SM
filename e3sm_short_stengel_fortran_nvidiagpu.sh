@@ -17,7 +17,7 @@ MYCOMPILER=nvidiagpu
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="stengel_fortran_eamxx_nvidiagpu"
+CASE_NAME="stengel_fortran_eamxx_nvidia_koacc"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -63,7 +63,10 @@ cd $CASE_SCRIPTS_DIR
 
 ./xmlchange CAM_TARGET=$DYCORE
 ./xmlchange GMAKE_J='32'
+./atmchange initial_conditions::topography_filename=/glade/derecho/scratch/kstengel/inputdata/atm/cam/topo/USGS-gtopo30_ne30np4pg2_x6t-SGH.c20210614.nc
 ./atmchange mac_aero_mic::atm_procs_list+=stengelF
+
+./atmquery --grep topography
    
 ./case.build #--clean atm # note that you need to have built this at least once successfully before using this flag
 

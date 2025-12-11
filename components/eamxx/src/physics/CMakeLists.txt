@@ -27,6 +27,6 @@ add_subdirectory(gw)
 # Stengel parameterization versions go here (might need to change flags)
 # Regular C++ version
 # add_subdirectory(stengel)
-add_subdirectory(stengelF)
+# add_subdirectory(stengelF)
 # add_subdirectory(stengelP)
 # ---------

@@ -13,11 +13,11 @@ COMPSET=F20TR-SCREAMv1
 RESOLUTION=ne30pg2_ne30pg2
 DYCORE=theta-l_kokkos
 MACH=derecho
-MYCOMPILER=gnugpu
+MYCOMPILER=nvidiagpu #gnugpu
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="test_10_eamxx_gpu"
+CASE_NAME="test_10_eamxx_nvidiagpu"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -77,7 +77,7 @@ else
 fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
-./xmlchange STOP_N='10',STOP_OPTION='ndays'
+./xmlchange STOP_N='1',STOP_OPTION='ndays'
 ./xmlchange JOB_WALLCLOCK_TIME='00:59:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange 

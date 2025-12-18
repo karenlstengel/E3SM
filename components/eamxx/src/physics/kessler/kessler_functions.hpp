@@ -3,6 +3,7 @@
 
 #include "share/physics/physics_constants.hpp"
 #include "share/physics/eamxx_common_physics_functions.hpp"
+#include "share/physics/eamxx_common_physics_functions_impls.hpp"
 #include "share/core/eamxx_types.hpp"
 
 #include <ekat_pack_kokkos.hpp>

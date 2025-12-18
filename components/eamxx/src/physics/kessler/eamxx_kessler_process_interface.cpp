@@ -5,6 +5,7 @@
 
 #include "share/physics/physics_constants.hpp"
 #include "share/physics/eamxx_common_physics_functions.hpp"
+#include "share/physics/eamxx_common_physics_functions_impls.hpp"
 
 #include <ekat_assert.hpp>
 #include <ekat_units.hpp>

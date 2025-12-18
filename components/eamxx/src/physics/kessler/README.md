@@ -2,13 +2,17 @@
 
 ## Background: 
 
-See `components/eam/src/physics/crm/pam/external/physics/micro/kessler/Microphysics.h` for background information on implementation. 
+See `components/eam/src/physics/crm/pam/external/physics/micro/kessler/Microphysics.h` for background information on EAM implementation. 
 
 Non-CAM Fortran version of code (with C bindings) found in: `components/eam/src/physics/crm/pam/external/physics/micro/kessler/kessler.f90`
 
-CAM Fortran routines are in: TODO
+CAM Fortran routines are in: [this repo](https://github.com/ESCOMP/atmospheric_physics)
+
+We are using the Kessler provided in: [atmospheric_physics](git@github.com:ESCOMP/atmospheric_physics.git). 
 
 ## Design & Code Layout
+
+The Kessler suite is in `atmospheric_physics/schemes/kessler`. 
 
 ## GPU stuff
 

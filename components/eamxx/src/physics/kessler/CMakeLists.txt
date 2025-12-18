@@ -1,5 +1,7 @@
 set(PATH_TO_LEGACY_EAM ${SCREAM_BASE_DIR}/../eam/src)
 set(PATH_TO_LEGACY_CAM ${SCREAM_BASE_DIR}/../eam/src/pyhsics/cam)
+set(PATH_TO_LEGACY_CAM_SIMA ${SCREAM_BASE_DIR}/../../../atmospheric_physics)
+set(PATH_TO_LEGACY_KESSLER ${PATH_TO_LEGACY_CAM_SIMA}/schemes/kessler)
 
 set(KESSLER_F90_SRCS
   # ----------------------------------------------------------------------------
@@ -9,17 +11,18 @@ set(KESSLER_F90_SRCS
   # list others as needed
 
   # ----------------------------------------------------------------------------
-  # Fortran KESSLER code - legacy (DNE)
-  # ${PATH_TO_LEGACY_KESSLER}/kessler_main.F90
-  # List all as needed 
+  # Fortran KESSLER code - legacy from CAM-SIMA
+  ${PATH_TO_LEGACY_KESSLER}/kessler.F90
+  ${PATH_TO_LEGACY_KESSLER}/kessler_update.F90
+  ${PATH_TO_LEGACY_CAM_SIMA}/schemes/utilities/geopotential_temp.F90
 
   # ----------------------------------------------------------------------------
   # shared fortran modules
   ${SCREAM_BASE_DIR}/../../share/util/shr_sys_mod.F90
   ${SCREAM_BASE_DIR}/../../share/util/shr_kind_mod.F90
   ${SCREAM_BASE_DIR}/../../share/util/shr_assert_mod.F90.in
-  ${PATH_TO_LEGACY_EAM}/physics/crm/openacc_utils.F90
-  ${PATH_TO_LEGACY_EAM}/utils/spmd_utils.F90
+  #${PATH_TO_LEGACY_EAM}/physics/crm/openacc_utils.F90
+  #${PATH_TO_LEGACY_EAM}/utils/spmd_utils.F90
 
   # ----------------------------------------------------------------------------
   # misc other fortran modules if needed
@@ -41,10 +44,6 @@ set(KESSLER_HEADERS
 
 # Adds the library to eamxx_physics 
 add_library(kessler ${KESSLER_F90_SRCS} ${KESSLER_SRCS})
-
-SET(USE_OPENACC TRUE) # TODO - check that this is getting set correctly
-SET(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} ${OPENACC_Fortran_FLAGS}")
-SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OPENACC_Linker_FLAGS}")
 
 set_target_properties(kessler PROPERTIES
   Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/modules

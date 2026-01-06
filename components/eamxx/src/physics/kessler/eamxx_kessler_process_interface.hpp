@@ -26,8 +26,11 @@ namespace scream
 class KesslerMicrophysics : public AtmosphereProcess
 {
 public:
-  using KMF   = kessler::KesslerMicrophysicsFunctions<Real, DefaultDevice>;
-  using Spack = KMF:Spack;
+  using KMF = kessler::KesslerMicrophysicsFunctions<Real, DefaultDevice>;
+  using PF  = scream::PhysicsFunctions<DefaultDevice>;
+  using PC  = scream::physics::Constants<Real>;
+
+  using Spack = KMF::Spack;
   using Pack  = ekat::Pack<Real,Spack::n>;
 
   // Constructors
@@ -66,7 +69,8 @@ public:
 
     // Parameters struct to pass through fortran bridge
     // TODO - update/rename/add more as needed for kessler
-    KMF:params params;
+    KMF:params_in params_in;
+    KMF:params_out params_out;
 
 }; // class Kessler
 

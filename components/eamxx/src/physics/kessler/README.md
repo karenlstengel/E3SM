@@ -14,6 +14,21 @@ We are using the Kessler provided in: [atmospheric_physics](git@github.com:ESCOM
 
 The Kessler suite is in `atmospheric_physics/schemes/kessler`. 
 
+List of parameters: 
+
+Kessler.F90:
+kessler_init(real lv_in, real pref_in, real rhoqr_in, char* errmsg, int errflg) {r,r,r,w,w}  
+kessler_run(int ncol, int nz, real dt, int lyr_surf, int lyr_toa, real cpair, real rair, real rho, real z, &
+        real pk, real theta, real qv, real qc, real qr, real precl, real relhum, char* scheme_name, char* errmsg, int errflg) {r,r,r,r,r,r,r,r,r,r,u,u,u,u,w,w,w,w,w}  
+
+Kessler_update.F90:
+
+kessler_update_init(real gravit_in, char* errmsg, int errflg) {r, w, w}  
+kessler_update_timestep_init(real temp, real temp_prev, real ttend_t, char* errmsg, int errflg) {r,w,w,w,w}  
+kessler_update_run(int nz, int ncol, real dt, real theta, real exner, real temp_prev, real ttend_t, char* errmsg, int errflg) {r,r,r,r,r,r,u,w,w}  
+kessler_update_timestep_final(int nz, real cpair, real temp, real zm, real phis, real st_energy, char* errmsg, int errflg) {r,r,r,r,r,w,w,w}  
+
+
 ## GPU stuff
 
 ### Implementation Notes

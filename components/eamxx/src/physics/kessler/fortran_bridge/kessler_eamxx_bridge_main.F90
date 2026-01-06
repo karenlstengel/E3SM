@@ -5,6 +5,10 @@ module kessler_eamxx_bridge_main
   use cam_logfile,   only: iulog ! kinds instead of cam_logfile?
   use shr_sys_mod,   only: shr_sys_flush
   use spmd_utils,      only: masterproc
+
+  ! Kessler code from CAM-SIMA
+  use kessler
+  use kessler_update 
   !-----------------------------------------------------------------------------
   implicit none
   private
@@ -12,7 +16,7 @@ module kessler_eamxx_bridge_main
   ! public methods
   public :: kessler_eamxx_bridge_init_c
   public :: kessler_eamxx_bridge_run_c
-  public :: set_log_file_name_f90_c
+  public :: set_log_file_name_f90_c ! Might remove this
 
   ! Public variables?
   integer, public            :: pcols
@@ -26,32 +30,65 @@ module kessler_eamxx_bridge_main
 contains
 !===================================================================================================
 
-subroutine kessler_eamxx_bridge_init_c( pcol_in, pver_in ) bind(C, name="kessler_eamxx_bridge_init_c")
+subroutine kessler_eamxx_bridge_init_c( pcol_in, pver_in, lv_in, pref_in, rhoqr_in, errmsg, errflg ) bind(C, name="kessler_eamxx_bridge_init_c")
   ! Define uses here
   !-----------------------------------------------------------------------------
   ! Arguments
   integer(kind=c_int), value, intent(in) :: pcol_in
   integer(kind=c_int), value, intent(in) :: pver_in
 
+  ! Things to pass along to the Kessler base code
+  real(kind_phys),    intent(in)  :: lv_in    ! latent heat of vaporization, J/kg
+  real(kind_phys),    intent(in)  :: pref_in  ! reference pressure, Pa
+  real(kind_phys),    intent(in)  :: rhoqr_in ! density of fresh liquid water, kg/m^3
+
+  character(len=512), intent(out) :: errmsg
+  integer,            intent(out) :: errflg
+
   ! Set dimensions of fields
   pcols = pcol_in
   pver  = pver_in
 
-  ! TODO - 
+  ! Call the Kessler init function 
+  call kessler_init(lv_in, pref_in, rhoqr_in, errmsg, errflg)
 
   return
 end subroutine kessler_eamxx_bridge_init_c
 
 !===================================================================================================
 
-subroutine kessler_eamxx_bridge_run_c( ncol, TODO) bind(C, name="kessler_eamxx_bridge_run_c")
+subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, &
+        pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg) bind(C, name="kessler_eamxx_bridge_run_c")
   ! Define uses here
   !-----------------------------------------------------------------------------
   ! Arguments
-  integer(kind=c_int),                value, intent(in   ) :: ncol
-  ! TODO - add in all agruments and types.
+  integer,          intent(in)    :: ncol       ! Number of columns
+  integer,          intent(in)    :: nz         ! Number of vertical levels
+  real(kind_phys),  intent(in)    :: dt         ! Physics time step (s)
+  integer,          intent(in)    :: lyr_surf   ! Index of surface layer in the vertical coordinate
+  integer,          intent(in)    :: lyr_toa    ! Index of top of the atmosphere in the vertical coordinate
+  real(kind_phys),  intent(in)    :: cpair(:,:) ! Specific_heat_of_dry_air_at_constant_pressure (J/kg/K)
+  real(kind_phys),  intent(in)    :: rair(:,:)  ! Gas constant of dry air (J/kg/K)
+  real(kind_phys),  intent(in)    :: rho(:,:)   ! Dry air density (kg/m^3)
+  real(kind_phys),  intent(in)    :: z(:,:)     ! Heights of thermo. levels (m)
+  real(kind_phys),  intent(in)    :: pk(:,:)    ! Exner function (p/p0)**(R/cp)
 
-  ! TODO - add in the calls to do the physics. 
+  real(kind_phys),  intent(inout) :: theta(:,:) ! Potential temperature (K)
+  real(kind_phys),  intent(inout) :: qv(:,:)    ! Water vapor mixing ratio wrt dry air (kg/kg)
+  real(kind_phys),  intent(inout) :: qc(:,:)    ! Cloud water mixing ratio wrt dry air (kg/kg)
+  real(kind_phys),  intent(inout) :: qr(:,:)    ! Rain water mixing ratio wrt dry air (kg/kg)
+
+  real(kind_phys),  intent(out)   :: precl(:)   ! Precipitation rate (m_water / s)
+
+  real(kind_phys),  intent(out)   :: relhum(:,:)! Relative humidity in percent
+
+  character(len=64),intent(out)   :: scheme_name
+  character(len=*), intent(out)   :: errmsg
+  integer,          intent(out)   :: errflg
+
+  ! Call the Kessler run function
+  call kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, &
+        pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg)
   return
 end subroutine kessler_eamxx_bridge_run_c
 

@@ -40,6 +40,12 @@ struct KesslerMicrophysicsFunctions
   template <typename S> using uview_1d  = typename ekat::template Unmanaged<view_1d<S> >;
   template <typename S> using uview_2d  = typename ekat::template Unmanaged<view_2d<S> >;
   template <typename S> using uview_2dl = typename ekat::template Unmanaged<view_2dl<S> >;
+
+  // KOKKOS_FUNCTION 
+  static void preprocess(view_2d<Spack> &T_mid, view_2d<Spack> &p_mid, view_2d<Spack> &qv,
+                         view_2d<Spack> &pseudo_density,
+                         view_2d<Spack> &dz,
+                         view_2d<Spack> &rho, view_2d<Spack> &pk);
   // ----------------------------------------
   // Structs
   struct params_in {
@@ -53,8 +59,8 @@ struct KesslerMicrophysicsFunctions
     // real(kind_phys),  intent(in)    :: z(:,:)     ! Heights of thermo. levels (m)
     // real(kind_phys),  intent(in)    :: pk(:,:)    ! Exner function (p/p0)**(R/cp)
 
-    view_2d<Spack>  cpair;
-    view_2d<Spack>  rair;
+    // view_2d<Spack>  cpair;
+    // view_2d<Spack>  rair;
     view_2d<Spack>  rho;
     view_2d<Spack>  z;
     view_2d<Spack>  pk;
@@ -71,7 +77,7 @@ struct KesslerMicrophysicsFunctions
     static constexpr int num_2d       = 5;  // number of 2D field views
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
-    void init(int ncol_in, int pver_in) {
+    void init(int ncol_in, int pver_in) { // TODO - Kokko-ize this
 
       const Real cpair  = PC::Cpair; // Specific heat of dry air at constant pressure
       const Real Rair   = PC::Rair;  // Gas constant of dry air
@@ -91,20 +97,20 @@ struct KesslerMicrophysicsFunctions
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     template <ekat::TransposeDirection::Enum D>
-    void transpose(int ncol_in, int pver_in) {
+    void transpose(int ncol_in, int pver_in) { // TODO - Kokko-ize this
       auto pverp = pver_in+1;
       if (D == ekat::TransposeDirection::c2f) {
         for (int i=0; i<ncol_in; ++i) {
           for (int j=0; j<pver_in; ++j) {
-            f_cpair(i,j) = cpair(i,j/Spack::n)[j%Spack::n];
-            f_rair(i,j) = rair(i,j/Spack::n)[j%Spack::n];
+            // f_cpair(i,j) = cpair(i,j/Spack::n)[j%Spack::n];
+            // f_rair(i,j) = rair(i,j/Spack::n)[j%Spack::n];
             f_rho(i,j) = rho(i,j/Spack::n)[j%Spack::n];
             f_z(i,j) = z(i,j/Spack::n)[j%Spack::n];
             f_pk(i,j) = pk(i,j/Spack::n)[j%Spack::n];
           }
         }
       }
-      if (D == ekat::TransposeDirection::f2c) { // Not needed but leaving in just in case/temporary
+      if (D == ekat::TransposeDirection::f2c) {  // Not needed but leaving in just in case/temporary
         for (int i=0; i<ncol_in; ++i) {
           // mid-point level variables
           for (int j=0; j<pver_in; ++j) {
@@ -150,7 +156,7 @@ struct KesslerMicrophysicsFunctions
     static constexpr int num_2d       = 5;  // number of 2D fields
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
-    void init(int ncol_in, int pver_in) {
+    void init(int ncol_in, int pver_in) { // TODO - Kokko-ize this
       Real init_fill_value = -999;
 
       for (int i=0; i<ncol_in; ++i) {
@@ -166,7 +172,7 @@ struct KesslerMicrophysicsFunctions
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     template <ekat::TransposeDirection::Enum D>
-    void transpose(int ncol_in, int pver_in) {
+    void transpose(int ncol_in, int pver_in) { // TODO - Kokko-ize this
       auto pverp = pver_in+1;
       if (D == ekat::TransposeDirection::c2f) {
         for (int i=0; i<ncol_in; ++i) {
@@ -194,6 +200,34 @@ struct KesslerMicrophysicsFunctions
     }; // End transpose
 
   }; // end Struct params_out
+
+  template<typename S, typename D>
+  // KOKKOS_FUNCTION
+  void StengelFunctions<S,D>::preprocess(view_2d<Spack> &T_mid, view_2d<Spack> &p_mid,
+                         view_2d<Spack> &pseudo_density,
+                         view_2d<Spack> &qv,
+                         view_2d<Spack> &dz,
+                         view_2d<Spack> &rho,
+                         view_2d<Spack> &pk) {
+    const int ni = static_cast<int>(T_mid.extent(0));
+    const int nj = static_cast<int>(T_mid.extent(1));
+    const Real inv_ggr = 1/(PC::gravit);
+
+    using MDPolicy = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+    MDPolicy mdp({0,0}, {ni,nj});
+
+    Kokkos::parallel_for("Kessler_preprocess", mdp,
+      KOKKOS_LAMBDA(const int i, const int j) {
+        const Spack exner = PF::exner_function(p_mid(i,j)[0]);
+        const auto theta = PF::calculate_theta_from_T(T_mid(i,j)[0],p_mid(i,j)[0]);
+
+        // Vertical layer thickness
+        dz(i,j) = PF::calculate_dz(pseudo_density(i,j)[0], p_mid(i,j)[0], T_mid(i,j)[0], qv(i,j)[0]);
+        rho(i,j) = inv_ggr*(pseudo_density(i,j)[0]/dz(i,j))[0];
+      }
+    );
+
+  };
 
 }; // struct KesslerMicrophysicsFunctions
 

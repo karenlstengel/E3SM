@@ -86,9 +86,9 @@ void KesslerMicrophysics::set_grids(const std::shared_ptr<const GridsManager> gr
   // real(kind_phys),  intent(out)   :: precl(:)   ! Precipitation rate (m_water / s)
   // real(kind_phys),  intent(out)   :: relhum(:,:)! Relative humidity in percent
 
-  add_field<Required>("rho",   scalar3d_layout_mid, kg/m3,    grid_name, N);
-  add_field<Required>("z",     scalar3d_layout_mid, m,    grid_name, N);
-  add_field<Required>("pk",    scalar3d_layout_mid, nondim,    grid_name, N);
+  add_field<Computed>("rho",   scalar3d_layout_mid, kg/m3,    grid_name, N);
+  add_field<Computed>("z",     scalar3d_layout_mid, m,    grid_name, N);
+  add_field<Computed>("pk",    scalar3d_layout_mid, nondim,    grid_name, N);
   add_field<Computed>("theta", scalar3d_layout_mid, K,     grid_name, N);
   add_field<Computed>("precl", scalar3d_layout_mid, m/s,   grid_name, N);
   add_field<Computed>("relhum", scalar3d_layout_mid, nondim, grid_name, N);
@@ -127,56 +127,56 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
 
 void KesslerMicrophysics::run_impl (const double /* dt */)
 {
+   
+  // Pull in variables 
+  auto T_mid   = get_field_in("T_mid").get_view<Spack**>();
+  auto pseudo_density = get_field_in("pseudo_density").get_view<Spack**>();
+  auto qv      = get_field_in("qv").get_view<Spack**>();
+  auto qc      = get_field_in("qc").get_view<Spack**>();
+  auto qr      = get_field_in("qr").get_view<Spack**>();
+
+  auto rho     = get_field_out("rho").get_view<Spack**>();
+  auto z       = get_field_out("z").get_view<Spack**>();
+  auto pk      = get_field_out("pk").get_view<Spack**>();
+  auto theta   = get_field_out("theta").get_view<Spack**>();
+  auto precl   = get_field_out("precl").get_view<Spack**>();
+  auto relhum  = get_field_out("relhum").get_view<Spack**>();
+
+  // Get lyr_surf, lyr_toa
+  const int lyr_surf = 0;
+  const int lyr_toa = m_num_levs - 1;
+
+  m_atm_logger->info("[EAMxx] kessler run_impl: ");
+  
   // NOTE: EAMxx uses a mass-weighted vertical discretization, which is different 
   // than CAM's volume-weighted vertical coordinate. 
   // You will need to derive rho and z from the pseudo_density used in EAMxx.  
   // The change from volume to mass-weighted was to reduce the amount of data movement 
   // and improve numerical accuracy which will help with running reduced precision in the physics parameterizations.
-  
-  // Pull in variables .
-  // TODO - 
-  auto name   = get_field_out("name").get_view<Spack**>();
-  // add_field<Required> ("T_mid",         scalar3d_layout_mid, K,     grid_name,N);
-  // add_field<Required>("pseudo_density", scalar3d_layout_mid, Pa,    grid_name,N);
-  // add_tracer<Required>("qv",            scalar3d_layout_mid, kg/kg,           N);
-  // add_tracer<Required>("qc",            scalar3d_layout_mid, kg/kg,           N);
-  // add_tracer<Required>("qr",            scalar3d_layout_mid, kg/kg,           N);
+ 
+  // do the conversion and PF::exner_function, PF::calculate_theta_from_T
+  KMF::preprocess(T_mid, p_mid, qv, pseudo_density, dz, rho, pk);
 
-  // // Locally needed 
-  // // real(kind_phys),  intent(in)    :: rho(:,:)   ! Dry air density (kg/m^3)
-  // // real(kind_phys),  intent(in)    :: z(:,:)     ! Heights of thermo. levels (m)
-  // // real(kind_phys),  intent(in)    :: pk(:,:)    ! Exner function (p/p0)**(R/cp)
+  // set up params_in struct
+  // params_in.cpair = cpair;
+  // params_in.rair = rair;
+  params_in.rho = rho;
+  params_in.z = z;
+  params_in.pk = pk;
 
-  // // real(kind_phys),  intent(inout) :: theta(:,:) ! Potential temperature (K)
-
-  // // real(kind_phys),  intent(out)   :: precl(:)   ! Precipitation rate (m_water / s)
-  // // real(kind_phys),  intent(out)   :: relhum(:,:)! Relative humidity in percent
-
-  // add_field<Required>("rho",   scalar3d_layout_mid, kg/m3,    grid_name, N);
-  // add_field<Required>("z",     scalar3d_layout_mid, m,    grid_name, N);
-  // add_field<Required>("pk",    scalar3d_layout_mid, nondim,    grid_name, N);
-  // add_field<Computed>("theta", scalar3d_layout_mid, K,     grid_name, N);
-  // add_field<Computed>("precl", scalar3d_layout_mid, m/s,   grid_name, N);
-  // add_field<Computed>("relhum", scalar3d_layout_mid, nondim, grid_name, N);
-
-  m_atm_logger->info("[EAMxx] kessler run_impl: ");
-  
-
-  // also need : PF::calcluate_wetmmr_from_drymmr, PF::exner_function, PF::calculate_theta_from_T
-  // Add the fields we pulled in to the params struct to pass to the bridge:
+  // setup params_out struct
+  params_out.theta = theta;
+  params_out.qv = qv;
+  params_out.qc = qc;
+  params_out.qr = qr;
+  params_out.precl = precl;
+  params_out.relhum = relhum;
 
   // Initialize fortran data holders in struct
-  params_in.init(); // fill this
-  params_out.init(); // fill this
+  params_in.init(m_num_cols, m_num_levs); 
+  params_out.init(m_num_cols, m_num_levs); 
 
-  // <scheme>calc_exner</scheme>
-  // <scheme>temp_to_potential_temp</scheme>
-  // <scheme>calc_dry_air_ideal_gas_density</scheme>
-  // <scheme>wet_to_dry_water_vapor</scheme>
-  // <scheme>wet_to_dry_cloud_liquid_water</scheme>
-  // <scheme>wet_to_dry_rain</scheme>
-
-  kessler_eamxx_bridge_run(m_num_cols, m_num_levs, params); 
+  kessler_eamxx_bridge_run(m_num_cols, m_num_levs, dt, lyr_surf, lyr_toa, params_in, params_out); 
 
   // <scheme>potential_temp_to_temp</scheme>
   // <scheme>dry_to_wet_water_vapor</scheme>

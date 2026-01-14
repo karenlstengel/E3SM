@@ -13,9 +13,9 @@ using scream::Int;
 extern "C" {
     void set_log_file_name_f90_c(const char** fname);
 
-    void kessler_eamxx_bridge_init_c(const Real lv_in, const Real pref_in, const Real rhoqr_in, char* errmsg, Int& errflg);
+    void kessler_eamxx_bridge_init_c(const Real lv_in, const Real pref_in, const Real rhoqr_in);
 
-    void kessler_eamxx_bridge_run_c(Int pcols, Int nz, Real* dt, Int lyr_surf, Int lyr_toa, Real* cpair, Real* rair, Real* rho, Real* z, Real* pk, Real* theta, Real* qv, Real* qc, Real* qr, Real* precl, Real* relhum, char* scheme_name, char* errmsg, Int& errflg); 
+    void kessler_eamxx_bridge_run_c(Int pcols, Int nz, const double dt, Int lyr_surf, Int lyr_toa, Real* cpair, Real* rair, Real* rho, Real* z, Real* pk, Real* theta, Real* qv, Real* qc, Real* qr, Real* precl, Real* relhum); 
 } // extern "C" : end _c decls
 
 namespace scream {
@@ -26,17 +26,11 @@ namespace scream {
     }
 
     void kessler_eamxx_bridge_init( const Real lv_in, const Real pref_in, const Real rhoqr_in){
-        char* errmsg;
-        Int errflg = 0;
-        kessler_eamxx_bridge_init_c( lv_in, pref_in, rhoqr_in, errmsg, &errflg );
+        kessler_eamxx_bridge_init_c( lv_in, pref_in, rhoqr_in);
     }
 
-    void kessler_eamxx_bridge_run( Int pcols, Int pver, Real* dt, Int lyr_surf, Int lyr_toa, KMF:params_in &params_in, KMF:params_out &params_out ){ 
+    void kessler_eamxx_bridge_run( Int pcols, Int pver, const double dt, Int lyr_surf, Int lyr_toa, KMF::params_in &params_in, KMF::params_out &params_out ){ 
 
-        // Error catching for Fortran Kessler
-        char* scheme_name; 
-        char* errmsg;
-        Int errflg = 0;
         //----------------------------------------------------------------------------
         // Need to transpose to match how Fortran handles things
         params_in.transpose<ekat::TransposeDirection::c2f>(pcols,pver);
@@ -52,8 +46,7 @@ namespace scream {
                                                                         params_out.f_qc.data(), 
                                                                         params_out.f_qr.data(), 
                                                                         params_out.f_precl.data(), 
-                                                                        params_out.f_relhum.data(), 
-                                                                        scheme_name, errmsg, &errflg);
+                                                                        params_out.f_relhum.data());
 
         // Transpose back to C++ convention
         params_out.transpose<ekat::TransposeDirection::f2c>(pcols,pver);

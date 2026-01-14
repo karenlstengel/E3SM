@@ -3,7 +3,7 @@
 
 #include "share/physics/physics_constants.hpp"
 #include "share/physics/eamxx_common_physics_functions.hpp"
-#include "share/physics/eamxx_common_physics_functions_impls.hpp"
+// #include "share/physics/eamxx_common_physics_functions_impls.hpp"
 #include "share/core/eamxx_types.hpp"
 
 #include <ekat_pack_kokkos.hpp>
@@ -78,6 +78,7 @@ struct KesslerMicrophysicsFunctions
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     void init(int ncol_in, int pver_in) { // TODO - Kokko-ize this
+      using PC  = scream::physics::Constants<Real>;
 
       const Real cpair  = PC::Cpair; // Specific heat of dry air at constant pressure
       const Real Rair   = PC::Rair;  // Gas constant of dry air
@@ -114,8 +115,8 @@ struct KesslerMicrophysicsFunctions
         for (int i=0; i<ncol_in; ++i) {
           // mid-point level variables
           for (int j=0; j<pver_in; ++j) {
-            cpair(i,j/Spack::n)[j%Spack::n] = f_cpair(i,j);
-            rair(i,j/Spack::n)[j%Spack::n] = f_rair(i,j);
+            // cpair(i,j/Spack::n)[j%Spack::n] = f_cpair(i,j);
+            // rair(i,j/Spack::n)[j%Spack::n] = f_rair(i,j);
             rho(i,j/Spack::n)[j%Spack::n] = f_rho(i,j);
             z(i,j/Spack::n)[j%Spack::n] = f_z(i,j);
             pk(i,j/Spack::n)[j%Spack::n] = f_pk(i,j);
@@ -148,6 +149,7 @@ struct KesslerMicrophysicsFunctions
     uview_2dl<Real>  f_qv;
     uview_2dl<Real>  f_qc;
     uview_2dl<Real>  f_qr;
+    uview_1d<Real>   f_precl;  
     uview_2dl<Real>  f_relhum;
 
     // Set number of variables for ATMBufferManager
@@ -167,6 +169,7 @@ struct KesslerMicrophysicsFunctions
           f_qr(i,j) = init_fill_value;
           f_relhum(i,j) = init_fill_value;
         }
+        f_precl(i) = init_fill_value;
       }
     }; // End init
 
@@ -201,9 +204,11 @@ struct KesslerMicrophysicsFunctions
 
   }; // end Struct params_out
 
-  template<typename S, typename D>
+}; // struct KesslerMicrophysicsFunctions
+
+template<typename S, typename D>
   // KOKKOS_FUNCTION
-  void StengelFunctions<S,D>::preprocess(view_2d<Spack> &T_mid, view_2d<Spack> &p_mid,
+  void KesslerMicrophysicsFunctions<S,D>::preprocess(view_2d<Spack> &T_mid, view_2d<Spack> &p_mid,
                          view_2d<Spack> &pseudo_density,
                          view_2d<Spack> &qv,
                          view_2d<Spack> &dz,
@@ -211,6 +216,9 @@ struct KesslerMicrophysicsFunctions
                          view_2d<Spack> &pk) {
     const int ni = static_cast<int>(T_mid.extent(0));
     const int nj = static_cast<int>(T_mid.extent(1));
+
+    using PF  = scream::PhysicsFunctions<DefaultDevice>;
+    using PC  = scream::physics::Constants<Real>;
     const Real inv_ggr = 1/(PC::gravit);
 
     using MDPolicy = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
@@ -228,9 +236,7 @@ struct KesslerMicrophysicsFunctions
     );
 
   };
-
-}; // struct KesslerMicrophysicsFunctions
-
+  
 } // namespace kessler
 } // namespace scream
 

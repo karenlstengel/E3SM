@@ -1,14 +1,15 @@
 module kessler_eamxx_bridge_main
 
   use iso_c_binding
-  use openacc_utils
+  ! use openacc_utils
   use cam_logfile,   only: iulog ! kinds instead of cam_logfile?
   use shr_sys_mod,   only: shr_sys_flush
-  use spmd_utils,      only: masterproc
+  ! use spmd_utils,      only: masterproc
 
   ! Kessler code from CAM-SIMA
   use kessler
   use kessler_update 
+  use ccpp_kinds, only:  kind_phys
   !-----------------------------------------------------------------------------
   implicit none
   private
@@ -22,6 +23,9 @@ module kessler_eamxx_bridge_main
   integer, public            :: pcols
   integer, public            :: pver
   character(len=256), public :: log_fname = ""
+  character(len=64), public  :: scheme_name
+  character(len=512), public :: errmsg
+  integer, public            :: errflg
 
 !===================================================================================================
 #include "eamxx_config.f"
@@ -30,7 +34,7 @@ module kessler_eamxx_bridge_main
 contains
 !===================================================================================================
 
-subroutine kessler_eamxx_bridge_init_c( pcol_in, pver_in, lv_in, pref_in, rhoqr_in, errmsg, errflg ) bind(C, name="kessler_eamxx_bridge_init_c")
+subroutine kessler_eamxx_bridge_init_c( pcol_in, pver_in, lv_in, pref_in, rhoqr_in) bind(C, name="kessler_eamxx_bridge_init_c")
   ! Define uses here
   !-----------------------------------------------------------------------------
   ! Arguments
@@ -42,12 +46,13 @@ subroutine kessler_eamxx_bridge_init_c( pcol_in, pver_in, lv_in, pref_in, rhoqr_
   real(kind_phys),    intent(in)  :: pref_in  ! reference pressure, Pa
   real(kind_phys),    intent(in)  :: rhoqr_in ! density of fresh liquid water, kg/m^3
 
-  character(len=512), intent(out) :: errmsg
-  integer,            intent(out) :: errflg
-
   ! Set dimensions of fields
   pcols = pcol_in
   pver  = pver_in
+
+  errmsg = ''
+  errflg = 0
+  scheme_name = "KESSLER"
 
   ! Call the Kessler init function 
   call kessler_init(lv_in, pref_in, rhoqr_in, errmsg, errflg)
@@ -58,7 +63,7 @@ end subroutine kessler_eamxx_bridge_init_c
 !===================================================================================================
 
 subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, &
-        pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg) bind(C, name="kessler_eamxx_bridge_run_c")
+        pk, theta, qv, qc, qr, precl, relhum) bind(C, name="kessler_eamxx_bridge_run_c")
   ! Define uses here
   !-----------------------------------------------------------------------------
   ! Arguments
@@ -81,10 +86,6 @@ subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, r
   real(kind_phys),  intent(out)   :: precl(:)   ! Precipitation rate (m_water / s)
 
   real(kind_phys),  intent(out)   :: relhum(:,:)! Relative humidity in percent
-
-  character(len=64),intent(out)   :: scheme_name
-  character(len=*), intent(out)   :: errmsg
-  integer,          intent(out)   :: errflg
 
   ! Call the Kessler run function
   call kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, &

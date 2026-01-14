@@ -3,6 +3,15 @@ set(PATH_TO_LEGACY_CAM ${SCREAM_BASE_DIR}/../eam/src/pyhsics/cam)
 set(PATH_TO_LEGACY_CAM_SIMA ${SCREAM_BASE_DIR}/../../../atmospheric_physics)
 set(PATH_TO_LEGACY_KESSLER ${PATH_TO_LEGACY_CAM_SIMA}/schemes/kessler)
 
+# From Dockerfile in CAM-SIMA, to get CCPP-framework for building Kessler
+# Make CCPP-framework available before building test
+# RUN cd atmospheric_physics/test \
+#     && mkdir lib \
+#     && cd lib \
+#     && git clone -b develop --depth 1 https://github.com/NCAR/ccpp-framework.git
+set(CCPP_SRC_PATH ${PATH_TO_LEGACY_CAM_SIMA}/test/lib/ccpp-framework/src)
+set(CCPP_FORTRAN_TOOLS_PATH ${PATH_TO_LEGACY_CAM_SIMA}/test/lib/ccpp-framework/scripts/fortran_tools)
+
 set(KESSLER_F90_SRCS
   # ----------------------------------------------------------------------------
   # EAMxx side C++ bridge methods
@@ -15,7 +24,11 @@ set(KESSLER_F90_SRCS
   ${PATH_TO_LEGACY_KESSLER}/kessler.F90
   ${PATH_TO_LEGACY_KESSLER}/kessler_update.F90
   ${PATH_TO_LEGACY_CAM_SIMA}/schemes/utilities/geopotential_temp.F90
-
+  ${PATH_TO_LEGACY_CAM_SIMA}/test/include/ccpp_kinds.F90
+  ${CCPP_SRC_PATH}/ccpp_constituent_prop_mod.F90
+  ${CCPP_SRC_PATH}/ccpp_hash_table.F90
+  ${CCPP_SRC_PATH}/ccpp_hashable.F90
+  ${CCPP_SRC_PATH}/ccpp_types.F90
   # ----------------------------------------------------------------------------
   # shared fortran modules
   ${SCREAM_BASE_DIR}/../../share/util/shr_sys_mod.F90
@@ -56,6 +69,8 @@ target_include_directories(kessler PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge
   ${CMAKE_CURRENT_BINARY_DIR}/modules
   ${PATH_TO_LEGACY_EAM}
+  ${CCPP_SRC_PATH}
+  ${CCPP_FORTRAN_TOOLS_PATH}
 )
 
 set_target_properties(kessler PROPERTIES LINKER_LANGUAGE Fortran)

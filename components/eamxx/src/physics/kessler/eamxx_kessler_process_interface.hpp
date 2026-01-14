@@ -7,7 +7,7 @@
 
 #include "share/physics/physics_constants.hpp"
 #include "share/physics/eamxx_common_physics_functions.hpp"
-#include "share/physics/eamxx_common_physics_functions_impls.hpp"
+// #include "share/physics/eamxx_common_physics_functions_impls.hpp"
 
 #include <ekat_parameter_list.hpp>
 
@@ -30,6 +30,7 @@ public:
   using PF  = scream::PhysicsFunctions<DefaultDevice>;
   using PC  = scream::physics::Constants<Real>;
 
+  using Scalar = KMF::Scalar;
   using Spack = KMF::Spack;
   using Pack  = ekat::Pack<Real,Spack::n>;
 
@@ -69,8 +70,8 @@ public:
 
     // Parameters struct to pass through fortran bridge
     // TODO - update/rename/add more as needed for kessler
-    KMF:params_in params_in;
-    KMF:params_out params_out;
+    KMF::params_in params_in;
+    KMF::params_out params_out;
 
 }; // class Kessler
 

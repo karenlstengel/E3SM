@@ -9,7 +9,7 @@ scratch=/glade/derecho/scratch/$user/E3SM
 # Machine, compset, etc.
 ####################################################################
 CCSMROOT=$scratch/E3SM
-COMPSET=F20TR-SCREAMv1
+COMPSET=F2000-SCREAMv1-AQP1 #F20TR-SCREAMv1
 RESOLUTION=ne30pg2_ne30pg2
 DYCORE=theta-l_kokkos
 MACH=derecho
@@ -63,7 +63,8 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange CAM_TARGET=$DYCORE
 ./xmlchange GMAKE_J='32'
 
-./atmchange mac_aero_mic::atm_procs_list+=kessler
+# Turn off all other pyhsics except Kessler
+./atmchange mac_aero_mic::atm_procs_list=kessler
    
 ./case.build 
 #####################################################################
@@ -94,4 +95,4 @@ cat << EOF >> user_nl_elm
 EOF
 fi
 
-./case.submit
+# ./case.submit

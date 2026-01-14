@@ -11,11 +11,11 @@
 namespace scream {
 namespace kessler {
 
-    using KesslerFunc = kessler::KesslerMicrophysicsFunctions<Real, DefaultDevice>;
+    using KMF = kessler::KesslerMicrophysicsFunctions<Real, DefaultDevice>;
 
     // Glue functions to call fortran from from C++ with the Data struct
     void kessler_eamxx_bridge_init(const Real lv_in, const Real pref_in, const Real rhoqr_in);
-    void kessler_eamxx_bridge_run(Int pcols, Int pver, Real* dt, Int lyr_surf, Int lyr_toa, KMF:params_in &params_in, KMF:params_out &params_out); 
+    void kessler_eamxx_bridge_run(Int pcols, Int pver, const double dt, Int lyr_surf, Int lyr_toa, KMF::params_in &params_in, KMF::params_out &params_out); 
     void set_log_file_name_f90(const char** logname);
 
     extern "C" { // _f function decls

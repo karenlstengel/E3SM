@@ -9,15 +9,16 @@ scratch=/glade/derecho/scratch/$user/E3SM
 # Machine, compset, etc.
 ####################################################################
 CCSMROOT=$scratch/E3SM
-COMPSET=F20TR-SCREAMv1
-RESOLUTION=ne30pg2_ne30pg2
+COMPSET=F2000-SCREAMv1-AQP1
+RESOLUTION=ne4_ne4
 DYCORE=theta-l_kokkos
 MACH=derecho
 MYCOMPILER=intel
-QUEUE_NAME=main
+QUEUE_NAME=S4636123 #main
+# RESOURCES=1:ncpus=32:mem=100GB
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="kessler_short_eamxx_cpu"
+CASE_NAME="AQP1_ne4_eamxx_kessler_intel_cpu"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -34,7 +35,8 @@ cd $CCSMROOT/cime/scripts
 
 ./create_newcase --case ${CASE_NAME} --output-root ${CASE_ROOT} --script-root ${CASE_SCRIPTS_DIR} \
                --handle-preexisting-dirs u --compset ${COMPSET} --res ${RESOLUTION} --machine ${MACH} \
-               --compiler ${MYCOMPILER} --project NTDD0004 --walltime "00:59:00" --verbose
+               --compiler ${MYCOMPILER} --project NTDD0004 --walltime "00:59:00" --verbose -q ${QUEUE_NAME} \
+               --user-mods-dir ${CCSMROOT}/components/eamxx//cime_config/testdefs/testmods_dirs/eamxx/output/preset/2 ${CCSMROOT}/components/eamxx//cime_config/testdefs/testmods_dirs/eamxx/L72 
 
 ####################################################################
 # Configure & Compile
@@ -46,7 +48,10 @@ cd $CASE_SCRIPTS_DIR
 
 ./xmlchange DEBUG=TRUE
 
-./xmlchange NTASKS=128
+./xmlchange NUM_NODES=1
+./xmlchange NTASKS_PER_NODE=32
+
+./xmlchange NTASKS=32
 ./xmlchange NTHRDS=1
 ./xmlchange ROOTPE='0'
 
@@ -55,7 +60,8 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange CAM_TARGET=$DYCORE
 ./xmlchange GMAKE_J='32'
 
-./atmchange mac_aero_mic::atm_procs_list+=kessler
+# ./atmchange initial_conditions::topography_filename=/glade/derecho/scratch/kstengel/inputdata/atm/cam/topo/USGS-gtopo30_ne30np4pg2_x6t-SGH.c20210614.nc
+./atmchange mac_aero_mic::atm_procs_list=kessler
    
 ./case.build 
 
@@ -75,7 +81,7 @@ fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
 ./xmlchange STOP_N='2',STOP_OPTION='ndays'
-./xmlchange JOB_WALLCLOCK_TIME='00:30:00'
+./xmlchange JOB_WALLCLOCK_TIME='00:15:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE
 

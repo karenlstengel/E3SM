@@ -9,15 +9,15 @@ scratch=/glade/derecho/scratch/$user/E3SM
 # Machine, compset, etc.
 ####################################################################
 CCSMROOT=$scratch/E3SM
-COMPSET=F2000-SCREAMv1-AQP1-noAero #F20TR-SCREAMv1
-RESOLUTION=ne30pg2_ne30pg2
+COMPSET=F2000-SCREAMv1-AQP1 #F20TR-SCREAMv1
+RESOLUTION=ne4_ne4
 DYCORE=theta-l_kokkos
 MACH=derecho
 MYCOMPILER=nvidiagpu
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="stengel_fortran_eamxx_nvidia_koacc"
+CASE_NAME="AQP1_ne4_stengel_fortran_eamxx_nvidia_gpu2" # "stengel_fortran_eamxx_nvidia_koacc"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -29,13 +29,13 @@ export NETCDF_PATH=$NETCDF
 # Create a new case 
 ####################################################################
 rm -rf $CASE_ROOT 
-# rm -rf $CASE_SCRIPTS_DIR # incremental build?
 
 cd $CCSMROOT/cime/scripts
 
 ./create_newcase --case ${CASE_NAME} --output-root ${CASE_ROOT} --script-root ${CASE_SCRIPTS_DIR} \
                --handle-preexisting-dirs u --compset ${COMPSET} --res ${RESOLUTION} --machine ${MACH} \
-               --compiler ${MYCOMPILER} --project NTDD0004 --walltime "00:59:00" --verbose
+               --compiler ${MYCOMPILER} --project NTDD0004 --walltime "00:59:00" --verbose \
+               --user-mods-dir ${CCSMROOT}/components/eamxx//cime_config/testdefs/testmods_dirs/eamxx/output/preset/2 ${CCSMROOT}/components/eamxx//cime_config/testdefs/testmods_dirs/eamxx/L72
 
 ####################################################################
 # Configure & Compile
@@ -45,13 +45,13 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange EXEROOT=${CASE_BUILD_DIR}
 ./xmlchange RUNDIR=${CASE_RUN_DIR}
 
-./xmlchange DEBUG=TRUE
+./xmlchange DEBUG=FALSE
 
 ./xmlchange NTASKS=4
 ./xmlchange NTHRDS=1
 ./xmlchange NGPUS_PER_NODE=4
 ./xmlchange GPU_TYPE=a100 # NVIDIA A100 GPUs in Derecho
-./xmlchange OPENACC_GPU_OFFLOAD=TRUE
+./xmlchange OPENACC_GPU_OFFLOAD=FALSE
 ./xmlchange OPENMP_GPU_OFFLOAD=FALSE
 ./xmlchange KOKKOS_GPU_OFFLOAD=TRUE
 ./xmlchange OVERSUBSCRIBE_GPU=FALSE
@@ -62,11 +62,11 @@ cd $CASE_SCRIPTS_DIR
 ./case.setup
 
 ./xmlchange CAM_TARGET=$DYCORE
-./xmlchange GMAKE_J='32'
-./atmchange initial_conditions::topography_filename=/glade/derecho/scratch/kstengel/inputdata/atm/cam/topo/USGS-gtopo30_ne30np4pg2_x6t-SGH.c20210614.nc
+./xmlchange GMAKE_J='4'
+# ./atmchange initial_conditions::topography_filename=/glade/derecho/scratch/kstengel/inputdata/atm/cam/topo/USGS-gtopo30_ne30np4pg2_x6t-SGH.c20210614.nc
 ./atmchange mac_aero_mic::atm_procs_list+=stengelF
 
-./atmquery --grep topography
+# ./atmquery --grep topography
    
 ./case.build #--clean atm # note that you need to have built this at least once successfully before using this flag
 
@@ -85,10 +85,12 @@ else
 fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
-./xmlchange STOP_N='2',STOP_OPTION='ndays'
-./xmlchange JOB_WALLCLOCK_TIME='00:30:00'
+./xmlchange STOP_N='1',STOP_OPTION='ndays'
+./xmlchange JOB_WALLCLOCK_TIME='00:05:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE
+./xmlchange MPI_RUN_COMMAND="mpiexec -n 4 -ppn 4 set_gpu_rank /glade/u/home/$user/cesm/run_script/CAM7/$MACH/wrapper_scripts/nsys_all_mpi.sh "
+# ./xmlchange MPI_RUN_COMMAND="UNSET"
 
 if [[ $DYCORE == "theta-l_kokkos" ]]; then
 cat << EOF >> user_nl_elm

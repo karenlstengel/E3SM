@@ -64,7 +64,7 @@ void StengelF::initialize_impl (const RunType /* run_type */)
 {
   m_atm_logger->info("[EAMxx] stengelF processes initialize_impl: ");
 
-  // stengelF::stengelF_eamxx_bridge_init(m_num_cols, m_num_levs);
+  stengelF::stengelF_eamxx_bridge_init(m_num_cols, m_num_levs);
 
   m_atm_logger->info("[EAMxx] stengelF processes initialize_impl end: ");
 }

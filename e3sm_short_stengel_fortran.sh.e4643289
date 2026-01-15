@@ -1,0 +1,4 @@
+01-15 11:44 CIME.XML.env_batch WARNING  Deprecated "arg" node detected in /glade/derecho/scratch/kstengel/E3SM/e3sm_test/AQP1_ne4_eamxx_intel_cpu/case/env_batch.xml, check files /glade/derecho/scratch/kstengel/E3SM/E3SM/cime_config/machines/config_batch.xml
+01-15 11:44 CIME.XML.env_batch WARNING  Deprecated "arg" node detected in /glade/derecho/scratch/kstengel/E3SM/e3sm_test/AQP1_ne4_eamxx_intel_cpu/case/env_batch.xml, check files /glade/derecho/scratch/kstengel/E3SM/E3SM/cime_config/machines/config_batch.xml
+01-15 11:44 CIME.XML.env_batch WARNING  Deprecated "arg" node detected in /glade/derecho/scratch/kstengel/E3SM/e3sm_test/AQP1_ne4_eamxx_intel_cpu/case/env_batch.xml, check files /glade/derecho/scratch/kstengel/E3SM/E3SM/cime_config/machines/config_batch.xml
+The model is using a deprecated method of determining support libraries, please migrate to 'CASE_SUPPORT_LIBRARIES' variable.

@@ -50,14 +50,13 @@ subroutine kessler_eamxx_bridge_init_c( pcol_in, pver_in, lv_in, pref_in, rhoqr_
   pcols = pcol_in
   pver  = pver_in
 
-  errmsg = ''
+  errmsg = 'temp'
   errflg = 0
   scheme_name = "KESSLER"
 
   ! Call the Kessler init function 
   call kessler_init(lv_in, pref_in, rhoqr_in, errmsg, errflg)
 
-  return
 end subroutine kessler_eamxx_bridge_init_c
 
 !===================================================================================================
@@ -90,7 +89,7 @@ subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, r
   ! Call the Kessler run function
   call kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, &
         pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg)
-  return
+  
 end subroutine kessler_eamxx_bridge_run_c
 
 !===================================================================================================

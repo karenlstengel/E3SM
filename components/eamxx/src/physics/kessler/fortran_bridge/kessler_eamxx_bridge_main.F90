@@ -23,7 +23,7 @@ module kessler_eamxx_bridge_main
   integer, public            :: pcols
   integer, public            :: pver
   character(len=256), public :: log_fname = ""
-  character(len=64), public  :: scheme_name
+  character(len=64),  public :: scheme_name
   character(len=512), public :: errmsg
   integer, public            :: errflg
 

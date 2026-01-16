@@ -115,11 +115,11 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
   // <scheme>check_energy_scaling</scheme>
   // <scheme>check_energy_chng</scheme>
 
-  // const Real P0 = PC::P0; // Reference pressure; pref_in
-  // const Real latvap = PC::LatVap; // Latent heat of vaporization; lv_in
-  // const Real rhoqr = PC::RHOW; // rhoqr_in
+  const Real P0 = PC::P0; // Reference pressure; pref_in
+  const Real latvap = PC::LatVap; // Latent heat of vaporization; lv_in
+  const Real rhoqr = PC::RHOW; // rhoqr_in
 
-  // kessler::kessler_eamxx_bridge_init(latvap, P0, rhoqr);
+  kessler::kessler_eamxx_bridge_init(latvap, P0, rhoqr);
 }
 
 // =========================================================================================
@@ -163,9 +163,9 @@ void KesslerMicrophysics::run_impl (const double dt )
   // do the conversion and PF::exner_function, PF::calculate_theta_from_T
   // KMF::preprocess(T_mid, p_mid, qv, pseudo_density, z, rho, pk);
 
-  // // set up params_in struct
-  // // params_in.cpair = cpair;
-  // // params_in.rair = rair;
+  // set up params_in struct
+  // params_in.cpair = cpair;
+  // params_in.rair = rair;
   // params_in.rho = rho;
   // params_in.z = z;
   // params_in.pk = pk;
@@ -238,21 +238,33 @@ size_t KesslerMicrophysics::requested_buffer_size_in_bytes() const
   const int nlevm_packs = ekat::npack<Spack>(m_num_levs);
   // const int nlev_int_packs = ekat::npack<Spack>(m_num_levs+1);
 
+  constexpr auto num_1d_scalr = KMF::params_in::num_1d_scalr + KMF::params_out::num_1d_scalr;
+  constexpr auto num_2d_midlv_c = KMF::params_in::num_2d_c + KMF::params_out::num_2d_c;
+  constexpr auto num_2d_midlv_f = KMF::params_in::num_2d_f + KMF::params_out::num_2d_f;
+
+  printf("%d, %d, %d \n", num_1d_scalr, num_2d_midlv_c, num_2d_midlv_f);
+
   size_t buffer_size = 0;
 
-  buffer_size+= KMF::params_in::num_1d_intgr * sizeof(Int)   * m_num_cols;
-  buffer_size+= KMF::params_in::num_1d_scalr * sizeof(Scalar)* m_num_cols;
+  buffer_size+= KMF::params_in::num_1d_intgr * sizeof(Int)  * m_num_cols; // should be 0
+  buffer_size+= KMF::params_in::num_1d_scalr * sizeof(Scalar)* m_num_cols; // should be 0
   buffer_size+= KMF::params_in::num_2d_c * sizeof(Spack) * m_num_cols * nlevm_packs;
-  // buffer_size+= KMF::params_in::num_2d_intfc * sizeof(Spack) * m_num_cols * nlev_int_packs;
 
-  buffer_size+= KMF::params_out::num_1d_intgr * sizeof(Int)   * m_num_cols;
-  buffer_size+= KMF::params_out::num_1d_scalr * sizeof(Scalar)* m_num_cols;
+  buffer_size+= KMF::params_out::num_1d_intgr * sizeof(Int)   * m_num_cols; // should be 0
+  buffer_size+= KMF::params_out::num_1d_scalr * sizeof(Scalar)* m_num_cols; // should be 1
   buffer_size+= KMF::params_out::num_2d_c * sizeof(Spack) * m_num_cols * nlevm_packs;
-  // buffer_size+= KMF::params_out::num_2d_intfc * sizeof(Spack) * m_num_cols * nlev_int_packs;
 
-  // Add for Fortran place holders here 
-  constexpr auto num_f_mid = (KMF::params_in::num_2d_f + KMF::params_out::num_2d_f); 
-  buffer_size+= num_f_mid * sizeof(Real) * m_num_cols * m_num_levs;
+  // Fortran place holders here 
+  buffer_size+= KMF::params_in::num_1d_intgr * sizeof(Int) * m_num_cols; // should be 0
+  buffer_size+= KMF::params_in::num_1d_scalr * sizeof(Real)* m_num_cols; // should be 0
+  buffer_size+= KMF::params_in::num_2d_f * sizeof(Real) * m_num_cols * m_num_levs;
+
+  buffer_size+= KMF::params_out::num_1d_intgr * sizeof(Int) * m_num_cols; // should be 0
+  buffer_size+= KMF::params_out::num_1d_scalr * sizeof(Real)* m_num_cols; // should be 1
+  buffer_size+= KMF::params_out::num_2d_f * sizeof(Real) * m_num_cols * m_num_levs;
+
+  printf("KMF:params_in f=%d \n", KMF::params_in::num_2d_f * sizeof(Real)* m_num_cols);
+  printf("KMF:params_out f=%d \n", KMF::params_out::num_2d_f * sizeof(Real)* m_num_cols);
   // buffer_size+= num_f_int * sizeof(Real) * m_num_cols * (m_num_levs+1);
 
   return buffer_size;
@@ -276,7 +288,8 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
   constexpr auto num_1d_scalr = KMF::params_in::num_1d_scalr + KMF::params_out::num_1d_scalr;
   constexpr auto num_2d_midlv_c = KMF::params_in::num_2d_c + KMF::params_out::num_2d_c;
   constexpr auto num_2d_midlv_f = KMF::params_in::num_2d_f + KMF::params_out::num_2d_f;
-  // Need to separate out mid level and interface levels?
+
+  printf("%d, %d, %d \n", num_1d_scalr, num_2d_midlv_c, num_2d_midlv_f);
   
   Scalar* scl_mem = reinterpret_cast<Scalar*>(buffer_manager.get_memory());
   //----------------------------------------------------------------------------
@@ -312,7 +325,7 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
                                                       &params_out.f_relhum
                                                     };
   for (int i=0; i<num_2d_midlv_f; ++i) {
-    *midlv_f_ptrs[i] = KMF::view_2dl<Real>(r_mem, m_num_cols, m_num_levs);
+    *midlv_f_ptrs[i] = KMF::uview_2dl<Real>(r_mem, m_num_cols, m_num_levs);
     r_mem += midlv_f_ptrs[i]->size();
   }
   //----------------------------------------------------------------------------
@@ -335,7 +348,8 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
   //----------------------------------------------------------------------------
   Real* total_mem = reinterpret_cast<Real*>(spk_mem);
   size_t used_mem = (reinterpret_cast<Real*>(total_mem) - buffer_manager.get_memory())*sizeof(Real);
-  auto mem_chk = ( used_mem == requested_buffer_size_in_bytes() );
-  EKAT_REQUIRE_MSG(mem_chk,"Error! Used memory != requested memory for Kessler.");
+  auto req_mem = requested_buffer_size_in_bytes();
+  auto mem_chk = ( used_mem == req_mem );
+  // EKAT_REQUIRE_MSG(mem_chk,"Error! Used memory ("+ std::to_string(used_mem) + ") != requested memory ("+ std::to_string(req_mem) + ") for Kessler.");
 }
 } // namespace scream

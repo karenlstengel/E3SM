@@ -49,9 +49,8 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange DEBUG=TRUE
 
 ./xmlchange NUM_NODES=1
-./xmlchange NTASKS_PER_NODE=32
 
-./xmlchange NTASKS=32
+./xmlchange NTASKS=64
 ./xmlchange NTHRDS=1
 ./xmlchange ROOTPE='0'
 
@@ -60,8 +59,7 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange CAM_TARGET=$DYCORE
 ./xmlchange GMAKE_J='32'
 
-# ./atmchange initial_conditions::topography_filename=/glade/derecho/scratch/kstengel/inputdata/atm/cam/topo/USGS-gtopo30_ne30np4pg2_x6t-SGH.c20210614.nc
-./atmchange mac_aero_mic::atm_procs_list=kessler
+./atmchange mac_aero_mic::atm_procs_list+=kessler
    
 ./case.build 
 

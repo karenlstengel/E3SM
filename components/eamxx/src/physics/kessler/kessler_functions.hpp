@@ -74,7 +74,8 @@ struct KesslerMicrophysicsFunctions
     // Set number of variables for ATMBufferManager
     static constexpr int num_1d_intgr = 0;  // number of 1D integer views
     static constexpr int num_1d_scalr = 0;  // number of 1D scalar views
-    static constexpr int num_2d       = 5;  // number of 2D field views
+    static constexpr int num_2d_c     = 3;  // number of 2D field views for C++
+    static constexpr int num_2d_f     = 5;  // number of 2D field views for fortran
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     void init(int ncol_in, int pver_in) { // TODO - Kokko-ize this
@@ -155,7 +156,8 @@ struct KesslerMicrophysicsFunctions
     // Set number of variables for ATMBufferManager
     static constexpr int num_1d_intgr = 0;  // number of 1D integer views
     static constexpr int num_1d_scalr = 1;  // number of 1D scalar views
-    static constexpr int num_2d       = 5;  // number of 2D fields
+    static constexpr int num_2d_c     = 5;  // number of 2D fields
+    static constexpr int num_2d_f     = 5;  // number of 2D fields
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     void init(int ncol_in, int pver_in) { // TODO - Kokko-ize this
@@ -226,7 +228,7 @@ template<typename S, typename D>
 
     Kokkos::parallel_for("Kessler_preprocess", mdp,
       KOKKOS_LAMBDA(const int i, const int j) {
-        const Spack exner = PF::exner_function(p_mid(i,j)[0]);
+        const Spack pk = PF::exner_function(p_mid(i,j)[0]);
         const auto theta = PF::calculate_theta_from_T(T_mid(i,j)[0],p_mid(i,j)[0]);
 
         // Vertical layer thickness

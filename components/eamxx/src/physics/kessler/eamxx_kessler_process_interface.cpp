@@ -29,8 +29,8 @@ KesslerMicrophysics::KesslerMicrophysics (const ekat::Comm& comm, const ekat::Pa
   m_atm_logger->info("[EAMxx] Kessler processes constructor");
 
   // Set the log filename in the F90 interface
-  const char* logname = m_atm_logger->get_logfile_name().c_str();
-  set_log_file_name_f90(&logname);
+  // const char* logname = m_atm_logger->get_logfile_name().c_str();
+  // set_log_file_name_f90(&logname);
 
 }
 
@@ -62,8 +62,11 @@ void KesslerMicrophysics::set_grids(const std::shared_ptr<const GridsManager> gr
   m_num_cols = m_grid->get_num_local_dofs(); // Number of columns on this rank
   m_num_levs = m_grid->get_num_vertical_levels();  // Number of levels per column
 
-  FieldLayout scalar3d_layout_mid = m_grid->get_3d_scalar_layout(true);
-  FieldLayout scalar2d_layout = m_grid->get_2d_scalar_layout();
+  // Layout for 2D (1d horiz X 1d vertical) variable
+  FieldLayout scalar2d_layout { {ShortFieldTagsNames::COL}, {m_num_cols} };
+
+  // Layout for 3D (2d horiz X 1d vertical) variable defined at mid-level and interfaces
+  FieldLayout scalar3d_layout_mid { {ShortFieldTagsNames::COL,ShortFieldTagsNames::LEV}, {m_num_cols,m_num_levs} };
  
   // Fields to use for Kessler microphysics
 
@@ -72,12 +75,12 @@ void KesslerMicrophysics::set_grids(const std::shared_ptr<const GridsManager> gr
   // real(kind_phys),  intent(inout) :: qc(:,:)    ! Cloud water mixing ratio wrt dry air (kg/kg)
   // real(kind_phys),  intent(inout) :: qr(:,:)    ! Rain water mixing ratio wrt dry air (kg/kg)
 
-  add_field<Required> ("T_mid",         scalar3d_layout_mid, K,     grid_name, pack_size);
-  add_field<Required> ("p_mid",         scalar3d_layout_mid, Pa,    grid_name, pack_size);
+  add_field<Required>("T_mid",          scalar3d_layout_mid, K,     grid_name, pack_size);
+  add_field<Required>("p_mid",          scalar3d_layout_mid, Pa,    grid_name, pack_size);
   add_field<Required>("pseudo_density", scalar3d_layout_mid, Pa,    grid_name, pack_size);
-  add_field<Required>("qv",             scalar3d_layout_mid, kg/kg, grid_name, pack_size);
-  add_field<Required>("qc",             scalar3d_layout_mid, kg/kg, grid_name, pack_size);
-  add_field<Required>("qr",             scalar3d_layout_mid, kg/kg, grid_name, pack_size);
+  add_tracer<Updated>("qv",             m_grid,              kg/kg,            pack_size);
+  add_tracer<Updated>("qc",             m_grid,              kg/kg,            pack_size);
+  add_tracer<Updated>("qr",             m_grid,              kg/kg,            pack_size);
   // Locally needed 
   // real(kind_phys),  intent(in)    :: rho(:,:)   ! Dry air density (kg/m^3)
   // real(kind_phys),  intent(in)    :: z(:,:)     ! Heights of thermo. levels (m)
@@ -88,11 +91,11 @@ void KesslerMicrophysics::set_grids(const std::shared_ptr<const GridsManager> gr
   // real(kind_phys),  intent(out)   :: precl(:)   ! Precipitation rate (m_water / s)
   // real(kind_phys),  intent(out)   :: relhum(:,:)! Relative humidity in percent
 
-  add_field<Computed>("rho",   scalar3d_layout_mid, kg/m3,    grid_name, pack_size);
-  add_field<Computed>("z",     scalar3d_layout_mid, m,    grid_name, pack_size);
-  add_field<Computed>("pk",    scalar3d_layout_mid, nondim,    grid_name, pack_size);
-  add_field<Computed>("theta", scalar3d_layout_mid, K,     grid_name, pack_size);
-  add_field<Computed>("precl", scalar2d_layout,     m/s,   grid_name, pack_size);
+  add_field<Computed>("rho",    scalar3d_layout_mid, kg/m3,  grid_name, pack_size);
+  add_field<Computed>("z",      scalar3d_layout_mid, m,      grid_name, pack_size);
+  add_field<Computed>("pk",     scalar3d_layout_mid, nondim, grid_name, pack_size);
+  add_field<Computed>("theta",  scalar3d_layout_mid, K,      grid_name, pack_size);
+  add_field<Computed>("precl",  scalar2d_layout,     m/s,    grid_name, pack_size);
   add_field<Computed>("relhum", scalar3d_layout_mid, nondim, grid_name, pack_size);
 
 }
@@ -112,11 +115,11 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
   // <scheme>check_energy_scaling</scheme>
   // <scheme>check_energy_chng</scheme>
 
-  const Real P0 = PC::P0; // Reference pressure; pref_in
-  const Real latvap = PC::LatVap; // Latent heat of vaporization; lv_in
-  const Real rhoqr = PC::RHOW; // rhoqr_in
+  // const Real P0 = PC::P0; // Reference pressure; pref_in
+  // const Real latvap = PC::LatVap; // Latent heat of vaporization; lv_in
+  // const Real rhoqr = PC::RHOW; // rhoqr_in
 
-  kessler::kessler_eamxx_bridge_init(latvap, P0, rhoqr);
+  // kessler::kessler_eamxx_bridge_init(latvap, P0, rhoqr);
 }
 
 // =========================================================================================
@@ -131,23 +134,23 @@ void KesslerMicrophysics::run_impl (const double dt )
 {
    
   // Pull in variables 
-  auto T_mid   = get_field_in("T_mid").get_view<Spack**>();
-  auto p_mid   = get_field_in("p_mid").get_view<Spack**>();
-  auto pseudo_density = get_field_in("pseudo_density").get_view<Spack**>();
-  auto qv      = get_field_in("qv").get_view<Spack**>();
-  auto qc      = get_field_in("qc").get_view<Spack**>();
-  auto qr      = get_field_in("qr").get_view<Spack**>();
+  // auto T_mid   = get_field_in("T_mid").get_view<Spack**>();
+  // auto p_mid   = get_field_in("p_mid").get_view<Spack**>();
+  // auto pseudo_density = get_field_in("pseudo_density").get_view<Spack**>();
+  // auto qv      = get_field_in("qv").get_view<Spack**>();
+  // auto qc      = get_field_in("qc").get_view<Spack**>();
+  // auto qr      = get_field_in("qr").get_view<Spack**>();
 
-  auto rho     = get_field_out("rho").get_view<Spack**>();
-  auto z       = get_field_out("z").get_view<Spack**>();
-  auto pk      = get_field_out("pk").get_view<Spack**>();
-  auto theta   = get_field_out("theta").get_view<Spack**>();
-  auto precl   = get_field_out("precl").get_view<Real*>();
-  auto relhum  = get_field_out("relhum").get_view<Spack**>();
+  // auto rho     = get_field_out("rho").get_view<Spack**>();
+  // auto z       = get_field_out("z").get_view<Spack**>();
+  // auto pk      = get_field_out("pk").get_view<Spack**>();
+  // auto theta   = get_field_out("theta").get_view<Spack**>();
+  // auto precl   = get_field_out("precl").get_view<Real*>();
+  // auto relhum  = get_field_out("relhum").get_view<Spack**>();
 
-  // Get lyr_surf, lyr_toa
-  const int lyr_surf = 0;
-  const int lyr_toa = m_num_levs - 1;
+  // // Get lyr_surf, lyr_toa
+  // const int lyr_surf = 0;
+  // const int lyr_toa = m_num_levs - 1;
 
   m_atm_logger->info("[EAMxx] kessler run_impl: ");
   
@@ -158,28 +161,28 @@ void KesslerMicrophysics::run_impl (const double dt )
   // and improve numerical accuracy which will help with running reduced precision in the physics parameterizations.
  
   // do the conversion and PF::exner_function, PF::calculate_theta_from_T
-  KMF::preprocess(T_mid, p_mid, qv, pseudo_density, z, rho, pk);
+  // KMF::preprocess(T_mid, p_mid, qv, pseudo_density, z, rho, pk);
 
-  // set up params_in struct
-  // params_in.cpair = cpair;
-  // params_in.rair = rair;
-  params_in.rho = rho;
-  params_in.z = z;
-  params_in.pk = pk;
+  // // set up params_in struct
+  // // params_in.cpair = cpair;
+  // // params_in.rair = rair;
+  // params_in.rho = rho;
+  // params_in.z = z;
+  // params_in.pk = pk;
 
-  // setup params_out struct
-  params_out.theta = theta;
-  params_out.qv = qv;
-  params_out.qc = qc;
-  params_out.qr = qr;
-  params_out.precl = precl;
-  params_out.relhum = relhum;
+  // // setup params_out struct
+  // params_out.theta = theta;
+  // params_out.qv = qv;
+  // params_out.qc = qc;
+  // params_out.qr = qr;
+  // params_out.precl = precl;
+  // params_out.relhum = relhum;
 
-  // Initialize fortran data holders in struct
-  params_in.init(m_num_cols, m_num_levs); 
-  params_out.init(m_num_cols, m_num_levs); 
+  // // Initialize fortran data holders in struct
+  // params_in.init(m_num_cols, m_num_levs); 
+  // params_out.init(m_num_cols, m_num_levs); 
 
-  kessler_eamxx_bridge_run(m_num_cols, m_num_levs, dt, lyr_surf, lyr_toa, params_in, params_out); 
+  // kessler_eamxx_bridge_run(m_num_cols, m_num_levs, dt, lyr_surf, lyr_toa, params_in, params_out); 
 
   // <scheme>potential_temp_to_temp</scheme>
   // <scheme>dry_to_wet_water_vapor</scheme>
@@ -239,18 +242,18 @@ size_t KesslerMicrophysics::requested_buffer_size_in_bytes() const
 
   buffer_size+= KMF::params_in::num_1d_intgr * sizeof(Int)   * m_num_cols;
   buffer_size+= KMF::params_in::num_1d_scalr * sizeof(Scalar)* m_num_cols;
-  buffer_size+= KMF::params_in::num_2d * sizeof(Spack) * m_num_cols * nlevm_packs;
+  buffer_size+= KMF::params_in::num_2d_c * sizeof(Spack) * m_num_cols * nlevm_packs;
   // buffer_size+= KMF::params_in::num_2d_intfc * sizeof(Spack) * m_num_cols * nlev_int_packs;
 
   buffer_size+= KMF::params_out::num_1d_intgr * sizeof(Int)   * m_num_cols;
   buffer_size+= KMF::params_out::num_1d_scalr * sizeof(Scalar)* m_num_cols;
-  buffer_size+= KMF::params_out::num_2d * sizeof(Spack) * m_num_cols * nlevm_packs;
+  buffer_size+= KMF::params_out::num_2d_c * sizeof(Spack) * m_num_cols * nlevm_packs;
   // buffer_size+= KMF::params_out::num_2d_intfc * sizeof(Spack) * m_num_cols * nlev_int_packs;
 
   // Add for Fortran place holders here 
-  constexpr auto num_f_mid = (KMF::params_in::num_2d + KMF::params_out::num_2d); 
+  constexpr auto num_f_mid = (KMF::params_in::num_2d_f + KMF::params_out::num_2d_f); 
   buffer_size+= num_f_mid * sizeof(Real) * m_num_cols * m_num_levs;
-  // zm_buffer_size+= num_f_int * sizeof(Real) * m_num_cols * (m_num_levs+1);
+  // buffer_size+= num_f_int * sizeof(Real) * m_num_cols * (m_num_levs+1);
 
   return buffer_size;
 }
@@ -271,34 +274,33 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
 
   // constexpr auto num_1d_intgr = KMF::params_in::num_1d_intgr + KMF::params_out::num_1d_intgr;
   constexpr auto num_1d_scalr = KMF::params_in::num_1d_scalr + KMF::params_out::num_1d_scalr;
-  constexpr auto num_2d_midlv = KMF::params_in::num_2d + KMF::params_out::num_2d;
+  constexpr auto num_2d_midlv_c = KMF::params_in::num_2d_c + KMF::params_out::num_2d_c;
+  constexpr auto num_2d_midlv_f = KMF::params_in::num_2d_f + KMF::params_out::num_2d_f;
   // Need to separate out mid level and interface levels?
   
-  // Add back if needed
-  // Int* i_mem = reinterpret_cast<Int*>(buffer_manager.get_memory());
-  // //----------------------------------------------------------------------------
-  // // device 1D integer variables
-  // KMF::uview_1d<Int>* ptrs_1d_intgr[num_1d_intgr]             = { &params_out.precl };
-  // for (auto& v : ptrs_1d_intgr) {
-  //   *v = KMF::uview_1d<Int>(i_mem, m_num_cols);
-  //   i_mem += v->size();
-  // }
-  //----------------------------------------------------------------------------
-  // Scalar* scl_mem = reinterpret_cast<Scalar*>(i_mem);
   Scalar* scl_mem = reinterpret_cast<Scalar*>(buffer_manager.get_memory());
   //----------------------------------------------------------------------------
-  // device 1D scalar scalars
-  KMF::uview_1d<Scalar>* ptrs_1d_scalr[num_1d_scalr]          = { &params_out.f_precl};
+  // device 1D integer variables
+  KMF::view_1d<Scalar>* ptrs_1d_scalr[num_1d_scalr]             = { &params_out.precl };
   for (auto& v : ptrs_1d_scalr) {
-    *v = KMF::uview_1d<Scalar>(scl_mem, m_num_cols);
+    *v = KMF::view_1d<Scalar>(scl_mem, m_num_cols);
     scl_mem += v->size();
+  }
+  //----------------------------------------------------------------------------
+  Real* r1_mem = reinterpret_cast<Real*>(scl_mem);
+  //----------------------------------------------------------------------------
+  // device 1D scalar scalars
+  KMF::uview_1d<Real>* ptrs_1d_real[num_1d_scalr]          = { &params_out.f_precl};
+  for (auto& v : ptrs_1d_real) {
+    *v = KMF::uview_1d<Real>(r1_mem, m_num_cols);
+    r1_mem += v->size();
   } 
   //----------------------------------------------------------------------------
   //----------------------------------------------------------------------------
-  Real* r_mem = reinterpret_cast<Real*>(scl_mem);
+  Real* r_mem = reinterpret_cast<Real*>(r1_mem);
   //----------------------------------------------------------------------------
   // 2D "f_" views
-  KMF::uview_2dl<Real>* midlv_f_ptrs[num_2d_midlv]  = { &params_in.f_cpair, 
+  KMF::uview_2dl<Real>* midlv_f_ptrs[num_2d_midlv_f]  = { &params_in.f_cpair, 
                                                       &params_in.f_rair, 
                                                       &params_in.f_rho, 
                                                       &params_in.f_z, 
@@ -309,7 +311,7 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
                                                       &params_out.f_qr,
                                                       &params_out.f_relhum
                                                     };
-  for (int i=0; i<num_2d_midlv; ++i) {
+  for (int i=0; i<num_2d_midlv_f; ++i) {
     *midlv_f_ptrs[i] = KMF::view_2dl<Real>(r_mem, m_num_cols, m_num_levs);
     r_mem += midlv_f_ptrs[i]->size();
   }
@@ -317,7 +319,7 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
   Spack* spk_mem = reinterpret_cast<Spack*>(r_mem);
   //----------------------------------------------------------------------------
   // 2D views 
-  KMF::view_2d<Spack>* midlv_c_ptrs[num_2d_midlv]  = { &params_in.rho, 
+  KMF::view_2d<Spack>* midlv_c_ptrs[num_2d_midlv_c]  = { &params_in.rho, 
                                                       &params_in.z, 
                                                       &params_in.pk,
                                                       &params_out.theta,
@@ -326,7 +328,7 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
                                                       &params_out.qr,
                                                       &params_out.relhum
                                                     };
-  for (int i=0; i<num_2d_midlv; ++i) {
+  for (int i=0; i<num_2d_midlv_c; ++i) {
     *midlv_c_ptrs[i] = KMF::view_2d<Spack>(spk_mem, m_num_cols, m_num_levs);
     spk_mem += midlv_c_ptrs[i]->size();
   }

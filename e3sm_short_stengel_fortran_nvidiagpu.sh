@@ -89,7 +89,7 @@ fi
 ./xmlchange JOB_WALLCLOCK_TIME='00:05:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE
-./xmlchange MPI_RUN_COMMAND="mpiexec -n 4 -ppn 4 set_gpu_rank /glade/u/home/$user/cesm/run_script/CAM7/$MACH/wrapper_scripts/nsys_all_mpi.sh "
+# ./xmlchange MPI_RUN_COMMAND="mpiexec -n 4 -ppn 4 set_gpu_rank /glade/u/home/$user/cesm/run_script/CAM7/$MACH/wrapper_scripts/nsys_all_mpi.sh "
 # ./xmlchange MPI_RUN_COMMAND="UNSET"
 
 if [[ $DYCORE == "theta-l_kokkos" ]]; then

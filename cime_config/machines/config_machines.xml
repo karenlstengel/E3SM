@@ -3997,7 +3997,7 @@
 <machine MACH="derecho">
     <DESC>NCAR AMD EPYC system</DESC>
     <OS>CNL</OS>
-    <COMPILERS>intel,gnu,nvidia,intel-oneapi,intel-classic,gnugpu</COMPILERS>
+    <COMPILERS>intel,gnu,nvidia,intel-oneapi,intel-classic,gnugpu,nvidiagpu</COMPILERS>
     <MPILIBS>mpich</MPILIBS>
     <CIME_OUTPUT_ROOT>$ENV{SCRATCH}</CIME_OUTPUT_ROOT>
     <DIN_LOC_ROOT>/glade/derecho/scratch/$ENV{USER}/inputdata</DIN_LOC_ROOT>
@@ -4056,8 +4056,12 @@
         <command name="load">cuda/12.3.2</command>
         <command name="load">kokkos</command>
       </modules>
-      <modules compiler="nvidia">
-        <command name="load">nvhpc/24.11</command>
+      <modules compiler="nvidia.*">
+        <command name="load">nvhpc/25.9</command>
+      </modules>
+      <modules compiler="nvidiagpu">
+        <command name="load">cuda/12.3.2</command>
+        <!-- <command name="load">kokkos</command> -->
       </modules>
       <modules>
 	      <command name="load">ncarcompilers/1.0.0</command>
@@ -4071,7 +4075,7 @@
         <command name="load">netcdf/4.9.2</command>
       </modules>
       <modules mpilib="!mpi-serial">
-        <command name="load">netcdf-mpi/4.9.2</command>
+        <command name="load">netcdf-mpi/4.9.3</command>
         <command name="load">parallel-netcdf/1.14.0</command>
       </modules>
     </module_system>
@@ -4084,6 +4088,9 @@
       <env name="NETCDF_PATH">$ENV{NETCDF}</env>
     </environment_variables>
     <environment_variables compiler="gnugpu">
+      <env name="NCAR_LIBS_CUDA">-lcuda -lcudart</env>
+    </environment_variables>
+    <environment_variables compiler="nvidiagpu">
       <env name="NCAR_LIBS_CUDA">-lcuda -lcudart</env>
     </environment_variables>
   </machine>

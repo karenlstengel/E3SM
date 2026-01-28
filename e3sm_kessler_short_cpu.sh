@@ -13,12 +13,12 @@ COMPSET=F2000-SCREAMv1-AQP1
 RESOLUTION=ne4_ne4
 DYCORE=theta-l_kokkos
 MACH=derecho
-MYCOMPILER=intel
-QUEUE_NAME=S4636123 #main
+MYCOMPILER=nvidia
+QUEUE_NAME=main
 # RESOURCES=1:ncpus=32:mem=100GB
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="AQP1_ne4_eamxx_kessler_intel_cpu"
+CASE_NAME="AQP1_ne4_eamxx_kessler_nvidia_cpu"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -59,6 +59,7 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange CAM_TARGET=$DYCORE
 ./xmlchange GMAKE_J='32'
 
+./atmchange atm_log_level=debug
 ./atmchange mac_aero_mic::atm_procs_list+=kessler
    
 ./case.build 

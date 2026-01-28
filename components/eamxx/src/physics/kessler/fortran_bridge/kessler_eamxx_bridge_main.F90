@@ -19,13 +19,13 @@ module kessler_eamxx_bridge_main
   public :: kessler_eamxx_bridge_run_c
   public :: set_log_file_name_f90_c ! Might remove this
 
-  ! Public variables?
+  ! Public variables
   integer, public            :: pcols
   integer, public            :: pver
   character(len=256), public :: log_fname = ""
-  character(len=64),  public :: scheme_name
-  character(len=512), public :: errmsg
-  integer, public            :: errflg
+  character(len=64),  public :: scheme_name = ""
+  character(len=512), public :: errmsg = ""
+  integer, public            :: errflg = 0
 
 !===================================================================================================
 #include "eamxx_config.f"
@@ -42,15 +42,15 @@ subroutine kessler_eamxx_bridge_init_c( pcol_in, pver_in, lv_in, pref_in, rhoqr_
   integer(kind=c_int), value, intent(in) :: pver_in
 
   ! Things to pass along to the Kessler base code
-  real(kind_phys),    intent(in)  :: lv_in    ! latent heat of vaporization, J/kg
-  real(kind_phys),    intent(in)  :: pref_in  ! reference pressure, Pa
-  real(kind_phys),    intent(in)  :: rhoqr_in ! density of fresh liquid water, kg/m^3
+  real(kind_phys), value,    intent(in)  :: lv_in    ! latent heat of vaporization, J/kg
+  real(kind_phys), value,    intent(in)  :: pref_in  ! reference pressure, Pa
+  real(kind_phys), value,    intent(in)  :: rhoqr_in ! density of fresh liquid water, kg/m^3
 
   ! Set dimensions of fields
   pcols = pcol_in
   pver  = pver_in
 
-  errmsg = 'temp'
+  errmsg = "temp"
   errflg = 0
   scheme_name = "KESSLER"
 
@@ -66,25 +66,24 @@ subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, r
   ! Define uses here
   !-----------------------------------------------------------------------------
   ! Arguments
-  integer,          intent(in)    :: ncol       ! Number of columns
-  integer,          intent(in)    :: nz         ! Number of vertical levels
-  real(kind_phys),  intent(in)    :: dt         ! Physics time step (s)
-  integer,          intent(in)    :: lyr_surf   ! Index of surface layer in the vertical coordinate
-  integer,          intent(in)    :: lyr_toa    ! Index of top of the atmosphere in the vertical coordinate
-  real(kind_phys),  intent(in)    :: cpair(:,:) ! Specific_heat_of_dry_air_at_constant_pressure (J/kg/K)
-  real(kind_phys),  intent(in)    :: rair(:,:)  ! Gas constant of dry air (J/kg/K)
-  real(kind_phys),  intent(in)    :: rho(:,:)   ! Dry air density (kg/m^3)
-  real(kind_phys),  intent(in)    :: z(:,:)     ! Heights of thermo. levels (m)
-  real(kind_phys),  intent(in)    :: pk(:,:)    ! Exner function (p/p0)**(R/cp)
+  integer(kind=c_int), value,                intent(in)    :: ncol     ! Number of columns
+  integer(kind=c_int), value,                intent(in)    :: nz       ! Number of vertical levels
+  real(kind_phys),     value,                intent(in)    :: dt       ! Physics time step (s)
+  integer(kind=c_int), value,                intent(in)    :: lyr_surf ! Index of surface layer in the vertical coordinate
+  integer(kind=c_int), value,                intent(in)    :: lyr_toa  ! Index of top of the atmosphere in the vertical coordinate
+  real(kind=c_real),  dimension(pcols,pver), intent(in)    :: cpair    ! Specific_heat_of_dry_air_at_constant_pressure (J/kg/K)
+  real(kind_phys),    dimension(pcols,pver), intent(in)    :: rair     ! Gas constant of dry air (J/kg/K)
+  real(kind_phys),    dimension(pcols,pver), intent(in)    :: rho      ! Dry air density (kg/m^3)
+  real(kind_phys),    dimension(pcols,pver), intent(in)    :: z        ! Heights of thermo. levels (m)
+  real(kind_phys),    dimension(pcols,pver), intent(in)    :: pk       ! Exner function (p/p0)**(R/cp)
 
-  real(kind_phys),  intent(inout) :: theta(:,:) ! Potential temperature (K)
-  real(kind_phys),  intent(inout) :: qv(:,:)    ! Water vapor mixing ratio wrt dry air (kg/kg)
-  real(kind_phys),  intent(inout) :: qc(:,:)    ! Cloud water mixing ratio wrt dry air (kg/kg)
-  real(kind_phys),  intent(inout) :: qr(:,:)    ! Rain water mixing ratio wrt dry air (kg/kg)
+  real(kind_phys),    dimension(pcols,pver), intent(inout) :: theta    ! Potential temperature (K)
+  real(kind_phys),    dimension(pcols,pver), intent(inout) :: qv       ! Water vapor mixing ratio wrt dry air (kg/kg)
+  real(kind_phys),    dimension(pcols,pver), intent(inout) :: qc       ! Cloud water mixing ratio wrt dry air (kg/kg)
+  real(kind_phys),    dimension(pcols,pver), intent(inout) :: qr       ! Rain water mixing ratio wrt dry air (kg/kg)
 
-  real(kind_phys),  intent(out)   :: precl(:)   ! Precipitation rate (m_water / s)
-
-  real(kind_phys),  intent(out)   :: relhum(:,:)! Relative humidity in percent
+  real(kind_phys),    dimension(pcols),      intent(out)   :: precl    ! Precipitation rate (m_water / s)
+  real(kind_phys),    dimension(pcols,pver), intent(out)   :: relhum   ! Relative humidity in percent
 
   ! Call the Kessler run function
   call kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, &

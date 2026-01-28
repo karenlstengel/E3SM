@@ -26,6 +26,7 @@ namespace scream
 class KesslerMicrophysics : public AtmosphereProcess
 {
 public:
+  using KT  = ekat::KokkosTypes<DefaultDevice>;
   using KMF = kessler::KesslerMicrophysicsFunctions<Real, DefaultDevice>;
   using PF  = scream::PhysicsFunctions<DefaultDevice>;
   using PC  = scream::physics::Constants<Real>;

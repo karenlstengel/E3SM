@@ -28,7 +28,7 @@ set(KESSLER_F90_SRCS
   ${CCPP_SRC_PATH}/ccpp_constituent_prop_mod.F90
   ${CCPP_SRC_PATH}/ccpp_hash_table.F90
   ${CCPP_SRC_PATH}/ccpp_hashable.F90
-  ${CCPP_SRC_PATH}/ccpp_types.F90
+  # ${CCPP_SRC_PATH}/ccpp_types.F90
   # ----------------------------------------------------------------------------
   # shared fortran modules
   ${SCREAM_BASE_DIR}/../../share/util/shr_sys_mod.F90

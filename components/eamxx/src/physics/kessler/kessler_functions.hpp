@@ -3,10 +3,10 @@
 
 #include "share/physics/physics_constants.hpp"
 #include "share/physics/eamxx_common_physics_functions.hpp"
-// #include "share/physics/eamxx_common_physics_functions_impls.hpp"
 #include "share/core/eamxx_types.hpp"
 
 #include <ekat_pack_kokkos.hpp>
+#include <ekat_team_policy_utils.hpp>
 #include <ekat_workspace.hpp>
 
 namespace scream {
@@ -31,8 +31,9 @@ struct KesslerMicrophysicsFunctions
   using Pack = BigPack<Scalar>;
   using Spack = SmallPack<Scalar>;
 
-  using KT = KokkosTypes<Device>;
-  using MemberType = typename KT::MemberType;
+  using KT         = ekat::KokkosTypes<Device>;
+  // using MemberType = typename KT::MemberType;
+  using TeamPolicy = typename KokkosTypes<Device>::TeamPolicy;
 
   template <typename S> using view_1d   = typename KT::template view_1d<S>;
   template <typename S> using view_2d   = typename KT::template view_2d<S>;
@@ -41,14 +42,10 @@ struct KesslerMicrophysicsFunctions
   template <typename S> using uview_2d  = typename ekat::template Unmanaged<view_2d<S> >;
   template <typename S> using uview_2dl = typename ekat::template Unmanaged<view_2dl<S> >;
 
-  // KOKKOS_FUNCTION 
-  static void preprocess(view_2d<Spack> &T_mid, view_2d<Spack> &p_mid, view_2d<Spack> &qv,
-                         view_2d<Spack> &pseudo_density,
-                         view_2d<Spack> &dz,
-                         view_2d<Spack> &rho, view_2d<Spack> &pk);
   // ----------------------------------------
   // Structs
   struct params_in {
+    params_in() = default;
     // Needed inputs to kessler microphysics
 
     // integer,          intent(in)    :: lyr_surf   ! Index of surface layer in the vertical coordinate
@@ -62,14 +59,14 @@ struct KesslerMicrophysicsFunctions
     // view_2d<Spack>  cpair;
     // view_2d<Spack>  rair;
     view_2d<Spack>  rho;
-    view_2d<Spack>  z;
+    view_2d<Spack>  dz;
     view_2d<Spack>  pk;
 
     // Fortran holders/in Fortran format
     uview_2dl<Real>  f_cpair;
     uview_2dl<Real>  f_rair;
     uview_2dl<Real>  f_rho;
-    uview_2dl<Real>  f_z;
+    uview_2dl<Real>  f_dz;
     uview_2dl<Real>  f_pk;
     // Set number of variables for ATMBufferManager
     static constexpr int num_1d_intgr = 0;  // number of 1D integer views
@@ -84,51 +81,85 @@ struct KesslerMicrophysicsFunctions
       const Real cpair  = PC::Cpair; // Specific heat of dry air at constant pressure
       const Real Rair   = PC::Rair;  // Gas constant of dry air
 
-      Real init_fill_value = -999;
+      Real init_fill_value = 0;
 
-      for (int i=0; i<ncol_in; ++i) {
-        for (int j=0; j<pver_in; ++j) {
+      using MDPolicy = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+      MDPolicy mdp({0,0}, {ncol_in, pver_in});
+
+      Kokkos::parallel_for("init_params_in", mdp,
+        KOKKOS_CLASS_LAMBDA(const int i, const int j) {
           f_cpair(i,j) = cpair;
           f_rair(i,j) = Rair;
           f_rho(i,j) = init_fill_value;
-          f_z(i,j) = init_fill_value;
+          f_dz(i,j) = init_fill_value;
           f_pk(i,j) = init_fill_value;
-        }
-      }
+          }
+        );
+        
     }; // End init
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     template <ekat::TransposeDirection::Enum D>
     void transpose(int ncol_in, int pver_in) { // TODO - Kokko-ize this
-      auto pverp = pver_in+1;
+      auto pver_in_packs = ekat::npack<Spack>(pver_in);
+
+      // using MDPolicy = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+      // MDPolicy mdp({0,0}, {ncol_in, pver_in});
+
       if (D == ekat::TransposeDirection::c2f) {
-        for (int i=0; i<ncol_in; ++i) {
-          for (int j=0; j<pver_in; ++j) {
-            // f_cpair(i,j) = cpair(i,j/Spack::n)[j%Spack::n];
-            // f_rair(i,j) = rair(i,j/Spack::n)[j%Spack::n];
-            f_rho(i,j) = rho(i,j/Spack::n)[j%Spack::n];
-            f_z(i,j) = z(i,j/Spack::n)[j%Spack::n];
-            f_pk(i,j) = pk(i,j/Spack::n)[j%Spack::n];
-          }
-        }
+
+        Kokkos::parallel_for(
+            "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in_packs),
+            KOKKOS_CLASS_LAMBDA(const int i) {
+              const int icol            = i / pver_in_packs;
+              const int klev            = i % pver_in_packs;
+              f_rho(icol, klev) = rho(icol, klev / Spack::n)[klev % Spack::n];
+              f_dz(icol, klev) = dz(icol, klev / Spack::n)[klev % Spack::n];
+              f_pk(icol, klev) = pk(icol, klev / Spack::n)[klev % Spack::n];
+            }
+          );
+
+        // for (int i=0; i<ncol_in; ++i) {
+        //   for (int j=0; j<pver_in; ++j) {
+        //     // f_cpair(i,j) = cpair(i,j/Spack::n)[j%Spack::n];
+        //     // f_rair(i,j) = rair(i,j/Spack::n)[j%Spack::n];
+        //     f_rho(i,j) = rho(i,j/Spack::n)[j%Spack::n];
+        //     f_dz(i,j) = dz(i,j/Spack::n)[j%Spack::n];
+        //     f_pk(i,j) = pk(i,j/Spack::n)[j%Spack::n];
+        //   }
+        // }
       }
       if (D == ekat::TransposeDirection::f2c) {  // Not needed but leaving in just in case/temporary
-        for (int i=0; i<ncol_in; ++i) {
-          // mid-point level variables
-          for (int j=0; j<pver_in; ++j) {
-            // cpair(i,j/Spack::n)[j%Spack::n] = f_cpair(i,j);
-            // rair(i,j/Spack::n)[j%Spack::n] = f_rair(i,j);
-            rho(i,j/Spack::n)[j%Spack::n] = f_rho(i,j);
-            z(i,j/Spack::n)[j%Spack::n] = f_z(i,j);
-            pk(i,j/Spack::n)[j%Spack::n] = f_pk(i,j);
-          }
-        }
+
+        Kokkos::parallel_for(
+            "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in_packs),
+            KOKKOS_CLASS_LAMBDA(const int i) {
+              const int icol                                      = i / pver_in_packs;
+              const int klev                                      = i % pver_in_packs;
+              rho(icol, klev / Spack::n)[klev % Spack::n] = f_rho(icol, klev);
+              dz(icol, klev / Spack::n)[klev % Spack::n] = f_dz(icol, klev);
+              pk(icol, klev / Spack::n)[klev % Spack::n] = f_pk(icol, klev);
+            }
+          );
+
+        // for (int i=0; i<ncol_in; ++i) {
+        //   // mid-point level variables
+        //   for (int j=0; j<pver_in; ++j) {
+        //     // cpair(i,j/Spack::n)[j%Spack::n] = f_cpair(i,j);
+        //     // rair(i,j/Spack::n)[j%Spack::n] = f_rair(i,j);
+        //     rho(i,j/Spack::n)[j%Spack::n] = f_rho(i,j);
+        //     dz(i,j/Spack::n)[j%Spack::n] = f_dz(i,j);
+        //     pk(i,j/Spack::n)[j%Spack::n] = f_pk(i,j);
+        //   }
+        // }
       }
     }; // End transpose
 
   }; // end Struct params_in
 
   struct params_out {
+
+    params_out() = default;
     // Needed outputs to kessler microphysics
 
     // real(kind_phys),  intent(inout) :: theta(:,:) ! Potential temperature (K)
@@ -160,84 +191,97 @@ struct KesslerMicrophysicsFunctions
     static constexpr int num_2d_f     = 5;  // number of 2D fields
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
-    void init(int ncol_in, int pver_in) { // TODO - Kokko-ize this
-      Real init_fill_value = -999;
+    void init(int ncol_in, int pver_in) {
+      Real init_fill_value = 0;
 
-      for (int i=0; i<ncol_in; ++i) {
-        for (int j=0; j<pver_in; ++j) {
+      using MDPolicy = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+      MDPolicy mdp({0,0}, {ncol_in, pver_in});
+      
+      Kokkos::parallel_for("init_params_out", mdp,
+        KOKKOS_CLASS_LAMBDA(const int i, const int j) {
           f_theta(i,j) = init_fill_value;
           f_qv(i,j) = init_fill_value;
           f_qc(i,j) = init_fill_value;
           f_qr(i,j) = init_fill_value;
           f_relhum(i,j) = init_fill_value;
-        }
-        f_precl(i) = init_fill_value;
-      }
+          f_precl(i) = init_fill_value;
+          }
+        );
+
+      // for (int i=0; i<ncol_in; ++i) {
+      //   for (int j=0; j<pver_in; ++j) {
+      //     f_theta(i,j) = init_fill_value;
+      //     f_qv(i,j) = init_fill_value;
+      //     f_qc(i,j) = init_fill_value;
+      //     f_qr(i,j) = init_fill_value;
+      //     f_relhum(i,j) = init_fill_value;
+      //   }
+      //   f_precl(i) = init_fill_value;
+      // }
     }; // End init
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     template <ekat::TransposeDirection::Enum D>
     void transpose(int ncol_in, int pver_in) { // TODO - Kokko-ize this
-      auto pverp = pver_in+1;
+      auto pver_in_packs = ekat::npack<Spack>(pver_in);
+
       if (D == ekat::TransposeDirection::c2f) {
-        for (int i=0; i<ncol_in; ++i) {
-          for (int j=0; j<pver_in; ++j) {
-            f_theta(i,j) = theta(i,j/Spack::n)[j%Spack::n];
-            f_qv(i,j) = qv(i,j/Spack::n)[j%Spack::n];
-            f_qc(i,j) = qc(i,j/Spack::n)[j%Spack::n];
-            f_qr(i,j) = qr(i,j/Spack::n)[j%Spack::n];
-            f_relhum(i,j) = relhum(i,j/Spack::n)[j%Spack::n];
-          }
-        }
+
+        Kokkos::parallel_for(
+            "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in_packs),
+            KOKKOS_CLASS_LAMBDA(const int i) {
+              const int icol            = i / pver_in_packs;
+              const int klev            = i % pver_in_packs;
+              f_theta(icol, klev) = theta(icol, klev / Spack::n)[klev % Spack::n];
+              f_qv(icol, klev) = qv(icol, klev / Spack::n)[klev % Spack::n];
+              f_qc(icol, klev) = qc(icol, klev / Spack::n)[klev % Spack::n];
+              f_qr(icol, klev) = qr(icol, klev / Spack::n)[klev % Spack::n];
+              f_relhum(icol, klev) = relhum(icol, klev / Spack::n)[klev % Spack::n];
+              f_precl(icol) = precl(icol);
+            }
+          );
+        // for (int i=0; i<ncol_in; ++i) {
+        //   for (int j=0; j<pver_in; ++j) {
+        //     f_theta(i,j) = theta(i,j/Spack::n)[j%Spack::n];
+        //     f_qv(i,j) = qv(i,j/Spack::n)[j%Spack::n];
+        //     f_qc(i,j) = qc(i,j/Spack::n)[j%Spack::n];
+        //     f_qr(i,j) = qr(i,j/Spack::n)[j%Spack::n];
+        //     f_relhum(i,j) = relhum(i,j/Spack::n)[j%Spack::n];
+        //   }
+        //   f_precl(i) = precl(i);
+        // }
       }
       if (D == ekat::TransposeDirection::f2c) {
-        for (int i=0; i<ncol_in; ++i) {
-          // mid-point level variables
-          for (int j=0; j<pver_in; ++j) {
-            theta(i,j/Spack::n)[j%Spack::n] = f_theta(i,j);
-            qv(i,j/Spack::n)[j%Spack::n] = f_qv(i,j);
-            qc(i,j/Spack::n)[j%Spack::n] = f_qc(i,j);
-            qr(i,j/Spack::n)[j%Spack::n] = f_qr(i,j);
-            relhum(i,j/Spack::n)[j%Spack::n] = f_relhum(i,j);
-          }
-        }
+
+        Kokkos::parallel_for(
+            "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in_packs),
+            KOKKOS_CLASS_LAMBDA(const int i) {
+              const int icol                                      = i / pver_in_packs;
+              const int klev                                      = i % pver_in_packs;
+              theta(icol, klev / Spack::n)[klev % Spack::n] = f_theta(icol, klev);
+              qv(icol, klev / Spack::n)[klev % Spack::n] = f_qv(icol, klev);
+              qc(icol, klev / Spack::n)[klev % Spack::n] = f_qc(icol, klev);
+              qr(icol, klev / Spack::n)[klev % Spack::n] = f_qr(icol, klev);
+              relhum(icol, klev / Spack::n)[klev % Spack::n] = f_relhum(icol, klev);
+            }
+          );
+        // for (int i=0; i<ncol_in; ++i) {
+        //   // mid-point level variables
+        //   for (int j=0; j<pver_in; ++j) {
+        //     theta(i,j/Spack::n)[j%Spack::n] = f_theta(i,j);
+        //     qv(i,j/Spack::n)[j%Spack::n] = f_qv(i,j);
+        //     qc(i,j/Spack::n)[j%Spack::n] = f_qc(i,j);
+        //     qr(i,j/Spack::n)[j%Spack::n] = f_qr(i,j);
+        //     relhum(i,j/Spack::n)[j%Spack::n] = f_relhum(i,j);
+        //   }
+        //   precl(i) = f_precl(i);
+        // }
       }
     }; // End transpose
 
   }; // end Struct params_out
 
 }; // struct KesslerMicrophysicsFunctions
-
-template<typename S, typename D>
-  // KOKKOS_FUNCTION
-  void KesslerMicrophysicsFunctions<S,D>::preprocess(view_2d<Spack> &T_mid, view_2d<Spack> &p_mid,
-                         view_2d<Spack> &pseudo_density,
-                         view_2d<Spack> &qv,
-                         view_2d<Spack> &dz,
-                         view_2d<Spack> &rho,
-                         view_2d<Spack> &pk) {
-    const int ni = static_cast<int>(T_mid.extent(0));
-    const int nj = static_cast<int>(T_mid.extent(1));
-
-    using PF  = scream::PhysicsFunctions<DefaultDevice>;
-    using PC  = scream::physics::Constants<Real>;
-    const Real inv_ggr = 1/(PC::gravit);
-
-    using MDPolicy = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
-    MDPolicy mdp({0,0}, {ni,nj});
-
-    Kokkos::parallel_for("Kessler_preprocess", mdp,
-      KOKKOS_LAMBDA(const int i, const int j) {
-        const Spack pk = PF::exner_function(p_mid(i,j)[0]);
-        const auto theta = PF::calculate_theta_from_T(T_mid(i,j)[0],p_mid(i,j)[0]);
-
-        // Vertical layer thickness
-        dz(i,j) = PF::calculate_dz(pseudo_density(i,j)[0], p_mid(i,j)[0], T_mid(i,j)[0], qv(i,j)[0]);
-        rho(i,j) = inv_ggr*(pseudo_density(i,j)[0]/dz(i,j))[0];
-      }
-    );
-
-  };
   
 } // namespace kessler
 } // namespace scream

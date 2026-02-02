@@ -60,7 +60,9 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange GMAKE_J='32'
 
 ./atmchange atm_log_level=debug
-./atmchange mac_aero_mic::atm_procs_list+=kessler
+# ./atmchange physics::atm_procs_list=mac_aero_mic # this removes the rrtmg physics
+./atmchange mac_aero_mic::atm_procs_list+=kessler #kessler
+./atmchange save_field_manager_content=true
    
 ./case.build 
 

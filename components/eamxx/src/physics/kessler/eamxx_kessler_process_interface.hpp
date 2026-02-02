@@ -70,9 +70,9 @@ public:
     Int m_num_levs;
 
     // Parameters struct to pass through fortran bridge
-    // TODO - update/rename/add more as needed for kessler
     KMF::params_in params_in;
     KMF::params_out params_out;
+    KMF:: params_update params_update;
 
 }; // class Kessler
 

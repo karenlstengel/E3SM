@@ -389,7 +389,12 @@ void AtmosphereProcess::run_property_check (const prop_check_ptr&       property
   std::string pre_post_str;
   if (property_check_category == PropertyCheckCategory::Precondition)  pre_post_str = "pre-condition";
   if (property_check_category == PropertyCheckCategory::Postcondition) pre_post_str = "post-condition";
-
+  
+  log(LogLevel::debug,
+      "Property check '" + property_check->name() + "' result: " +
+      (res_and_msg.result==CheckResult::Pass ? "Pass" :
+       res_and_msg.result==CheckResult::Repairable ? "Repairable" : "Fail"));
+       
   if (res_and_msg.result==CheckResult::Pass) {
     // Do nothing
   } else if (res_and_msg.result==CheckResult::Repairable) {
@@ -469,6 +474,7 @@ void AtmosphereProcess::run_property_check (const prop_check_ptr&       property
           }
         }
       }
+      log(LogLevel::debug, ss.str());
       EKAT_ERROR_MSG(ss.str());
     }
   }

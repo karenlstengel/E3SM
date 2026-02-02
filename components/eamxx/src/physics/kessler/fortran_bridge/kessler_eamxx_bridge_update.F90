@@ -1,0 +1,88 @@
+module kessler_eamxx_bridge_update
+
+  use iso_c_binding
+  ! use openacc_utils
+  use cam_logfile,   only: iulog ! kinds instead of cam_logfile?
+  use shr_sys_mod,   only: shr_sys_flush
+  ! use spmd_utils,      only: masterproc
+
+  ! Kessler code from CAM-SIMA
+  use kessler_update 
+  use ccpp_kinds, only:  kind_phys
+  !-----------------------------------------------------------------------------
+  implicit none
+  private
+  !-----------------------------------------------------------------------------
+  ! public methods
+  public :: kessler_eamxx_bridge_update_init_c
+  public :: kessler_eamxx_bridge_update_c
+
+  ! Public variables
+  integer, public            :: pcols
+  integer, public            :: pver
+  character(len=64),  public :: scheme_name = ""
+  character(len=512), public :: errmsg = ""
+  integer, public            :: errflg = 0
+
+!===================================================================================================
+#include "eamxx_config.f"
+# define c_real c_double
+!===================================================================================================
+contains
+!===================================================================================================
+
+subroutine kessler_eamxx_bridge_update_init_c(pcol_in, pver_in, gravit_in) bind(C, name="kessler_eamxx_bridge_update_init_c")
+  ! Define uses here
+  !-----------------------------------------------------------------------------
+  ! Arguments
+  integer(kind=c_int), value, intent(in) :: pcol_in
+  integer(kind=c_int), value, intent(in) :: pver_in
+
+  ! Things to pass along to the Kessler base code
+  real(kind_phys), value,    intent(in)  :: gravit_in    ! gravity acceleration m/s^2
+
+  ! Set dimensions of fields
+  pcols = pcol_in
+  pver  = pver_in
+
+  errmsg = "temp"
+  errflg = 0
+  scheme_name = "KESSLER"
+
+  ! Call the Kessler update init function 
+  call kessler_update_init(gravit_in, errmsg, errflg)
+
+end subroutine kessler_eamxx_bridge_update_init_c
+
+!===================================================================================================
+
+subroutine kessler_eamxx_bridge_update_c( ncol, nz, dt, cpair, pk, theta, temp_prev, temp, temp_tend, z_mid, phis, st_energy) bind(C, name="kessler_eamxx_bridge_update_c")
+  ! Define uses here
+  !-----------------------------------------------------------------------------
+  ! Arguments
+  integer(kind=c_int), value,                intent(in)    :: ncol      ! Number of columns
+  integer(kind=c_int), value,                intent(in)    :: nz        ! Number of vertical levels
+  real(kind_phys),     value,                intent(in)    :: dt        ! Physics time step (s)
+
+  real(kind_phys),    dimension(pcols,pver), intent(in)    :: cpair     ! Specific_heat_of_dry_air_at_constant_pressure (J/kg/K)
+  real(kind_phys),    dimension(pcols,pver), intent(in)    :: pk        ! Exner function (p/p0)**(R/cp)
+  real(kind_phys),    dimension(pcols,pver), intent(in)    :: theta     ! Potential temperature (K)
+
+  real(kind_phys),    dimension(pcols,pver), intent(inout) :: temp_prev ! Temperature at previous timestep (K)
+  real(kind_phys),    dimension(pcols,pver), intent(inout) :: temp      ! Temperature updated (K)
+  real(kind_phys),    dimension(pcols,pver), intent(out)   :: temp_tend ! Temperature tendency (K)
+  real(kind_phys),    dimension(pcols,pver), intent(in)    :: z_mid     ! Geopotential height at each level (m)
+  real(kind_phys),    dimension(pcols),      intent(in)    :: phis      ! Geopotential height of surface (m2/s2)
+  real(kind_phys),    dimension(pcols,pver), intent(out)   :: st_energy ! Dry static energy J/kg
+
+  ! Call the Kessler run function
+  call kessler_update_timestep_init(temp, temp_prev, temp_tend, errmsg, errflg)
+
+  call kessler_update_run(nz, ncol, dt, theta, pk, temp_prev, temp_tend, errmsg, errflg)
+  call kessler_update_timestep_final(nz, cpair, temp, z_mid, phis, st_energy, errflg, errmsg)
+  
+end subroutine kessler_eamxx_bridge_update_c
+
+!===================================================================================================
+
+end module kessler_eamxx_bridge_update

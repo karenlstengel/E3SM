@@ -207,17 +207,6 @@ struct KesslerMicrophysicsFunctions
           f_precl(i) = init_fill_value;
           }
         );
-
-      // for (int i=0; i<ncol_in; ++i) {
-      //   for (int j=0; j<pver_in; ++j) {
-      //     f_theta(i,j) = init_fill_value;
-      //     f_qv(i,j) = init_fill_value;
-      //     f_qc(i,j) = init_fill_value;
-      //     f_qr(i,j) = init_fill_value;
-      //     f_relhum(i,j) = init_fill_value;
-      //   }
-      //   f_precl(i) = init_fill_value;
-      // }
     }; // End init
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
@@ -240,16 +229,6 @@ struct KesslerMicrophysicsFunctions
               f_precl(icol) = precl(icol);
             }
           );
-        // for (int i=0; i<ncol_in; ++i) {
-        //   for (int j=0; j<pver_in; ++j) {
-        //     f_theta(i,j) = theta(i,j/Spack::n)[j%Spack::n];
-        //     f_qv(i,j) = qv(i,j/Spack::n)[j%Spack::n];
-        //     f_qc(i,j) = qc(i,j/Spack::n)[j%Spack::n];
-        //     f_qr(i,j) = qr(i,j/Spack::n)[j%Spack::n];
-        //     f_relhum(i,j) = relhum(i,j/Spack::n)[j%Spack::n];
-        //   }
-        //   f_precl(i) = precl(i);
-        // }
       }
       if (D == ekat::TransposeDirection::f2c) {
 
@@ -263,23 +242,110 @@ struct KesslerMicrophysicsFunctions
               qc(icol, klev / Spack::n)[klev % Spack::n] = f_qc(icol, klev);
               qr(icol, klev / Spack::n)[klev % Spack::n] = f_qr(icol, klev);
               relhum(icol, klev / Spack::n)[klev % Spack::n] = f_relhum(icol, klev);
+              precl(icol) = f_precl(icol);
             }
           );
-        // for (int i=0; i<ncol_in; ++i) {
-        //   // mid-point level variables
-        //   for (int j=0; j<pver_in; ++j) {
-        //     theta(i,j/Spack::n)[j%Spack::n] = f_theta(i,j);
-        //     qv(i,j/Spack::n)[j%Spack::n] = f_qv(i,j);
-        //     qc(i,j/Spack::n)[j%Spack::n] = f_qc(i,j);
-        //     qr(i,j/Spack::n)[j%Spack::n] = f_qr(i,j);
-        //     relhum(i,j/Spack::n)[j%Spack::n] = f_relhum(i,j);
-        //   }
-        //   precl(i) = f_precl(i);
-        // }
       }
     }; // End transpose
 
   }; // end Struct params_out
+
+  struct params_update {
+
+    params_update() = default;
+    // Needed variables to update after kessler microphysics
+
+    // real(kind_phys),  intent(inout) :: temp_prev(:,:)  ! Previous temperature (K)
+    // real(kind_phys),  intent(inout) :: temp(:,:)       ! Current temperature (K)
+    // real(kind_phys),  intent(inout) :: temp_tend(:,:)  ! Temperature tendency (K/s)
+    // real(kind_phys),  intent(inout) :: zm(:,:)         ! Mass of dry air in layer (kg/m^2)
+    // real(kind_phys),  intent(inout) :: phis(:)         ! Surface geopotential (m^2/s^2)
+    // real(kind_phys),  intent(inout) :: st_energy(:,:)  ! Surface energy (J/m^2)
+
+    view_2d<Spack>   temp_prev;
+    view_2d<Spack>   temp;
+    view_2d<Spack>   temp_tend;
+    view_2d<Spack>   z_mid;
+    view_2d<Spack>   z_int; // Helper, doesn't need to get copied to fortran
+    view_1d<Scalar>  phis;
+    view_2d<Spack>   st_energy;
+
+    uview_2dl<Real>  f_temp_prev;
+    uview_2dl<Real>  f_temp;
+    uview_2dl<Real>  f_temp_tend;
+    uview_2dl<Real>  f_z_mid;
+    uview_1d<Real>   f_phis;
+    uview_2dl<Real>  f_st_energy;
+
+    // Set number of variables for ATMBufferManager
+    static constexpr int num_1d_intgr = 0;  // number of 1D integer views
+    static constexpr int num_1d_scalr = 1;  // number of 1D scalar views
+    static constexpr int num_2d_c     = 6;  // number of 2D fields
+    static constexpr int num_2d_f     = 5;  // number of 2D fields
+
+    // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
+    void init(int ncol_in, int pver_in) {
+      Real init_fill_value = 0;
+
+      using MDPolicy = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
+      MDPolicy mdp({0,0}, {ncol_in, pver_in});
+      
+      Kokkos::parallel_for("init_params_update", mdp,
+        KOKKOS_CLASS_LAMBDA(const int i, const int j) {
+          f_temp_prev(i,j) = init_fill_value;
+          f_temp(i,j) = init_fill_value;
+          f_temp_tend(i,j) = init_fill_value;
+          f_z_mid(i,j) = init_fill_value;
+          f_st_energy(i,j) = init_fill_value;
+
+          f_phis(i) = init_fill_value;
+          }
+        );
+
+    }; // End init
+
+    // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
+    template <ekat::TransposeDirection::Enum D>
+    void transpose(int ncol_in, int pver_in) { // TODO - Kokko-ize this
+      auto pver_in_packs = ekat::npack<Spack>(pver_in);
+
+      if (D == ekat::TransposeDirection::c2f) {
+
+        Kokkos::parallel_for(
+            "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in_packs),
+            KOKKOS_CLASS_LAMBDA(const int i) {
+              const int icol = i / pver_in_packs;
+              const int klev = i % pver_in_packs;
+
+              f_temp_prev(icol, klev) = temp_prev(icol, klev / Spack::n)[klev % Spack::n];
+              f_temp(icol, klev) = temp(icol, klev / Spack::n)[klev % Spack::n];
+              f_temp_tend(icol, klev) = temp_tend(icol, klev / Spack::n)[klev % Spack::n];
+              f_z_mid(icol, klev) = z_mid(icol, klev / Spack::n)[klev % Spack::n];
+              f_st_energy(icol, klev) = st_energy(icol, klev / Spack::n)[klev % Spack::n];
+              f_phis(icol) = phis(icol);
+            }
+          );
+      }
+      if (D == ekat::TransposeDirection::f2c) {
+
+        Kokkos::parallel_for(
+            "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in_packs),
+            KOKKOS_CLASS_LAMBDA(const int i) {
+              const int icol = i / pver_in_packs;
+              const int klev = i % pver_in_packs;
+
+              temp_prev(icol, klev / Spack::n)[klev % Spack::n] = f_temp_prev(icol, klev);
+              temp(icol, klev / Spack::n)[klev % Spack::n] = f_temp(icol, klev);
+              temp_tend(icol, klev / Spack::n)[klev % Spack::n] = f_temp_tend(icol, klev);
+              z_mid(icol, klev / Spack::n)[klev % Spack::n] = f_z_mid(icol, klev); // could skip this
+              st_energy(icol, klev / Spack::n)[klev % Spack::n] = f_st_energy(icol, klev);
+              phis(icol) = f_phis(icol); // could skip this
+            }
+          );
+      }
+    }; // End transpose
+
+  }; // end Struct params_update
 
 }; // struct KesslerMicrophysicsFunctions
   

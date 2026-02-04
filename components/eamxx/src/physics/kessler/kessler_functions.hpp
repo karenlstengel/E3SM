@@ -100,19 +100,16 @@ struct KesslerMicrophysicsFunctions
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     template <ekat::TransposeDirection::Enum D>
-    void transpose(int ncol_in, int pver_in) { // TODO - Kokko-ize this
-      auto pver_in_packs = ekat::npack<Spack>(pver_in);
-
-      // using MDPolicy = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
-      // MDPolicy mdp({0,0}, {ncol_in, pver_in});
+    void transpose(int ncol_in, int pver_in) { 
+      // auto pver_in_packs = ekat::npack<Spack>(pver_in);
 
       if (D == ekat::TransposeDirection::c2f) {
 
         Kokkos::parallel_for(
-            "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in_packs),
+            "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in),
             KOKKOS_CLASS_LAMBDA(const int i) {
-              const int icol            = i / pver_in_packs;
-              const int klev            = i % pver_in_packs;
+              const int icol            = i / pver_in;
+              const int klev            = i % pver_in;
               f_rho(icol, klev) = rho(icol, klev / Spack::n)[klev % Spack::n];
               f_dz(icol, klev) = dz(icol, klev / Spack::n)[klev % Spack::n];
               f_pk(icol, klev) = pk(icol, klev / Spack::n)[klev % Spack::n];
@@ -132,10 +129,10 @@ struct KesslerMicrophysicsFunctions
       if (D == ekat::TransposeDirection::f2c) {  // Not needed but leaving in just in case/temporary
 
         Kokkos::parallel_for(
-            "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in_packs),
+            "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in),
             KOKKOS_CLASS_LAMBDA(const int i) {
-              const int icol                                      = i / pver_in_packs;
-              const int klev                                      = i % pver_in_packs;
+              const int icol = i / pver_in;
+              const int klev = i % pver_in;
               rho(icol, klev / Spack::n)[klev % Spack::n] = f_rho(icol, klev);
               dz(icol, klev / Spack::n)[klev % Spack::n] = f_dz(icol, klev);
               pk(icol, klev / Spack::n)[klev % Spack::n] = f_pk(icol, klev);
@@ -212,15 +209,15 @@ struct KesslerMicrophysicsFunctions
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     template <ekat::TransposeDirection::Enum D>
     void transpose(int ncol_in, int pver_in) { // TODO - Kokko-ize this
-      auto pver_in_packs = ekat::npack<Spack>(pver_in);
+      // auto pver_in_packs = ekat::npack<Spack>(pver_in);
 
       if (D == ekat::TransposeDirection::c2f) {
 
         Kokkos::parallel_for(
-            "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in_packs),
+            "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in),
             KOKKOS_CLASS_LAMBDA(const int i) {
-              const int icol            = i / pver_in_packs;
-              const int klev            = i % pver_in_packs;
+              const int icol = i / pver_in;
+              const int klev = i % pver_in;
               f_theta(icol, klev) = theta(icol, klev / Spack::n)[klev % Spack::n];
               f_qv(icol, klev) = qv(icol, klev / Spack::n)[klev % Spack::n];
               f_qc(icol, klev) = qc(icol, klev / Spack::n)[klev % Spack::n];
@@ -233,10 +230,10 @@ struct KesslerMicrophysicsFunctions
       if (D == ekat::TransposeDirection::f2c) {
 
         Kokkos::parallel_for(
-            "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in_packs),
+            "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in),
             KOKKOS_CLASS_LAMBDA(const int i) {
-              const int icol                                      = i / pver_in_packs;
-              const int klev                                      = i % pver_in_packs;
+              const int icol = i / pver_in;
+              const int klev  = i % pver_in;
               theta(icol, klev / Spack::n)[klev % Spack::n] = f_theta(icol, klev);
               qv(icol, klev / Spack::n)[klev % Spack::n] = f_qv(icol, klev);
               qc(icol, klev / Spack::n)[klev % Spack::n] = f_qc(icol, klev);
@@ -307,15 +304,15 @@ struct KesslerMicrophysicsFunctions
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     template <ekat::TransposeDirection::Enum D>
     void transpose(int ncol_in, int pver_in) { // TODO - Kokko-ize this
-      auto pver_in_packs = ekat::npack<Spack>(pver_in);
+      // auto pver_in_packs = ekat::npack<Spack>(pver_in);
 
       if (D == ekat::TransposeDirection::c2f) {
 
         Kokkos::parallel_for(
-            "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in_packs),
+            "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in),
             KOKKOS_CLASS_LAMBDA(const int i) {
-              const int icol = i / pver_in_packs;
-              const int klev = i % pver_in_packs;
+              const int icol = i / pver_in;
+              const int klev = i % pver_in;
 
               f_temp_prev(icol, klev) = temp_prev(icol, klev / Spack::n)[klev % Spack::n];
               f_temp(icol, klev) = temp(icol, klev / Spack::n)[klev % Spack::n];
@@ -329,10 +326,10 @@ struct KesslerMicrophysicsFunctions
       if (D == ekat::TransposeDirection::f2c) {
 
         Kokkos::parallel_for(
-            "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in_packs),
+            "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in),
             KOKKOS_CLASS_LAMBDA(const int i) {
-              const int icol = i / pver_in_packs;
-              const int klev = i % pver_in_packs;
+              const int icol = i / pver_in;
+              const int klev = i % pver_in;
 
               temp_prev(icol, klev / Spack::n)[klev % Spack::n] = f_temp_prev(icol, klev);
               temp(icol, klev / Spack::n)[klev % Spack::n] = f_temp(icol, klev);

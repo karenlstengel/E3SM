@@ -142,12 +142,12 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
   auto qc                 = get_field_out("qc").get_view<Spack**>();
   auto qr                 = get_field_out("qr").get_view<Spack**>();
   
-  auto nlevm_packs = ekat::npack<Spack>(m_num_levs);
+   int nlevs = m_num_levs; // local var, to avoid accessing *this.
   Kokkos::parallel_for(
-      "compute_dry_vmr", KT::RangePolicy(0, m_num_cols * nlevm_packs),
+      "compute_dry_vmr", KT::RangePolicy(0, m_num_cols * nlevs),
       KOKKOS_CLASS_LAMBDA(const int i) {
-        const int icol = i / nlevm_packs;
-        const int klev = i % nlevm_packs;
+        const int icol = i / nlevs;
+        const int klev = i % nlevs;
 
         if (qv(icol, klev / Spack::n)[klev % Spack::n] != 0.0) {m_atm_logger->info("[EAMxx] kessler init qv(" + std::to_string(icol) + ", " + std::to_string(klev) + "): " + std::to_string(qv(icol, klev / Spack::n)[klev % Spack::n]) + " \n");}
         if (qc(icol, klev / Spack::n)[klev % Spack::n] != 0.0) {m_atm_logger->info("[EAMxx] kessler init qc(" + std::to_string(icol) + ", " + std::to_string(klev) + "): " + std::to_string(qc(icol, klev / Spack::n)[klev % Spack::n]) + " \n");}
@@ -206,13 +206,13 @@ void KesslerMicrophysics::run_impl (const double dt )
   using PC  = scream::physics::Constants<Real>;
   const Real inv_ggr = 1/(PC::gravit);
 
-  auto nlevm_packs = ekat::npack<Spack>(m_num_levs);
+   int nlevs = m_num_levs; // local var, to avoid accessing *this.
 
   Kokkos::parallel_for(
-      "Kessler_preprocess", KT::RangePolicy(0, m_num_cols * nlevm_packs),
+      "Kessler_preprocess", KT::RangePolicy(0, m_num_cols * nlevs),
       KOKKOS_CLASS_LAMBDA(const int i) {
-        const int icol = i / nlevm_packs;
-        const int klev = i % nlevm_packs;
+        const int icol = i / nlevs;
+        const int klev = i % nlevs;
         pk(icol, klev / Spack::n)[klev % Spack::n] = PF::exner_function(p_mid(icol, klev / Spack::n)[klev % Spack::n]);
         theta(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_theta_from_T(T_mid(icol, klev / Spack::n)[klev % Spack::n],p_mid(icol, klev / Spack::n)[klev % Spack::n]);
 
@@ -225,10 +225,10 @@ void KesslerMicrophysics::run_impl (const double dt )
   const auto gas_mol_weight = PC::MWH2O; // molar weight of water. or use get_gas_mol_weight() for different gas
 
   Kokkos::parallel_for(
-      "compute_dry_vmr", KT::RangePolicy(0, m_num_cols * nlevm_packs),
+      "compute_dry_vmr", KT::RangePolicy(0, m_num_cols * nlevs),
       KOKKOS_CLASS_LAMBDA(const int i) {
-        const int icol = i / nlevm_packs;
-        const int klev = i % nlevm_packs;
+        const int icol = i / nlevs;
+        const int klev = i % nlevs;
 
         qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_drymmr_from_wetmmr_dp_based(qv(icol, klev / Spack::n)[klev % Spack::n],pseudo_density(icol, klev / Spack::n)[klev % Spack::n],pseudo_density_dry(icol, klev / Spack::n)[klev % Spack::n]);
         qv(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_vmr_from_mmr(gas_mol_weight, qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], qv(icol, klev / Spack::n)[klev % Spack::n]);
@@ -285,7 +285,8 @@ void KesslerMicrophysics::run_impl (const double dt )
   // Compute z_mid (see what ZM does and do that)
   // calculate_z_int() contains a team-level parallel_scan, which requires a special policy
   using TPF = ekat::TeamPolicyFactory<KT::ExeSpace>;
-  const auto scan_policy = TPF::get_thread_range_parallel_scan_team_policy(m_num_cols, nlevm_packs);
+  const int nlev_packs   = ekat::npack<Spack>(m_num_levs);
+  const auto scan_policy = TPF::get_thread_range_parallel_scan_team_policy(m_num_cols, nlev_packs);
 
   Kokkos::parallel_for(scan_policy, KOKKOS_CLASS_LAMBDA (const KT::MemberType& team) {
     const int i = team.league_rank();
@@ -304,10 +305,10 @@ void KesslerMicrophysics::run_impl (const double dt )
   kessler_eamxx_bridge_update(m_num_cols, m_num_levs, dt_timestep, params_in, params_out, params_update);
 
   Kokkos::parallel_for(
-      "compute_wet_mmr", KT::RangePolicy(0, m_num_cols * nlevm_packs),
+      "compute_wet_mmr", KT::RangePolicy(0, m_num_cols * nlevs),
       KOKKOS_CLASS_LAMBDA(const int i) {
-        const int icol = i / nlevm_packs;
-        const int klev = i % nlevm_packs;
+        const int icol = i / nlevs;
+        const int klev = i % nlevs;
 
         const auto qv_wet = PF::calculate_mmr_from_vmr(gas_mol_weight, qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
         params_out.qv(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr_dp_based(qv_wet,pseudo_density(icol, klev / Spack::n)[klev % Spack::n],pseudo_density_dry(icol, klev / Spack::n)[klev % Spack::n]);

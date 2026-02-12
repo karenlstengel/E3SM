@@ -1,6 +1,7 @@
 module kessler_eamxx_bridge_main
 
   use iso_c_binding
+  use mpi
   ! use openacc_utils
   use cam_logfile,   only: iulog ! kinds instead of cam_logfile?
   use shr_sys_mod,   only: shr_sys_flush
@@ -23,6 +24,7 @@ module kessler_eamxx_bridge_main
   character(len=64),  public :: scheme_name = ""
   character(len=512), public :: errmsg = ""
   integer, public            :: errflg = 0
+  logical, public            :: masterproc
 
 !===================================================================================================
 #include "eamxx_config.f"
@@ -43,6 +45,8 @@ subroutine kessler_eamxx_bridge_init_c( pcol_in, pver_in, lv_in, pref_in, rhoqr_
   real(kind_phys), value,    intent(in)  :: pref_in  ! reference pressure, Pa
   real(kind_phys), value,    intent(in)  :: rhoqr_in ! density of fresh liquid water, kg/m^3
 
+  integer :: mpi_rank, ierror
+
   ! Set dimensions of fields
   pcols = pcol_in
   pver  = pver_in
@@ -53,6 +57,10 @@ subroutine kessler_eamxx_bridge_init_c( pcol_in, pver_in, lv_in, pref_in, rhoqr_
 
   ! Call the Kessler init function 
   call kessler_init(lv_in, pref_in, rhoqr_in, errmsg, errflg)
+
+  call mpi_comm_rank(MPI_COMM_WORLD, mpi_rank, ierror)
+  masterproc = .false.
+  if (mpi_rank==0) masterproc = .true.
 
 end subroutine kessler_eamxx_bridge_init_c
 
@@ -82,9 +90,36 @@ subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, r
   real(kind_phys),    dimension(pcols),      intent(out)   :: precl    ! Precipitation rate (m_water / s)
   real(kind_phys),    dimension(pcols,pver), intent(out)   :: relhum   ! Relative humidity in percent
 
+  integer :: i,k
+  real(kind=c_real) :: relhum_max, pk_max, theta_max, qv_max
+
   ! Call the Kessler run function
   call kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, &
         pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg)
+  
+  
+  relhum_max = 0.0
+  pk_max = 0.0
+  theta_max = 0.0
+  qv_max = 0.0
+
+  do k = 1,pver
+    do i = 1,ncol
+      relhum_max = max(relhum_max,relhum(i,k))
+      pk_max = max(pk_max,pk(i,k))
+      theta_max = max(theta_max,theta(i,k))
+      qv_max = max(qv_max,qv(i,k))
+    end do
+  end do
+
+  if (masterproc) then
+    write(*,*) "RELHUM max: ", relhum_max
+    write(*,*) "pk max: ", pk_max
+    write(*,*) "theta max: ", theta_max
+    write(*,*) "qv max: ", qv_max
+  end if
+  
+
   
 end subroutine kessler_eamxx_bridge_run_c
 

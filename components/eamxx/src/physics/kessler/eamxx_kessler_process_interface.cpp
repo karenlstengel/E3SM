@@ -42,22 +42,17 @@ KesslerMicrophysics::KesslerMicrophysics (const ekat::Comm& comm, const ekat::Pa
 
 void KesslerMicrophysics::set_grids(const std::shared_ptr<const GridsManager> grids_manager)
 {
-  // using namespace ekat::units;
+  using namespace ekat::units;
   // using namespace ShortFieldTagsNames;
 
   m_atm_logger->info("[EAMxx] Kessler processes set grids");
 
-  constexpr auto K = ekat::units::K;
-  constexpr auto Pa = ekat::units::Pa;
-  constexpr auto s = ekat::units::s;
   const auto s2    = pow(s,2);
-  constexpr auto m = ekat::units::m;
   const auto m2    = pow(m,2);
   const auto m3    = pow(m,3);
-  constexpr auto kg = ekat::units::kg;
   constexpr auto nondim = ekat::units::Units::nondimensional();
   constexpr int pack_size = Spack::n;
-  constexpr auto J = ekat::units::J;
+
 
   // specify which grid to use
   m_grid = grids_manager->get_grid("physics");
@@ -82,10 +77,11 @@ void KesslerMicrophysics::set_grids(const std::shared_ptr<const GridsManager> gr
   add_field<Computed>("T_mid_prev",          scalar3d_layout_mid, K,     grid_name, pack_size);
   add_field<Required>("p_mid",              scalar3d_layout_mid, Pa,    grid_name, pack_size);
   add_field<Required>("pseudo_density",     scalar3d_layout_mid, Pa,    grid_name, pack_size);
-  add_field<Required>("pseudo_density_dry", scalar3d_layout_mid, Pa,    grid_name, pack_size);
+  // add_field<Required>("pseudo_density_dry", scalar3d_layout_mid, Pa,    grid_name, pack_size);
   add_tracer<Updated>("qv",                 m_grid,              kg/kg,            pack_size);
   add_tracer<Updated>("qc",                 m_grid,              kg/kg,            pack_size);
   add_tracer<Updated>("qr",                 m_grid,              kg/kg,            pack_size);
+  add_tracer<Updated>("qi",                 m_grid,              kg/kg,          pack_size);
   // Locally needed 
   // real(kind_phys),  intent(in)    :: rho(:,:)   ! Dry air density (kg/m^3)
   // real(kind_phys),  intent(in)    :: z(:,:)     ! Heights of thermo. levels (m)
@@ -108,8 +104,16 @@ void KesslerMicrophysics::set_grids(const std::shared_ptr<const GridsManager> gr
   add_field<Updated>("phis",       scalar2d_layout, m2/s2,     grid_name, pack_size); // geopotential height of surface
 
   // Tendincies 
-  add_field<Computed>("T_mid_tend", scalar3d_layout_mid, K, grid_name, pack_size);
-
+  add_field<Computed>("T_mid_tend", scalar3d_layout_mid, K/s, grid_name, pack_size);
+  
+  // Pulled from SHOC
+  // Boundary flux fields for energy and mass conservation checks
+  if (has_energy_fixer()) {
+    add_field<Computed>("vapor_flux", scalar2d_layout, kg/(m2*s), grid_name);
+    add_field<Computed>("water_flux", scalar2d_layout, m/s,       grid_name);
+    add_field<Computed>("ice_flux",   scalar2d_layout, m/s,       grid_name);
+    add_field<Computed>("heat_flux",  scalar2d_layout, W/m2,      grid_name);
+  }
 }
 
 // =========================================================================================
@@ -127,9 +131,12 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
   // <scheme>check_energy_scaling</scheme>
   // <scheme>check_energy_chng</scheme>
 
+  add_invariant_check<FieldWithinIntervalCheck>(get_field_out("T_mid"),m_grid,100.0,500.0,false);
   add_invariant_check<FieldWithinIntervalCheck>(get_field_out("qv"),m_grid,1e-13,0.2,true);
-  add_postcondition_check<FieldWithinIntervalCheck>(get_field_out("qc"),m_grid,0.0,0.1,false);
-  add_postcondition_check<FieldWithinIntervalCheck>(get_field_out("qr"),m_grid,0.0,0.1,false);
+  add_postcondition_check<FieldWithinIntervalCheck>(get_field_out("qc"),m_grid,0.0,0.1,true);
+  add_postcondition_check<FieldWithinIntervalCheck>(get_field_out("qr"),m_grid,0.0,0.1,true);
+  add_postcondition_check<FieldWithinIntervalCheck>(get_field_out("qi"),m_grid,0.0,0.1,true);
+
 
   Real P0 = PC::P0; // Reference pressure; pref_in
   Real latvap = PC::LatVap; // Latent heat of vaporization; lv_in
@@ -138,23 +145,20 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
 
   kessler::kessler_eamxx_bridge_init(m_num_cols, m_num_levs, latvap, P0, rhoqr, gravit);
 
-  auto qv                 = get_field_out("qv").get_view<Spack**>();
-  auto qc                 = get_field_out("qc").get_view<Spack**>();
-  auto qr                 = get_field_out("qr").get_view<Spack**>();
-  
-   int nlevs = m_num_levs; // local var, to avoid accessing *this.
-  Kokkos::parallel_for(
-      "compute_dry_vmr", KT::RangePolicy(0, m_num_cols * nlevs),
-      KOKKOS_CLASS_LAMBDA(const int i) {
-        const int icol = i / nlevs;
-        const int klev = i % nlevs;
+  if (has_energy_fixer()) {
+    // Set the boundary fluxes to 0.0 at the start of the run
+    auto vapor_flux = get_field_out("vapor_flux").get_view<Real*>();
+    auto water_flux = get_field_out("water_flux").get_view<Real*>();
+    auto ice_flux   = get_field_out("ice_flux").get_view<Real*>();
+    auto heat_flux  = get_field_out("heat_flux").get_view<Real*>();
 
-        if (qv(icol, klev / Spack::n)[klev % Spack::n] != 0.0) {m_atm_logger->info("[EAMxx] kessler init qv(" + std::to_string(icol) + ", " + std::to_string(klev) + "): " + std::to_string(qv(icol, klev / Spack::n)[klev % Spack::n]) + " \n");}
-        if (qc(icol, klev / Spack::n)[klev % Spack::n] != 0.0) {m_atm_logger->info("[EAMxx] kessler init qc(" + std::to_string(icol) + ", " + std::to_string(klev) + "): " + std::to_string(qc(icol, klev / Spack::n)[klev % Spack::n]) + " \n");}
-        if (qr(icol, klev / Spack::n)[klev % Spack::n] != 0.0) {m_atm_logger->info("[EAMxx] kessler init qr(" + std::to_string(icol) + ", " + std::to_string(klev) + "): " + std::to_string(qr(icol, klev / Spack::n)[klev % Spack::n]) + " \n");}
-      }
-  ); // end parallel for vmr
-
+    Kokkos::parallel_for("init_boundary_fluxes", m_num_cols, KOKKOS_LAMBDA(const int i) {
+      vapor_flux(i) = 0.0;
+      water_flux(i) = 0.0;
+      ice_flux(i)   = 0.0;
+      heat_flux(i)  = 0.0;
+    });
+  }
 }
 
 // =========================================================================================
@@ -172,7 +176,7 @@ void KesslerMicrophysics::run_impl (const double dt )
   auto T_mid              = get_field_out("T_mid").get_view<Spack**>();
   auto p_mid              = get_field_in("p_mid").get_view<const Spack**>();
   auto pseudo_density     = get_field_in("pseudo_density").get_view<const Spack**>();
-  auto pseudo_density_dry = get_field_in("pseudo_density_dry").get_view<const Spack**>();
+  // auto pseudo_density_dry = get_field_in("pseudo_density_dry").get_view<const Spack**>();
   auto qv                 = get_field_out("qv").get_view<Spack**>();
   auto qc                 = get_field_out("qc").get_view<Spack**>();
   auto qr                 = get_field_out("qr").get_view<Spack**>();
@@ -222,26 +226,23 @@ void KesslerMicrophysics::run_impl (const double dt )
       }
     );
 
-  const auto gas_mol_weight = PC::MWH2O; // molar weight of water. or use get_gas_mol_weight() for different gas
+  // const auto gas_mol_weight = PC::MWH2O; // molar weight of water. or use get_gas_mol_weight() for different gas
 
+  // I think only need to convert from wet to dry mmr before passing to kessler scheme and not to volume mixing ratios too
   Kokkos::parallel_for(
       "compute_dry_vmr", KT::RangePolicy(0, m_num_cols * nlevs),
       KOKKOS_CLASS_LAMBDA(const int i) {
         const int icol = i / nlevs;
         const int klev = i % nlevs;
 
-        qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_drymmr_from_wetmmr_dp_based(qv(icol, klev / Spack::n)[klev % Spack::n],pseudo_density(icol, klev / Spack::n)[klev % Spack::n],pseudo_density_dry(icol, klev / Spack::n)[klev % Spack::n]);
-        qv(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_vmr_from_mmr(gas_mol_weight, qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], qv(icol, klev / Spack::n)[klev % Spack::n]);
+        qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_drymmr_from_wetmmr(qv(icol, klev / Spack::n)[klev % Spack::n],qv(icol, klev / Spack::n)[klev % Spack::n]);
+        // qv(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_vmr_from_mmr(gas_mol_weight, qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], qv(icol, klev / Spack::n)[klev % Spack::n]);
 
-        qc_dry_mmr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_drymmr_from_wetmmr_dp_based(qc(icol, klev / Spack::n)[klev % Spack::n],pseudo_density(icol, klev / Spack::n)[klev % Spack::n],pseudo_density_dry(icol, klev / Spack::n)[klev % Spack::n]);
-        qc(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_vmr_from_mmr(gas_mol_weight, qc_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], qc(icol, klev / Spack::n)[klev % Spack::n]);
+        qc_dry_mmr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_drymmr_from_wetmmr(qc(icol, klev / Spack::n)[klev % Spack::n],qv(icol, klev / Spack::n)[klev % Spack::n]);
 
-        qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n]= PF::calculate_drymmr_from_wetmmr_dp_based(qr(icol, klev / Spack::n)[klev % Spack::n],pseudo_density(icol, klev / Spack::n)[klev % Spack::n],pseudo_density_dry(icol, klev / Spack::n)[klev % Spack::n]);
-        qr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_vmr_from_mmr(gas_mol_weight, qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], qr(icol, klev / Spack::n)[klev % Spack::n]);
+        // qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n]= PF::calculate_drymmr_from_wetmmr_dp_based(qr(icol, klev / Spack::n)[klev % Spack::n],pseudo_density(icol, klev / Spack::n)[klev % Spack::n],pseudo_density_dry(icol, klev / Spack::n)[klev % Spack::n]);
+        qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_drymmr_from_wetmmr(qr(icol, klev / Spack::n)[klev % Spack::n],qv(icol, klev / Spack::n)[klev % Spack::n]);
 
-        if (qv(icol, klev / Spack::n)[klev % Spack::n] != 0.0) {m_atm_logger->info("[EAMxx] kessler qv(" + std::to_string(icol) + ", " + std::to_string(klev) + "): " + std::to_string(qv(icol, klev / Spack::n)[klev % Spack::n]) + " \n");}
-        if (qc(icol, klev / Spack::n)[klev % Spack::n] != 0.0) {m_atm_logger->info("[EAMxx] kessler qc(" + std::to_string(icol) + ", " + std::to_string(klev) + "): " + std::to_string(qc(icol, klev / Spack::n)[klev % Spack::n]) + " \n");}
-        if (qr(icol, klev / Spack::n)[klev % Spack::n] != 0.0) {m_atm_logger->info("[EAMxx] kessler qr(" + std::to_string(icol) + ", " + std::to_string(klev) + "): " + std::to_string(qr(icol, klev / Spack::n)[klev % Spack::n]) + " \n");}
       }
   ); // end parallel for vmr
 
@@ -252,9 +253,9 @@ void KesslerMicrophysics::run_impl (const double dt )
 
   // setup params_out struct
   params_out.theta = theta;
-  params_out.qv = qv;
-  params_out.qc = qc;
-  params_out.qr = qr;
+  params_out.qv = qv_dry_mmr;
+  params_out.qc = qc_dry_mmr;
+  params_out.qr = qr_dry_mmr;
   params_out.precl = precl;
   params_out.relhum = relhum;
 
@@ -263,6 +264,7 @@ void KesslerMicrophysics::run_impl (const double dt )
   params_out.init(m_num_cols, m_num_levs); 
 
   double dt_timestep = dt;
+  m_atm_logger->info("[EAMxx] kessler dt: " + std::to_string(dt_timestep));
 
   kessler_eamxx_bridge_run(m_num_cols, m_num_levs, dt_timestep, lyr_surf, lyr_toa, params_in, params_out);  
   
@@ -310,36 +312,59 @@ void KesslerMicrophysics::run_impl (const double dt )
         const int icol = i / nlevs;
         const int klev = i % nlevs;
 
-        const auto qv_wet = PF::calculate_mmr_from_vmr(gas_mol_weight, qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
-        params_out.qv(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr_dp_based(qv_wet,pseudo_density(icol, klev / Spack::n)[klev % Spack::n],pseudo_density_dry(icol, klev / Spack::n)[klev % Spack::n]);
+        // const auto qv_wet = PF::calculate_mmr_from_vmr(gas_mol_weight, qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
+        // params_out.qv(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr(qv_wet,pseudo_density(icol, klev / Spack::n)[klev % Spack::n],pseudo_density_dry(icol, klev / Spack::n)[klev % Spack::n]);
+        params_out.qv(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr(params_out.qv(icol, klev / Spack::n)[klev % Spack::n],params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
         
-        const auto qc_wet = PF::calculate_mmr_from_vmr(gas_mol_weight, qc_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], params_out.qc(icol, klev / Spack::n)[klev % Spack::n]);
-        params_out.qc(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr_dp_based(qc_wet,pseudo_density(icol, klev / Spack::n)[klev % Spack::n],pseudo_density_dry(icol, klev / Spack::n)[klev % Spack::n]);
+        // const auto qc_wet = PF::calculate_mmr_from_vmr(gas_mol_weight, qc_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], params_out.qc(icol, klev / Spack::n)[klev % Spack::n]);
+        params_out.qc(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr(params_out.qc(icol, klev / Spack::n)[klev % Spack::n],params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
        
-        const auto qr_wet = PF::calculate_mmr_from_vmr(gas_mol_weight, qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], params_out.qr(icol, klev / Spack::n)[klev % Spack::n]);
-        params_out.qr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr_dp_based(qr_wet,pseudo_density(icol, klev / Spack::n)[klev % Spack::n],pseudo_density_dry(icol, klev / Spack::n)[klev % Spack::n]);
+        // const auto qr_wet = PF::calculate_mmr_from_vmr(gas_mol_weight, qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], params_out.qr(icol, klev / Spack::n)[klev % Spack::n]);
+        params_out.qr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr(params_out.qr(icol, klev / Spack::n)[klev % Spack::n],params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
        
       }
   ); // end parallel for mmr
 
   // <scheme>qneg</scheme> // TODO - this just ensures non-negative values for certain fields. could use this for post condition checks
-  // <scheme>geopotential_temp</scheme> // TODO - write the bridge code here
+  // <scheme>geopotential_temp</scheme> // -> done above when calculating z_mid
 
-  // <scheme>sima_state_diagnostics</scheme> // TODO - write the bridge code here?
-  // <scheme>kessler_diagnostics</scheme> // TODO - write the bridge code here
+  // <scheme>sima_state_diagnostics</scheme> // -> just writes fields to file 
+  // <>scheme>kessler_diagnostics</scheme> // -> only writes out precl field to file 
 
-  // <scheme>thermo_water_update</scheme> // TODO - write the bridge code here
+  // <scheme>thermo_water_update</scheme> // TODO - computes enthalpy using cpair (I think computed by the energy fixer provided by homme)
 
   // <!-- MPAS and SE specific scaling of temperature for enforcing energy consistency:
   //       First, calculate the scaling based off cp_or_cv_dycore (from cam_thermo_water_update)
   //       Then, perform the temperature and temperature tendency scaling,
   //       and apply tendencies resulting from such adjustment -->
-  // <scheme>check_energy_scaling</scheme>
-  // <scheme>dycore_energy_consistency_adjust</scheme>
-  // <scheme>apply_tendency_of_air_temperature</scheme>
+  // <scheme>check_energy_scaling</scheme> 
+    // real(kind_phys),    intent(out)    :: flx_vap(:)     ! boundary flux of vapor [kg m-2 s-1]
+    // real(kind_phys),    intent(out)    :: flx_cnd(:)     ! boundary flux of liquid+ice (precip?) [m s-1]
+    // real(kind_phys),    intent(out)    :: flx_ice(:)     ! boundary flux of ice (snow?) [m s-1]
+    // real(kind_phys),    intent(out)    :: flx_sen(:)     ! boundary flux of sensible heat [W m-2]
+    // sets all four of the fluxes = 0.0
+  if (has_energy_fixer()) {
+    auto vapor_flux = get_field_out("vapor_flux").get_view<Real*>();
+    auto water_flux = get_field_out("water_flux").get_view<Real*>();
+    auto ice_flux   = get_field_out("ice_flux").get_view<Real*>();
+    auto heat_flux  = get_field_out("heat_flux").get_view<Real*>();
+
+    Kokkos::parallel_for("check_energy_scaling", m_num_cols, KOKKOS_LAMBDA(const int i) {
+      vapor_flux(i) = 0.0;
+      water_flux(i) = 0.0;
+      ice_flux(i)   = 0.0;
+      heat_flux(i)  = 0.0;
+    });
+  }
+
+  // pretty sure eamxx does this with the energy fixer
+  // <scheme>dycore_energy_consistency_adjust</scheme> // TODO ? -> does energy scaling for temperature; 
+
+  // pretty sure eamxx does this with the energy fixer
+  // <scheme>apply_tendency_of_air_temperature (nz, t_tend, temp, dtdT_total, dt, errcode, errmsg) TODO ? -> updates dtdT_total
 
   // <!-- Tendency diagnostics -->
-  // <scheme>sima_tend_diagnostics</scheme> // TODO - write the bridge code here?
+  // <scheme>sima_tend_diagnostics</scheme> // -> only writes out dTdt_total, dudt_total, dvdt_total to file 
 
     // Update with the new values from the run
     Kokkos::parallel_for("update_output_1d",m_num_cols, KOKKOS_LAMBDA (const int i) {
@@ -348,9 +373,9 @@ void KesslerMicrophysics::run_impl (const double dt )
       }
     );
 
-    Kokkos::parallel_for("update_output_2d",KT::RangePolicy(0, m_num_cols * nlevm_packs), KOKKOS_LAMBDA (const int idx) { // clean up
-      const int icol = idx/nlevm_packs;
-      const int klev = idx%nlevm_packs;
+    Kokkos::parallel_for("update_output_2d",KT::RangePolicy(0, m_num_cols * nlevs), KOKKOS_LAMBDA (const int idx) { // clean up
+      const int icol = idx/nlevs;
+      const int klev = idx%nlevs;
 
       rho(icol,klev)        = params_in.rho(icol,klev);
       dz(icol,klev)         = params_in.dz(icol,klev);
@@ -469,9 +494,9 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
   Real* r1_mem = reinterpret_cast<Real*>(scl_mem);
   //----------------------------------------------------------------------------
   // device 1D scalar scalars
-  KMF::uview_1d<Real>* ptrs_1d_real[num_1d_scalr]          = { &params_out.f_precl, &params_update.f_phis};
+  KMF::view_1d<Real>* ptrs_1d_real[num_1d_scalr]          = { &params_out.f_precl, &params_update.f_phis};
   for (auto& v : ptrs_1d_real) {
-    *v = KMF::uview_1d<Real>(r1_mem, m_num_cols);
+    *v = KMF::view_1d<Real>(r1_mem, m_num_cols);
     r1_mem += v->size();
   } 
   //----------------------------------------------------------------------------
@@ -479,7 +504,7 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
   Real* r_mem = reinterpret_cast<Real*>(r1_mem);
   //----------------------------------------------------------------------------
   // 2D "f_" views
-  KMF::uview_2dl<Real>* midlv_f_ptrs[num_2d_midlv_f]  = { &params_in.f_cpair, 
+  KMF::view_2dl<Real>* midlv_f_ptrs[num_2d_midlv_f]  = { &params_in.f_cpair, 
                                                       &params_in.f_rair, 
                                                       &params_in.f_rho, 
                                                       &params_in.f_dz, 
@@ -496,7 +521,7 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
                                                       &params_update.f_st_energy
                                                     };
   for (int i=0; i<num_2d_midlv_f; ++i) {
-    *midlv_f_ptrs[i] = KMF::uview_2dl<Real>(r_mem, m_num_cols, m_num_levs);
+    *midlv_f_ptrs[i] = KMF::view_2dl<Real>(r_mem, m_num_cols, m_num_levs);
     r_mem += midlv_f_ptrs[i]->size();
   }
   //----------------------------------------------------------------------------

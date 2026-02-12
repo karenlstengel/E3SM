@@ -1,0 +1,39 @@
+%YAML 1.1
+---
+filename_prefix: AQP1_ne4_eamxx_kessler_nvidia_cpu.scream.phys.h
+Averaging Type: Average
+Max Snapshots Per File: 10
+averaging_type: average
+fields:
+  physics_gll:
+    field_names:
+    - p_mid
+    - pseudo_density
+    - horiz_winds
+    - tracers
+    - T_mid
+    - T_mid_tend
+    - T_mid_prev
+    - p_int
+    - qv 
+    - qc
+    - qr
+    - phis
+    - st_energy
+    - pk
+    - theta
+    - relhum 
+    - precl
+    - RelativeHumidity
+    - Exner
+    - DryStaticEnergy
+    - PotentialTemperature
+
+  # Dynamics:
+  #   Field Names:
+  #     - dp3d_dyn
+  #     - omega_dyn
+output_control:
+  frequency: 1
+  frequency_units: ndays
+  save_grid_data: true

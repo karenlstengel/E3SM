@@ -271,10 +271,6 @@ be lost if SCREAM_HACK_XML is not enabled.
 
     <!-- Kessler Microphysics -->
     <kessler inherit="atm_proc_base">
-      <!-- Read in ratio fields? -->
-      <!-- <qv COMPSET=".*SCREAM%AQUA.*"> 0.1 </qv>
-      <qc COMPSET=".*SCREAM%AQUA.*"> 0.1 </qc>
-      <qr COMPSET=".*SCREAM%AQUA.*"> 0.1 </qr> -->
     </kessler>
 
     <!-- ZM deep convection -->
@@ -669,7 +665,6 @@ be lost if SCREAM_HACK_XML is not enabled.
     <T_prev_micro_step >0.0</T_prev_micro_step>
     <qv_prev_micro_step>0.0</qv_prev_micro_step>
     <!-- Initialize microphysics fields not on IC to zero; note that this is consistent with EAM init -->
-    <!-- <qr                >0.0</qr> -->
     <nr                >0.0</nr>
     <qm                >0.0</qm>
     <bm                >0.0</bm>
@@ -726,6 +721,18 @@ be lost if SCREAM_HACK_XML is not enabled.
     <wetdep_dust_bin3 type="real">1e-5</wetdep_dust_bin3>
     <wetdep_dust_bin4 type="real">1e-5</wetdep_dust_bin4>
 
+    <!-- Fields that the surface exporter needs present when using Kessler -->
+    <!-- TODO - check on what good values are for these if things explode -->
+    <precip_ice_surf_mass type="real">0.0</precip_ice_surf_mass>
+    <precip_liq_surf_mass type="real">0.0</precip_liq_surf_mass>
+    <sfc_flux_dif_nir type="real">0.0</sfc_flux_dif_nir>
+    <sfc_flux_dif_vis type="real">0.0</sfc_flux_dif_vis>
+    <sfc_flux_dir_nir type="real">0.0</sfc_flux_dir_nir>
+    <sfc_flux_dir_vis type="real">0.0</sfc_flux_dir_vis>
+    <sfc_flux_lw_dn type="real">0.0</sfc_flux_lw_dn>
+    <sfc_flux_sw_net type="real">0.0</sfc_flux_sw_net>
+    <!-- end empty fields needed for Kessler -->
+
     <fraction_landuse type="real" doc="Fractional land use for drydeposition of gasses and aerosols [fraction]">0.0</fraction_landuse>
     <!-- default ne1024 initial condition files do not have these, so init to zero here -->
     <!-- TODO: delete this once we can tell the AD that some fields can be inited by procs -->
@@ -770,7 +777,7 @@ be lost if SCREAM_HACK_XML is not enabled.
 
   <!-- driver_options options for scream -->
   <driver_options>
-    <atmosphere_dag_verbosity_level>0</atmosphere_dag_verbosity_level>
+    <atmosphere_dag_verbosity_level>5</atmosphere_dag_verbosity_level>
     <save_field_manager_content type="logical"
                                 doc="Saves a dictionary of the FM fields to file">
       false

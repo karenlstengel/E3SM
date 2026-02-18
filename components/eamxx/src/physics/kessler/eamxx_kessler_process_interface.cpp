@@ -193,8 +193,8 @@ void KesslerMicrophysics::run_impl (const double dt )
   auto const qr_dry_mmr = get_field_out("qr").get_view<Spack**>();
 
   // Get lyr_surf, lyr_toa
-  const int lyr_surf = 0;
-  const int lyr_toa = m_num_levs - 1;
+  const int lyr_surf = 1;
+  const int lyr_toa = m_num_levs;
 
   m_atm_logger->info("[EAMxx] kessler run_impl: ");
   
@@ -242,7 +242,7 @@ void KesslerMicrophysics::run_impl (const double dt )
 
         // qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n]= PF::calculate_drymmr_from_wetmmr_dp_based(qr(icol, klev / Spack::n)[klev % Spack::n],pseudo_density(icol, klev / Spack::n)[klev % Spack::n],pseudo_density_dry(icol, klev / Spack::n)[klev % Spack::n]);
         qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_drymmr_from_wetmmr(qr(icol, klev / Spack::n)[klev % Spack::n],qv(icol, klev / Spack::n)[klev % Spack::n]);
-
+        m_atm_logger->info("[EAMxx] kessler run_impl qr_dry_mmr: " + std::to_string(qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n]));
       }
   ); // end parallel for vmr
 

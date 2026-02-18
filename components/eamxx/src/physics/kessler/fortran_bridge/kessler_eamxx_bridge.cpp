@@ -35,16 +35,6 @@ namespace scream {
         // Need to transpose to match how Fortran handles things
         params_in.transpose<ekat::TransposeDirection::c2f>(pcols,pver);
         params_out.transpose<ekat::TransposeDirection::c2f>(pcols,pver); // needed for updated values
-
-        for(int i=0; i<pcols; ++i) {
-            for(int j=0; j<pver; ++j) {
-                // Just to check values before calling fortran
-                if (params_in.f_cpair(i,j) != params_in.f_cpair(0,0))
-                {
-                    printf("cpair(%d,%d) before f90 call: %f\n", i, j, params_in.f_cpair(i,j));
-                }
-            }
-        }
         
         kessler_eamxx_bridge_run_c(pcols, pver, dt, lyr_surf, lyr_toa, params_in.f_cpair.data(), 
                                                                         params_in.f_rair.data(), 

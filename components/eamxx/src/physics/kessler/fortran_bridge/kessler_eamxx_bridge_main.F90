@@ -91,33 +91,39 @@ subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, r
   real(kind_phys),    dimension(pcols,pver), intent(out)   :: relhum   ! Relative humidity in percent
 
   integer :: i,k
-  real(kind=c_real) :: relhum_max, pk_max, theta_max, qv_max
-
-  ! Call the Kessler run function
-  call kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, &
-        pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg)
-  
-  
-  relhum_max = 0.0
-  pk_max = 0.0
-  theta_max = 0.0
-  qv_max = 0.0
+  ! real(kind=c_real) :: relhum_max, pk_max, theta_max, qv_max
 
   do k = 1,pver
     do i = 1,ncol
-      relhum_max = max(relhum_max,relhum(i,k))
-      pk_max = max(pk_max,pk(i,k))
-      theta_max = max(theta_max,theta(i,k))
-      qv_max = max(qv_max,qv(i,k))
-    end do
+      write(*,*) "qr: ", qr(i,k)
+    end do 
   end do
 
-  if (masterproc) then
-    write(*,*) "RELHUM max: ", relhum_max
-    write(*,*) "pk max: ", pk_max
-    write(*,*) "theta max: ", theta_max
-    write(*,*) "qv max: ", qv_max
-  end if
+  ! Call the Kessler run function
+  ! call kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, &
+        ! pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg)
+  
+  
+  ! relhum_max = 0.0
+  ! pk_max = 0.0
+  ! theta_max = 0.0
+  ! qv_max = 0.0
+
+  ! do k = 1,pver
+  !   do i = 1,ncol
+  !     relhum_max = max(relhum_max,relhum(i,k))
+  !     pk_max = max(pk_max,pk(i,k))
+  !     theta_max = max(theta_max,theta(i,k))
+  !     qv_max = max(qv_max,qv(i,k))
+  !   end do
+  ! end do
+
+  ! if (masterproc) then
+    ! write(*,*) "RELHUM max: ", relhum_max
+    ! write(*,*) "pk max: ", pk_max
+    ! write(*,*) "theta max: ", theta_max
+    ! write(*,*) "qv max: ", qv_max
+  ! end if
   
 
   

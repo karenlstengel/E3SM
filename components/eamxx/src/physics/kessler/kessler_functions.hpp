@@ -189,7 +189,7 @@ struct KesslerMicrophysicsFunctions
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     void init(int ncol_in, int pver_in) {
-      Real init_fill_value = 0;
+      Real init_fill_value = 0.0;
 
       using MDPolicy = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
       MDPolicy mdp({0,0}, {ncol_in, pver_in});

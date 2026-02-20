@@ -229,22 +229,22 @@ void KesslerMicrophysics::run_impl (const double dt )
   // const auto gas_mol_weight = PC::MWH2O; // molar weight of water. or use get_gas_mol_weight() for different gas
 
   // I think only need to convert from wet to dry mmr before passing to kessler scheme and not to volume mixing ratios too
-  Kokkos::parallel_for(
-      "compute_dry_vmr", KT::RangePolicy(0, m_num_cols * nlevs),
-      KOKKOS_CLASS_LAMBDA(const int i) {
-        const int icol = i / nlevs;
-        const int klev = i % nlevs;
+  // Kokkos::parallel_for(
+  //     "compute_dry_vmr", KT::RangePolicy(0, m_num_cols * nlevs),
+  //     KOKKOS_CLASS_LAMBDA(const int i) {
+  //       const int icol = i / nlevs;
+  //       const int klev = i % nlevs;
 
-        qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_drymmr_from_wetmmr(qv(icol, klev / Spack::n)[klev % Spack::n],qv(icol, klev / Spack::n)[klev % Spack::n]);
-        // qv(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_vmr_from_mmr(gas_mol_weight, qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], qv(icol, klev / Spack::n)[klev % Spack::n]);
+  //       qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_drymmr_from_wetmmr(qv(icol, klev / Spack::n)[klev % Spack::n],qv(icol, klev / Spack::n)[klev % Spack::n]);
+  //       // qv(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_vmr_from_mmr(gas_mol_weight, qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], qv(icol, klev / Spack::n)[klev % Spack::n]);
 
-        qc_dry_mmr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_drymmr_from_wetmmr(qc(icol, klev / Spack::n)[klev % Spack::n],qv(icol, klev / Spack::n)[klev % Spack::n]);
+  //       qc_dry_mmr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_drymmr_from_wetmmr(qc(icol, klev / Spack::n)[klev % Spack::n],qv(icol, klev / Spack::n)[klev % Spack::n]);
 
-        // qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n]= PF::calculate_drymmr_from_wetmmr_dp_based(qr(icol, klev / Spack::n)[klev % Spack::n],pseudo_density(icol, klev / Spack::n)[klev % Spack::n],pseudo_density_dry(icol, klev / Spack::n)[klev % Spack::n]);
-        qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_drymmr_from_wetmmr(qr(icol, klev / Spack::n)[klev % Spack::n],qv(icol, klev / Spack::n)[klev % Spack::n]);
-        m_atm_logger->info("[EAMxx] kessler run_impl qr_dry_mmr: " + std::to_string(qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n]));
-      }
-  ); // end parallel for vmr
+  //       // qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n]= PF::calculate_drymmr_from_wetmmr_dp_based(qr(icol, klev / Spack::n)[klev % Spack::n],pseudo_density(icol, klev / Spack::n)[klev % Spack::n],pseudo_density_dry(icol, klev / Spack::n)[klev % Spack::n]);
+  //       qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_drymmr_from_wetmmr(qr(icol, klev / Spack::n)[klev % Spack::n],qv(icol, klev / Spack::n)[klev % Spack::n]);
+  //       m_atm_logger->info("[EAMxx] kessler run_impl qr_dry_mmr: " + std::to_string(qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n]));
+  //     }
+  // ); // end parallel for vmr
 
   // set up params_in struct
   params_in.rho = rho;
@@ -253,9 +253,9 @@ void KesslerMicrophysics::run_impl (const double dt )
 
   // setup params_out struct
   params_out.theta = theta;
-  params_out.qv = qv_dry_mmr;
-  params_out.qc = qc_dry_mmr;
-  params_out.qr = qr_dry_mmr;
+  params_out.qv = qv;
+  params_out.qc = qc;
+  params_out.qr = qr;
   params_out.precl = precl;
   params_out.relhum = relhum;
 
@@ -306,24 +306,24 @@ void KesslerMicrophysics::run_impl (const double dt )
 
   kessler_eamxx_bridge_update(m_num_cols, m_num_levs, dt_timestep, params_in, params_out, params_update);
 
-  Kokkos::parallel_for(
-      "compute_wet_mmr", KT::RangePolicy(0, m_num_cols * nlevs),
-      KOKKOS_CLASS_LAMBDA(const int i) {
-        const int icol = i / nlevs;
-        const int klev = i % nlevs;
+  // Kokkos::parallel_for(
+  //     "compute_wet_mmr", KT::RangePolicy(0, m_num_cols * nlevs),
+  //     KOKKOS_CLASS_LAMBDA(const int i) {
+  //       const int icol = i / nlevs;
+  //       const int klev = i % nlevs;
 
-        // const auto qv_wet = PF::calculate_mmr_from_vmr(gas_mol_weight, qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
-        // params_out.qv(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr(qv_wet,pseudo_density(icol, klev / Spack::n)[klev % Spack::n],pseudo_density_dry(icol, klev / Spack::n)[klev % Spack::n]);
-        params_out.qv(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr(params_out.qv(icol, klev / Spack::n)[klev % Spack::n],params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
+  //       // const auto qv_wet = PF::calculate_mmr_from_vmr(gas_mol_weight, qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
+  //       // params_out.qv(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr(qv_wet,pseudo_density(icol, klev / Spack::n)[klev % Spack::n],pseudo_density_dry(icol, klev / Spack::n)[klev % Spack::n]);
+  //       params_out.qv(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr(params_out.qv(icol, klev / Spack::n)[klev % Spack::n],params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
         
-        // const auto qc_wet = PF::calculate_mmr_from_vmr(gas_mol_weight, qc_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], params_out.qc(icol, klev / Spack::n)[klev % Spack::n]);
-        params_out.qc(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr(params_out.qc(icol, klev / Spack::n)[klev % Spack::n],params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
+  //       // const auto qc_wet = PF::calculate_mmr_from_vmr(gas_mol_weight, qc_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], params_out.qc(icol, klev / Spack::n)[klev % Spack::n]);
+  //       params_out.qc(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr(params_out.qc(icol, klev / Spack::n)[klev % Spack::n],params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
        
-        // const auto qr_wet = PF::calculate_mmr_from_vmr(gas_mol_weight, qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], params_out.qr(icol, klev / Spack::n)[klev % Spack::n]);
-        params_out.qr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr(params_out.qr(icol, klev / Spack::n)[klev % Spack::n],params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
+  //       // const auto qr_wet = PF::calculate_mmr_from_vmr(gas_mol_weight, qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], params_out.qr(icol, klev / Spack::n)[klev % Spack::n]);
+  //       params_out.qr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr(params_out.qr(icol, klev / Spack::n)[klev % Spack::n],params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
        
-      }
-  ); // end parallel for mmr
+  //     }
+  // ); // end parallel for mmr
 
   // <scheme>qneg</scheme> // TODO - this just ensures non-negative values for certain fields. could use this for post condition checks
   // <scheme>geopotential_temp</scheme> // -> done above when calculating z_mid

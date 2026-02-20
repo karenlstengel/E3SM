@@ -5,7 +5,7 @@
 #PBS -k eod
 #PBS -q main
 #PBS -l walltime=00:20:00
-#PBS -l select=1:ncpus=64:mem=200GB
+#PBS -l select=1:ncpus=128:mem=200GB
 #PBS -M kstengel@ucar.edu
 #PBS -m e
 

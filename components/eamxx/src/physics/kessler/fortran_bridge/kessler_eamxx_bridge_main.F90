@@ -95,7 +95,13 @@ subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, r
 
   do k = 1,pver
     do i = 1,ncol
-      write(*,*) "qr: ", qr(i,k)
+      write(*,*) "qv(i,k): ", i, k, qv(i,k)
+      write(*,*) "qc(i,k): ", i, k, qc(i,k)
+      write(*,*) "qr(i,k): ", i, k, qr(i,k)
+      write(*,*) "theta(i,k): ", i, k, theta(i,k)
+      write(*,*) "pk(i,k): ", i, k, pk(i,k)
+      write(*,*) "rho(i,k): ", i, k, rho(i,k)
+      write(*,*) "cpair(i,k): ", i, k, cpair(i,k)
     end do 
   end do
 

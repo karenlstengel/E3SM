@@ -4,11 +4,13 @@ date
 
 user=kstengel
 scratch=/glade/derecho/scratch/$user/E3SM
+# scratch=/glade/campaign/cisl/asap/$user/
 
 ####################################################################
 # Machine, compset, etc.
 ####################################################################
 CCSMROOT=$scratch/E3SM
+# CCSMROOT=/glade/derecho/scratch/$user/E3SM/E3SM
 COMPSET=F2000-SCREAMv1-AQP1
 RESOLUTION=ne4_ne4
 DYCORE=theta-l_kokkos
@@ -48,8 +50,6 @@ cd $CASE_SCRIPTS_DIR
 
 ./xmlchange DEBUG=TRUE
 
-./xmlchange NUM_NODES=1
-
 ./xmlchange NTASKS=64
 ./xmlchange NTHRDS=1
 ./xmlchange ROOTPE='0'
@@ -60,9 +60,10 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange GMAKE_J='32'
 
 ./atmchange atm_log_level=debug
-# ./atmchange physics::atm_procs_list=mac_aero_mic # this removes the rrtmg physics
-./atmchange mac_aero_mic::atm_procs_list+=kessler #kessler
+./atmchange physics::atm_procs_list=mac_aero_mic # this removes the rrtmgp physics
+./atmchange mac_aero_mic::atm_procs_list=kessler #kessler
 ./atmchange save_field_manager_content=true
+./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control.yml
    
 ./case.build 
 
@@ -81,7 +82,7 @@ else
 fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
-./xmlchange STOP_N='2',STOP_OPTION='ndays'
+./xmlchange STOP_N='1',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
 ./xmlchange JOB_WALLCLOCK_TIME='00:15:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE

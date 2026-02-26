@@ -61,18 +61,20 @@ struct KesslerMicrophysicsFunctions
     view_2d<Spack>  rho;
     view_2d<Spack>  dz;
     view_2d<Spack>  pk;
+    view_2d<Spack>  z_mid;
+    view_2d<Spack>  z_int; // Helper, doesn't need a fortran view
 
     // Fortran holders/in Fortran format
     view_2dl<Real>  f_cpair;
     view_2dl<Real>  f_rair;
     view_2dl<Real>  f_rho;
-    view_2dl<Real>  f_dz;
     view_2dl<Real>  f_pk;
+    view_2dl<Real>  f_z_mid;
     // Set number of variables for ATMBufferManager
     static constexpr int num_1d_intgr = 0;  // number of 1D integer views
     static constexpr int num_1d_scalr = 0;  // number of 1D scalar views
-    static constexpr int num_2d_c     = 3;  // number of 2D field views for C++
-    static constexpr int num_2d_f     = 5;  // number of 2D field views for fortran
+    static constexpr int num_2d_c     = 5;  // number of 2D field views for C++ (rho, dz, pk, z_mid, z_int)
+    static constexpr int num_2d_f     = 5;  // number of 2D field views for fortran (cpair, rair, rho, pk, z_mid)
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     void init(int ncol_in, int pver_in) { // TODO - Kokko-ize this
@@ -91,11 +93,11 @@ struct KesslerMicrophysicsFunctions
           f_cpair(i,j) = cpair;
           f_rair(i,j) = Rair;
           f_rho(i,j) = init_fill_value;
-          f_dz(i,j) = init_fill_value;
           f_pk(i,j) = init_fill_value;
+          f_z_mid(i,j) = init_fill_value;
           }
         );
-        
+
     }; // End init
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
@@ -111,20 +113,11 @@ struct KesslerMicrophysicsFunctions
               const int icol            = i / pver_in;
               const int klev            = i % pver_in;
               f_rho(icol, klev) = rho(icol, klev / Spack::n)[klev % Spack::n];
-              f_dz(icol, klev) = dz(icol, klev / Spack::n)[klev % Spack::n];
+              // f_dz(icol, klev) = dz(icol, klev / Spack::n)[klev % Spack::n];
               f_pk(icol, klev) = pk(icol, klev / Spack::n)[klev % Spack::n];
+              f_z_mid(icol, klev) = z_mid(icol, klev / Spack::n)[klev % Spack::n];
             }
           );
-
-        // for (int i=0; i<ncol_in; ++i) {
-        //   for (int j=0; j<pver_in; ++j) {
-        //     // f_cpair(i,j) = cpair(i,j/Spack::n)[j%Spack::n];
-        //     // f_rair(i,j) = rair(i,j/Spack::n)[j%Spack::n];
-        //     f_rho(i,j) = rho(i,j/Spack::n)[j%Spack::n];
-        //     f_dz(i,j) = dz(i,j/Spack::n)[j%Spack::n];
-        //     f_pk(i,j) = pk(i,j/Spack::n)[j%Spack::n];
-        //   }
-        // }
       }
       if (D == ekat::TransposeDirection::f2c) {  // Not needed but leaving in just in case/temporary
 
@@ -134,21 +127,11 @@ struct KesslerMicrophysicsFunctions
               const int icol = i / pver_in;
               const int klev = i % pver_in;
               rho(icol, klev / Spack::n)[klev % Spack::n] = f_rho(icol, klev);
-              dz(icol, klev / Spack::n)[klev % Spack::n] = f_dz(icol, klev);
+              // dz(icol, klev / Spack::n)[klev % Spack::n] = f_dz(icol, klev);
               pk(icol, klev / Spack::n)[klev % Spack::n] = f_pk(icol, klev);
+              z_mid(icol, klev / Spack::n)[klev % Spack::n] = f_z_mid(icol, klev);
             }
           );
-
-        // for (int i=0; i<ncol_in; ++i) {
-        //   // mid-point level variables
-        //   for (int j=0; j<pver_in; ++j) {
-        //     // cpair(i,j/Spack::n)[j%Spack::n] = f_cpair(i,j);
-        //     // rair(i,j/Spack::n)[j%Spack::n] = f_rair(i,j);
-        //     rho(i,j/Spack::n)[j%Spack::n] = f_rho(i,j);
-        //     dz(i,j/Spack::n)[j%Spack::n] = f_dz(i,j);
-        //     pk(i,j/Spack::n)[j%Spack::n] = f_pk(i,j);
-        //   }
-        // }
       }
     }; // End transpose
 
@@ -183,9 +166,9 @@ struct KesslerMicrophysicsFunctions
 
     // Set number of variables for ATMBufferManager
     static constexpr int num_1d_intgr = 0;  // number of 1D integer views
-    static constexpr int num_1d_scalr = 1;  // number of 1D scalar views
-    static constexpr int num_2d_c     = 5;  // number of 2D fields
-    static constexpr int num_2d_f     = 5;  // number of 2D fields
+    static constexpr int num_1d_scalr = 1;  // number of 1D scalar views (precl or f_precl)
+    static constexpr int num_2d_c     = 5;  // number of 2D fields (theta, qv, qc, qr, relhum)
+    static constexpr int num_2d_f     = 5;  // number of 2D fields (f_theta, f_qv, f_qc, f_qr, f_relhum)
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     void init(int ncol_in, int pver_in) {
@@ -262,23 +245,23 @@ struct KesslerMicrophysicsFunctions
     view_2d<Spack>   temp_prev;
     view_2d<Spack>   temp;
     view_2d<Spack>   temp_tend;
-    view_2d<Spack>   z_mid;
-    view_2d<Spack>   z_int; // Helper, doesn't need to get copied to fortran
+    // view_2d<Spack>   z_mid;
+    // view_2d<Spack>   z_int; // Helper, doesn't need to get copied to fortran
     view_1d<Scalar>  phis;
     view_2d<Spack>   st_energy;
 
     view_2dl<Real>  f_temp_prev;
     view_2dl<Real>  f_temp;
     view_2dl<Real>  f_temp_tend;
-    view_2dl<Real>  f_z_mid;
+    // view_2dl<Real>  f_z_mid;
     view_1d<Real>   f_phis;
     view_2dl<Real>  f_st_energy;
 
     // Set number of variables for ATMBufferManager
     static constexpr int num_1d_intgr = 0;  // number of 1D integer views
-    static constexpr int num_1d_scalr = 1;  // number of 1D scalar views
-    static constexpr int num_2d_c     = 6;  // number of 2D fields
-    static constexpr int num_2d_f     = 5;  // number of 2D fields
+    static constexpr int num_1d_scalr = 1;  // number of 1D scalar views (phis or f_phis)
+    static constexpr int num_2d_c     = 4;  // number of 2D fields (temp_prev, temp, temp_tend, st_energy)
+    static constexpr int num_2d_f     = 4;  // number of 2D fields (f_temp_prev, f_temp, f_temp_tend, f_st_energy)
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     void init(int ncol_in, int pver_in) {
@@ -292,7 +275,7 @@ struct KesslerMicrophysicsFunctions
           f_temp_prev(i,j) = init_fill_value;
           f_temp(i,j) = init_fill_value;
           f_temp_tend(i,j) = init_fill_value;
-          f_z_mid(i,j) = init_fill_value;
+          // f_z_mid(i,j) = init_fill_value;
           f_st_energy(i,j) = init_fill_value;
 
           f_phis(i) = init_fill_value;
@@ -317,7 +300,7 @@ struct KesslerMicrophysicsFunctions
               f_temp_prev(icol, klev) = temp_prev(icol, klev / Spack::n)[klev % Spack::n];
               f_temp(icol, klev) = temp(icol, klev / Spack::n)[klev % Spack::n];
               f_temp_tend(icol, klev) = temp_tend(icol, klev / Spack::n)[klev % Spack::n];
-              f_z_mid(icol, klev) = z_mid(icol, klev / Spack::n)[klev % Spack::n];
+              // f_z_mid(icol, klev) = z_mid(icol, klev / Spack::n)[klev % Spack::n];
               f_st_energy(icol, klev) = st_energy(icol, klev / Spack::n)[klev % Spack::n];
               f_phis(icol) = phis(icol);
             }
@@ -334,7 +317,7 @@ struct KesslerMicrophysicsFunctions
               temp_prev(icol, klev / Spack::n)[klev % Spack::n] = f_temp_prev(icol, klev);
               temp(icol, klev / Spack::n)[klev % Spack::n] = f_temp(icol, klev);
               temp_tend(icol, klev / Spack::n)[klev % Spack::n] = f_temp_tend(icol, klev);
-              z_mid(icol, klev / Spack::n)[klev % Spack::n] = f_z_mid(icol, klev); // could skip this
+              // z_mid(icol, klev / Spack::n)[klev % Spack::n] = f_z_mid(icol, klev); // could skip this
               st_energy(icol, klev / Spack::n)[klev % Spack::n] = f_st_energy(icol, klev);
               phis(icol) = f_phis(icol); // could skip this
             }

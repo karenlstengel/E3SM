@@ -66,7 +66,7 @@ end subroutine kessler_eamxx_bridge_init_c
 
 !===================================================================================================
 
-subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, &
+subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z_mid, &
         pk, theta, qv, qc, qr, precl, relhum) bind(C, name="kessler_eamxx_bridge_run_c")
   ! Define uses here
   !-----------------------------------------------------------------------------
@@ -79,7 +79,7 @@ subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, r
   real(kind=c_real),  dimension(pcols,pver), intent(in)    :: cpair    ! Specific_heat_of_dry_air_at_constant_pressure (J/kg/K)
   real(kind_phys),    dimension(pcols,pver), intent(in)    :: rair     ! Gas constant of dry air (J/kg/K)
   real(kind_phys),    dimension(pcols,pver), intent(in)    :: rho      ! Dry air density (kg/m^3)
-  real(kind_phys),    dimension(pcols,pver), intent(in)    :: z        ! Heights of thermo. levels (m)
+  real(kind_phys),    dimension(pcols,pver), intent(in)    :: z_mid    ! Heights of thermo. levels (m)
   real(kind_phys),    dimension(pcols,pver), intent(in)    :: pk       ! Exner function (p/p0)**(R/cp)
 
   real(kind_phys),    dimension(pcols,pver), intent(inout) :: theta    ! Potential temperature (K)
@@ -93,21 +93,11 @@ subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, r
   integer :: i,k
   ! real(kind=c_real) :: relhum_max, pk_max, theta_max, qv_max
 
-  do k = 1,pver
-    do i = 1,ncol
-      write(*,*) "qv(i,k): ", i, k, qv(i,k)
-      write(*,*) "qc(i,k): ", i, k, qc(i,k)
-      write(*,*) "qr(i,k): ", i, k, qr(i,k)
-      write(*,*) "theta(i,k): ", i, k, theta(i,k)
-      write(*,*) "pk(i,k): ", i, k, pk(i,k)
-      write(*,*) "rho(i,k): ", i, k, rho(i,k)
-      write(*,*) "cpair(i,k): ", i, k, cpair(i,k)
-    end do 
-  end do
+  ! real(kind=c_real) :: qv_sum, qc_sum, qr_sum
 
   ! Call the Kessler run function
-  ! call kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, &
-        ! pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg)
+  call kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z_mid, &
+        pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg)
   
   
   ! relhum_max = 0.0

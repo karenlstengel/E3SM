@@ -16,7 +16,7 @@ extern "C" {
 
     void kessler_eamxx_bridge_update_init_c(Int pcols, Int pver, Real gravit_in);
 
-    void kessler_eamxx_bridge_run_c(Int pcols, Int nz, double dt, Int lyr_surf, Int lyr_toa, Real* cpair, Real* rair, Real* rho, Real* z, Real* pk, Real* theta, Real* qv, Real* qc, Real* qr, Real* precl, Real* relhum); 
+    void kessler_eamxx_bridge_run_c(Int pcols, Int nz, double dt, Int lyr_surf, Int lyr_toa, Real* cpair, Real* rair, Real* rho, Real* z_mid, Real* pk, Real* theta, Real* qv, Real* qc, Real* qr, Real* precl, Real* relhum); 
 
     void kessler_eamxx_bridge_update_c(Int pcols, Int nz, double dt, Real* cpair, Real* pk, Real* theta, Real* temp_prev, Real* temp, Real* temp_tend, Real* z_mid, Real* phis, Real* st_energy);
 } // extern "C" : end _c decls
@@ -36,10 +36,10 @@ namespace scream {
         params_in.transpose<ekat::TransposeDirection::c2f>(pcols,pver);
         params_out.transpose<ekat::TransposeDirection::c2f>(pcols,pver); // needed for updated values
         
-        kessler_eamxx_bridge_run_c(pcols, pver, dt, lyr_surf, lyr_toa, params_in.f_cpair.data(), 
-                                                                        params_in.f_rair.data(), 
-                                                                        params_in.f_rho.data(), 
-                                                                        params_in.f_dz.data(),
+        kessler_eamxx_bridge_run_c(pcols, pver, dt, lyr_surf, lyr_toa, params_in.f_cpair.data(),
+                                                                        params_in.f_rair.data(),
+                                                                        params_in.f_rho.data(),
+                                                                        params_in.f_z_mid.data(),
                                                                         params_in.f_pk.data(), 
                                                                         params_out.f_theta.data(), 
                                                                         params_out.f_qv.data(), 
@@ -68,7 +68,7 @@ namespace scream {
                                                        params_update.f_temp_prev.data(),  
                                                        params_update.f_temp.data(), 
                                                        params_update.f_temp_tend.data(),
-                                                       params_update.f_z_mid.data(), 
+                                                       params_in.f_z_mid.data(), 
                                                        params_update.f_phis.data(), 
                                                        params_update.f_st_energy.data());
 

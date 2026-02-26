@@ -126,7 +126,7 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
 {
   m_atm_logger->info("[EAMxx] kessler processes initialize_impl: ");
 
-  // Set post condition checks
+  // Set post condition checks (these are taken care of by HOMME)
   // <scheme>check_energy_zero_fluxes</scheme>
   // <scheme>check_energy_scaling</scheme>
   // <scheme>check_energy_chng</scheme>
@@ -193,8 +193,8 @@ void KesslerMicrophysics::run_impl (const double dt )
   auto const qr_dry_mmr = get_field_out("qr").get_view<Spack**>();
 
   // Get lyr_surf, lyr_toa
-  const int lyr_surf = 1;
-  const int lyr_toa = m_num_levs;
+  const int lyr_surf = m_num_levs;
+  const int lyr_toa = 1;
 
   m_atm_logger->info("[EAMxx] kessler run_impl: ");
   
@@ -259,32 +259,10 @@ void KesslerMicrophysics::run_impl (const double dt )
   params_out.precl = precl;
   params_out.relhum = relhum;
 
-  // Initialize fortran data holders in struct
-  params_in.init(m_num_cols, m_num_levs); 
-  params_out.init(m_num_cols, m_num_levs); 
+  // Need phis for z_mid computation
+  auto phis = get_field_out("phis").get_view<Real*>();
 
-  double dt_timestep = dt;
-  m_atm_logger->info("[EAMxx] kessler dt: " + std::to_string(dt_timestep));
-
-  kessler_eamxx_bridge_run(m_num_cols, m_num_levs, dt_timestep, lyr_surf, lyr_toa, params_in, params_out);  
-  
-  // <scheme>kessler_update</scheme> // updates st_energy & temperature related things
-  auto T_mid_prev = get_field_out("T_mid_prev").get_view<Spack**>();
-  auto T_mid_tend = get_field_out("T_mid_tend").get_view<Spack**>();
-  auto st_energy =  get_field_out("st_energy").get_view<Spack**>();
-  auto phis =       get_field_out("phis").get_view<Real*>();
-
-  // setup params_update struct
-  params_update.st_energy = st_energy;
-  params_update.temp = T_mid;
-  params_update.temp_prev = T_mid_prev;
-  params_update.temp_tend = T_mid_tend;
-  params_update.phis = phis;
-
-  // Initialize fortran data holders in struct
-  params_update.init(m_num_cols, m_num_levs);
-
-  // Compute z_mid (see what ZM does and do that)
+  // Compute z_mid and z_int into params_in (needed by kessler_run for heights)
   // calculate_z_int() contains a team-level parallel_scan, which requires a special policy
   using TPF = ekat::TeamPolicyFactory<KT::ExeSpace>;
   const int nlev_packs   = ekat::npack<Spack>(m_num_levs);
@@ -293,9 +271,9 @@ void KesslerMicrophysics::run_impl (const double dt )
   Kokkos::parallel_for(scan_policy, KOKKOS_CLASS_LAMBDA (const KT::MemberType& team) {
     const int i = team.league_rank();
 
-    auto z_mid_i = ekat::subview(params_update.z_mid, i);
+    auto z_mid_i = ekat::subview(params_in.z_mid, i);
     auto dz_i = ekat::subview(params_in.dz, i);
-    auto z_int_i = ekat::subview(params_update.z_int, i);
+    auto z_int_i = ekat::subview(params_in.z_int, i);
     Real z_surf = phis(i)/(PC::gravit);
 
     PF::calculate_z_int(team, m_num_levs, dz_i, z_surf, z_int_i);
@@ -303,6 +281,31 @@ void KesslerMicrophysics::run_impl (const double dt )
     PF::calculate_z_mid(team, m_num_levs, z_int_i, z_mid_i);
     team.team_barrier();
   });
+
+  // Initialize fortran data holders in struct
+  params_in.init(m_num_cols, m_num_levs);
+  params_out.init(m_num_cols, m_num_levs);
+
+  double dt_timestep = dt;
+
+  kessler_eamxx_bridge_run(m_num_cols, m_num_levs, dt_timestep, lyr_surf, lyr_toa, params_in, params_out);
+
+  // <scheme>kessler_update</scheme> // updates st_energy & temperature related things
+  auto T_mid_prev = get_field_out("T_mid_prev").get_view<Spack**>();
+  auto T_mid_tend = get_field_out("T_mid_tend").get_view<Spack**>();
+  auto st_energy =  get_field_out("st_energy").get_view<Spack**>();
+
+  // setup params_update struct
+  params_update.st_energy = st_energy;
+  params_update.temp = T_mid;
+  params_update.temp_prev = T_mid_prev;
+  params_update.temp_tend = T_mid_tend;
+  params_update.phis = phis;
+  // params_update.z_mid = params_in.z_mid; // reuse z_mid computed above
+  // params_update.z_int = params_in.z_int; // reuse z_int computed above
+
+  // Initialize fortran data holders in struct
+  params_update.init(m_num_cols, m_num_levs);
 
   kessler_eamxx_bridge_update(m_num_cols, m_num_levs, dt_timestep, params_in, params_out, params_update);
 
@@ -325,13 +328,13 @@ void KesslerMicrophysics::run_impl (const double dt )
   //     }
   // ); // end parallel for mmr
 
-  // <scheme>qneg</scheme> // TODO - this just ensures non-negative values for certain fields. could use this for post condition checks
+  // <scheme>qneg</scheme> // this is taken care of by the postcondition checks we have in place for qc, qr, and qi (these checks will set any negative values to 0.0)
   // <scheme>geopotential_temp</scheme> // -> done above when calculating z_mid
 
-  // <scheme>sima_state_diagnostics</scheme> // -> just writes fields to file 
-  // <>scheme>kessler_diagnostics</scheme> // -> only writes out precl field to file 
+  // <scheme>sima_state_diagnostics</scheme> // -> just writes fields to file (taken care of by EAMxx & set in the output_fields.yml file)
+  // <>scheme>kessler_diagnostics</scheme> // -> only writes out precl field to file (taken care of by EAMxx & set in the output_fields.yml file)
 
-  // <scheme>thermo_water_update</scheme> // TODO - computes enthalpy using cpair (I think computed by the energy fixer provided by homme)
+  // <scheme>thermo_water_update</scheme> // computes enthalpy using cpair (I think computed by the energy fixer provided by homme)
 
   // <!-- MPAS and SE specific scaling of temperature for enforcing energy consistency:
   //       First, calculate the scaling based off cp_or_cv_dycore (from cam_thermo_water_update)
@@ -364,7 +367,7 @@ void KesslerMicrophysics::run_impl (const double dt )
   // <scheme>apply_tendency_of_air_temperature (nz, t_tend, temp, dtdT_total, dt, errcode, errmsg) TODO ? -> updates dtdT_total
 
   // <!-- Tendency diagnostics -->
-  // <scheme>sima_tend_diagnostics</scheme> // -> only writes out dTdt_total, dudt_total, dvdt_total to file 
+  // <scheme>sima_tend_diagnostics</scheme> // -> only writes out dTdt_total, dudt_total, dvdt_total to file. Can be set in the output_fields.yml file and taken care of by EAMxx
 
     // Update with the new values from the run
     Kokkos::parallel_for("update_output_1d",m_num_cols, KOKKOS_LAMBDA (const int i) {
@@ -504,11 +507,12 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
   Real* r_mem = reinterpret_cast<Real*>(r1_mem);
   //----------------------------------------------------------------------------
   // 2D "f_" views
-  KMF::view_2dl<Real>* midlv_f_ptrs[num_2d_midlv_f]  = { &params_in.f_cpair, 
-                                                      &params_in.f_rair, 
-                                                      &params_in.f_rho, 
-                                                      &params_in.f_dz, 
+  KMF::view_2dl<Real>* midlv_f_ptrs[num_2d_midlv_f]  = { &params_in.f_cpair,
+                                                      &params_in.f_rair,
+                                                      &params_in.f_rho,
+                                                      // &params_in.f_dz,
                                                       &params_in.f_pk,
+                                                      &params_in.f_z_mid,
                                                       &params_out.f_theta,
                                                       &params_out.f_qv,
                                                       &params_out.f_qc,
@@ -517,7 +521,7 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
                                                       &params_update.f_temp_prev,
                                                       &params_update.f_temp,
                                                       &params_update.f_temp_tend,
-                                                      &params_update.f_z_mid,
+                                                      // &params_update.f_z_mid,
                                                       &params_update.f_st_energy
                                                     };
   for (int i=0; i<num_2d_midlv_f; ++i) {
@@ -528,9 +532,11 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
   Spack* spk_mem = reinterpret_cast<Spack*>(r_mem);
   //----------------------------------------------------------------------------
   // 2D views 
-  KMF::view_2d<Spack>* midlv_c_ptrs[num_2d_midlv_c]  = { &params_in.rho, 
-                                                      &params_in.dz, 
+  KMF::view_2d<Spack>* midlv_c_ptrs[num_2d_midlv_c]  = { &params_in.rho,
+                                                      &params_in.dz,
                                                       &params_in.pk,
+                                                      &params_in.z_mid,
+                                                      &params_in.z_int,
                                                       &params_out.theta,
                                                       &params_out.qv,
                                                       &params_out.qc,
@@ -539,8 +545,8 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
                                                       &params_update.temp_prev,
                                                       &params_update.temp,
                                                       &params_update.temp_tend,
-                                                      &params_update.z_mid,
-                                                      &params_update.z_int,
+                                                      // &params_update.z_mid,
+                                                      // &params_update.z_int,
                                                       &params_update.st_energy
                                                     };
   for (int i=0; i<num_2d_midlv_c; ++i) {

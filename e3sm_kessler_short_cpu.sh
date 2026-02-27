@@ -37,8 +37,8 @@ cd $CCSMROOT/cime/scripts
 
 ./create_newcase --case ${CASE_NAME} --output-root ${CASE_ROOT} --script-root ${CASE_SCRIPTS_DIR} \
                --handle-preexisting-dirs u --compset ${COMPSET} --res ${RESOLUTION} --machine ${MACH} \
-               --compiler ${MYCOMPILER} --project NTDD0004 --walltime "00:59:00" --verbose -q ${QUEUE_NAME} #\
-               #--user-mods-dir ${CCSMROOT}/components/eamxx//cime_config/testdefs/testmods_dirs/eamxx/output/preset/2 ${CCSMROOT}/components/eamxx//cime_config/testdefs/testmods_dirs/eamxx/L72 
+               --compiler ${MYCOMPILER} --project NTDD0004 --walltime "00:59:00" --verbose -q ${QUEUE_NAME} \
+               --user-mods-dir ${CCSMROOT}/components/eamxx//cime_config/testdefs/testmods_dirs/eamxx/output/preset/2 ${CCSMROOT}/components/eamxx//cime_config/testdefs/testmods_dirs/eamxx/L72 
 
 ####################################################################
 # Configure & Compile
@@ -51,6 +51,7 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange DEBUG=TRUE
 
 ./xmlchange NTASKS=128
+# ./xmlchange NUM_NODES=2
 ./xmlchange NTHRDS=1
 ./xmlchange ROOTPE='0'
 
@@ -64,12 +65,14 @@ cd $CASE_SCRIPTS_DIR
 ./atmchange mac_aero_mic::atm_procs_list=kessler #kessler
 ./atmchange save_field_manager_content=true
 ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control.yml
-   
+./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/screami_aquaplanet_ne30np4L72_20220823.nc
+./atmchange grids_manager::vertical_coordinate_filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/vertical_coordinates_L72_20220927.nc
+
 ./case.build 
 
-#####################################################################
-# Run E3SM
-#####################################################################
+####################################################################
+Run E3SM
+####################################################################
 cd $CASE_SCRIPTS_DIR
 
 ./xmlchange RUN_TYPE="startup"

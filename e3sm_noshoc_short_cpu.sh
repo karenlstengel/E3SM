@@ -9,15 +9,16 @@ scratch=/glade/derecho/scratch/$user/E3SM
 # Machine, compset, etc.
 ####################################################################
 CCSMROOT=$scratch/E3SM
-COMPSET=F2000-SCREAMv1-AQP1 #F20TR-SCREAMv1
+COMPSET=F2000-SCREAMv1-AQP1
 RESOLUTION=ne4_ne4
 DYCORE=theta-l_kokkos
 MACH=derecho
-MYCOMPILER=nvidiagpu
+MYCOMPILER=nvidia
 QUEUE_NAME=main
+# RESOURCES=1:ncpus=32:mem=100GB
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="kessler_short_eamxx_gpu"
+CASE_NAME="AQP1_ne4_eamxx_noshoc_nvidia_cpu"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -47,31 +48,26 @@ cd $CASE_SCRIPTS_DIR
 
 ./xmlchange DEBUG=TRUE
 
-./xmlchange NTASKS=4
+./xmlchange NUM_NODES=1
+
+./xmlchange NTASKS=64
 ./xmlchange NTHRDS=1
-./xmlchange NGPUS_PER_NODE=4
-./xmlchange GPU_TYPE=a100 # NVIDIA A100 GPUs in Derecho
-./xmlchange OPENACC_GPU_OFFLOAD=FALSE
-./xmlchange OPENMP_GPU_OFFLOAD=FALSE
-./xmlchange KOKKOS_GPU_OFFLOAD=TRUE
-./xmlchange OVERSUBSCRIBE_GPU=FALSE
 ./xmlchange ROOTPE='0'
-./xmlchange DOUT_S=false
-# ./xmlchange DOUT_S_ROOT=${CASE_ARCHIVE_DIR}
 
 ./case.setup
 
 ./xmlchange CAM_TARGET=$DYCORE
 ./xmlchange GMAKE_J='32'
 
-# Turn off all other pyhsics except Kessler
 ./atmchange atm_log_level=debug
-./atmchange physics::atm_procs_list=mac_aero_mic # this removes the rrtmgp physics
-./atmchange mac_aero_mic::atm_procs_list=kessler #kessler
+# ./atmchange physics::atm_procs_list=mac_aero_mic # this removes the rrtmg physics
+./atmchange mac_aero_mic::atm_procs_list=cld_fraction,spa,p3 # no shoc
 ./atmchange save_field_manager_content=true
-./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control.yml
+# ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control.yml
+./atmquery
    
 ./case.build 
+
 #####################################################################
 # Run E3SM
 #####################################################################
@@ -88,7 +84,7 @@ fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
 ./xmlchange STOP_N='2',STOP_OPTION='ndays'
-./xmlchange JOB_WALLCLOCK_TIME='00:30:00'
+./xmlchange JOB_WALLCLOCK_TIME='00:15:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE
 
@@ -100,4 +96,4 @@ cat << EOF >> user_nl_elm
 EOF
 fi
 
-# ./case.submit
+./case.submit

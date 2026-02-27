@@ -10,6 +10,8 @@ CAM Fortran routines are in: [this repo](https://github.com/ESCOMP/atmospheric_p
 
 We are using the Kessler provided in: [atmospheric_physics](git@github.com:ESCOMP/atmospheric_physics.git). 
 
+Note that additional initial conditions files might need to be downloaded from https://web.lcrc.anl.gov/public/e3sm/inputdata/atm/scream/init/. 
+
 ## Design & Code Layout
 
 The Kessler suite is in `atmospheric_physics/schemes/kessler`. 

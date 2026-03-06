@@ -634,7 +634,7 @@ be lost if SCREAM_HACK_XML is not enabled.
     <filename hgrid="ne1024np4" COMPSET=".*SCREAM%MAM4xx.*">${DIN_LOC_ROOT}/atm/scream/init/screami_mam4xx_ne1024np4L128_20240513.nc</filename>
     <filename hgrid="ne1024np4" COMPSET=".*SCREAM%DYAMOND-2_ELM">${DIN_LOC_ROOT}/atm/scream/init/screami_ne1024np4L128_ifs-20200120-topoadjx6t_20221011.nc</filename>
     <filename hgrid="ne4np4" COMPSET=".*SCREAM%AQUA.*">${DIN_LOC_ROOT}/atm/scream/init/screami_aquaplanet_ne4np4L72_20220823.nc</filename>
-    <filename hgrid="ne30np4" nlev="72" COMPSET=".*SCREAM%AQUA.*">${DIN_LOC_ROOT}/atm/scream/init/screami_ne30np4L72_20220823.nc</filename>
+    <filename hgrid="ne30np4" nlev="72" COMPSET=".*SCREAM%AQUA.*">${DIN_LOC_ROOT}/atm/scream/init/screami_aquaplanet_ne30np4L72_20220823.nc</filename> <!-- https://web.lcrc.anl.gov/public/e3sm/inputdata/atm/scream/init/ -->
     <filename hgrid="ne0np4_conus_x4v1_lowcon" nlev="72">${DIN_LOC_ROOT}/atm/scream/init/screami_conusx4v1np4L72-topo12x_013023.nc</filename>
     <filename hgrid="ne0np4_CAx32v1" nlev="128">${DIN_LOC_ROOT}/atm/scream/init/screami_CAx32v1np4L128_hiccup-era5-20150101_041823.ncpdq.nc</filename>
 

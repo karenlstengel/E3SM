@@ -5,8 +5,13 @@
 #PBS -k eod
 #PBS -q main
 #PBS -l walltime=00:20:00
-#PBS -l select=1:ncpus=128:mem=200GB
+#PBS -l select=1:ncpus=64:mem=200GB:ngpus=4:gpu_type=a100
 #PBS -M kstengel@ucar.edu
 #PBS -m e
 
-./e3sm_kessler_short_cpu.sh
+# -l select=1:ncpus=128:mem=200GB
+# ./e3sm_kessler_short_cpu.sh
+
+
+# -l select=1:ncpus=64:mem=480GB:ngpus=4:gpu_type=a100
+./e3sm_kessler_short_gpu.sh

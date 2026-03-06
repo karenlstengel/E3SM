@@ -226,26 +226,6 @@ void KesslerMicrophysics::run_impl (const double dt )
       }
     );
 
-  // const auto gas_mol_weight = PC::MWH2O; // molar weight of water. or use get_gas_mol_weight() for different gas
-
-  // I think only need to convert from wet to dry mmr before passing to kessler scheme and not to volume mixing ratios too
-  // Kokkos::parallel_for(
-  //     "compute_dry_vmr", KT::RangePolicy(0, m_num_cols * nlevs),
-  //     KOKKOS_CLASS_LAMBDA(const int i) {
-  //       const int icol = i / nlevs;
-  //       const int klev = i % nlevs;
-
-  //       qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_drymmr_from_wetmmr(qv(icol, klev / Spack::n)[klev % Spack::n],qv(icol, klev / Spack::n)[klev % Spack::n]);
-  //       // qv(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_vmr_from_mmr(gas_mol_weight, qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], qv(icol, klev / Spack::n)[klev % Spack::n]);
-
-  //       qc_dry_mmr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_drymmr_from_wetmmr(qc(icol, klev / Spack::n)[klev % Spack::n],qv(icol, klev / Spack::n)[klev % Spack::n]);
-
-  //       // qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n]= PF::calculate_drymmr_from_wetmmr_dp_based(qr(icol, klev / Spack::n)[klev % Spack::n],pseudo_density(icol, klev / Spack::n)[klev % Spack::n],pseudo_density_dry(icol, klev / Spack::n)[klev % Spack::n]);
-  //       qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_drymmr_from_wetmmr(qr(icol, klev / Spack::n)[klev % Spack::n],qv(icol, klev / Spack::n)[klev % Spack::n]);
-  //       m_atm_logger->info("[EAMxx] kessler run_impl qr_dry_mmr: " + std::to_string(qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n]));
-  //     }
-  // ); // end parallel for vmr
-
   // set up params_in struct
   params_in.rho = rho;
   params_in.dz = dz;
@@ -268,27 +248,28 @@ void KesslerMicrophysics::run_impl (const double dt )
   const int nlev_packs   = ekat::npack<Spack>(m_num_levs);
   const auto scan_policy = TPF::get_thread_range_parallel_scan_team_policy(m_num_cols, nlev_packs);
 
+  printf("nlevs: %d \n", nlevs);
   Kokkos::parallel_for(scan_policy, KOKKOS_CLASS_LAMBDA (const KT::MemberType& team) {
     const int i = team.league_rank();
 
     auto z_mid_i = ekat::subview(params_in.z_mid, i);
     auto dz_i = ekat::subview(params_in.dz, i);
     auto z_int_i = ekat::subview(params_in.z_int, i);
-    Real z_surf = phis(i)/(PC::gravit);
+    Real z_surf = 0.0; // phis(i)/(PC::gravit);
 
-    PF::calculate_z_int(team, m_num_levs, dz_i, z_surf, z_int_i);
+    PF::calculate_z_int(team, nlevs, dz_i, z_surf, z_int_i);
     team.team_barrier();
-    PF::calculate_z_mid(team, m_num_levs, z_int_i, z_mid_i);
+    PF::calculate_z_mid(team, nlevs, z_int_i, z_mid_i);
     team.team_barrier();
   });
 
   // Initialize fortran data holders in struct
-  params_in.init(m_num_cols, m_num_levs);
-  params_out.init(m_num_cols, m_num_levs);
+  params_in.init(m_num_cols, nlevs);
+  params_out.init(m_num_cols, nlevs);
 
   double dt_timestep = dt;
 
-  kessler_eamxx_bridge_run(m_num_cols, m_num_levs, dt_timestep, lyr_surf, lyr_toa, params_in, params_out);
+  kessler_eamxx_bridge_run(m_num_cols, nlevs, dt_timestep, lyr_surf, lyr_toa, params_in, params_out);
 
   // <scheme>kessler_update</scheme> // updates st_energy & temperature related things
   auto T_mid_prev = get_field_out("T_mid_prev").get_view<Spack**>();
@@ -301,32 +282,11 @@ void KesslerMicrophysics::run_impl (const double dt )
   params_update.temp_prev = T_mid_prev;
   params_update.temp_tend = T_mid_tend;
   params_update.phis = phis;
-  // params_update.z_mid = params_in.z_mid; // reuse z_mid computed above
-  // params_update.z_int = params_in.z_int; // reuse z_int computed above
 
   // Initialize fortran data holders in struct
-  params_update.init(m_num_cols, m_num_levs);
+  params_update.init(m_num_cols, nlevs);
 
-  kessler_eamxx_bridge_update(m_num_cols, m_num_levs, dt_timestep, params_in, params_out, params_update);
-
-  // Kokkos::parallel_for(
-  //     "compute_wet_mmr", KT::RangePolicy(0, m_num_cols * nlevs),
-  //     KOKKOS_CLASS_LAMBDA(const int i) {
-  //       const int icol = i / nlevs;
-  //       const int klev = i % nlevs;
-
-  //       // const auto qv_wet = PF::calculate_mmr_from_vmr(gas_mol_weight, qv_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
-  //       // params_out.qv(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr(qv_wet,pseudo_density(icol, klev / Spack::n)[klev % Spack::n],pseudo_density_dry(icol, klev / Spack::n)[klev % Spack::n]);
-  //       params_out.qv(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr(params_out.qv(icol, klev / Spack::n)[klev % Spack::n],params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
-        
-  //       // const auto qc_wet = PF::calculate_mmr_from_vmr(gas_mol_weight, qc_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], params_out.qc(icol, klev / Spack::n)[klev % Spack::n]);
-  //       params_out.qc(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr(params_out.qc(icol, klev / Spack::n)[klev % Spack::n],params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
-       
-  //       // const auto qr_wet = PF::calculate_mmr_from_vmr(gas_mol_weight, qr_dry_mmr(icol, klev / Spack::n)[klev % Spack::n], params_out.qr(icol, klev / Spack::n)[klev % Spack::n]);
-  //       params_out.qr(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_wetmmr_from_drymmr(params_out.qr(icol, klev / Spack::n)[klev % Spack::n],params_out.qv(icol, klev / Spack::n)[klev % Spack::n]);
-       
-  //     }
-  // ); // end parallel for mmr
+  kessler_eamxx_bridge_update(m_num_cols, nlevs, dt_timestep, params_in, params_out, params_update);
 
   // <scheme>qneg</scheme> // this is taken care of by the postcondition checks we have in place for qc, qr, and qi (these checks will set any negative values to 0.0)
   // <scheme>geopotential_temp</scheme> // -> done above when calculating z_mid
@@ -372,7 +332,6 @@ void KesslerMicrophysics::run_impl (const double dt )
     // Update with the new values from the run
     Kokkos::parallel_for("update_output_1d",m_num_cols, KOKKOS_LAMBDA (const int i) {
       precl(i) = params_out.precl(i);
-      //phis(i) = params_update.phis(i);
       }
     );
 

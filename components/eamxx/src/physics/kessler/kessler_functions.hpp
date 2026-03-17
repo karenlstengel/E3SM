@@ -38,9 +38,9 @@ struct KesslerMicrophysicsFunctions
   template <typename S> using view_1d   = typename KT::template view_1d<S>;
   template <typename S> using view_2d   = typename KT::template view_2d<S>;
   template <typename S> using view_2dl  = typename KT::template lview<S**>;
-  // template <typename S> using uview_1d  = typename ekat::template Unmanaged<view_1d<S> >;
+  template <typename S> using uview_1d  = typename ekat::template Unmanaged<view_1d<S> >;
   // template <typename S> using uview_2d  = typename ekat::template Unmanaged<view_2d<S> >;
-  // template <typename S> using uview_2dl = typename ekat::template Unmanaged<view_2dl<S> >;
+  template <typename S> using uview_2dl = typename ekat::template Unmanaged<view_2dl<S> >;
 
   // ----------------------------------------
   // Structs
@@ -62,18 +62,18 @@ struct KesslerMicrophysicsFunctions
     view_2d<Spack>  dz;
     view_2d<Spack>  pk;
     view_2d<Spack>  z_mid;
-    view_2d<Spack>  z_int; // Helper, doesn't need a fortran view
+    view_2d<Spack>  z_int; // Helper, doesn't need a fortran view and is an interface variable. 
 
     // Fortran holders/in Fortran format
-    view_2dl<Real>  f_cpair;
-    view_2dl<Real>  f_rair;
-    view_2dl<Real>  f_rho;
-    view_2dl<Real>  f_pk;
-    view_2dl<Real>  f_z_mid;
+    uview_2dl<Real>  f_cpair;
+    uview_2dl<Real>  f_rair;
+    uview_2dl<Real>  f_rho;
+    uview_2dl<Real>  f_pk;
+    uview_2dl<Real>  f_z_mid;
     // Set number of variables for ATMBufferManager
     static constexpr int num_1d_intgr = 0;  // number of 1D integer views
     static constexpr int num_1d_scalr = 0;  // number of 1D scalar views
-    static constexpr int num_2d_c     = 5;  // number of 2D field views for C++ (rho, dz, pk, z_mid, z_int)
+    static constexpr int num_2d_c     = 4;  // number of 2D field views for C++ (rho, dz, pk, z_mid)
     static constexpr int num_2d_f     = 5;  // number of 2D field views for fortran (cpair, rair, rho, pk, z_mid)
 
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
@@ -157,12 +157,12 @@ struct KesslerMicrophysicsFunctions
     view_2d<Spack>  relhum;
 
     // For fortran (left layout) versions
-    view_2dl<Real>  f_theta;
-    view_2dl<Real>  f_qv;
-    view_2dl<Real>  f_qc;
-    view_2dl<Real>  f_qr;
-    view_1d<Real>   f_precl;  
-    view_2dl<Real>  f_relhum;
+    uview_2dl<Real>  f_theta;
+    uview_2dl<Real>  f_qv;
+    uview_2dl<Real>  f_qc;
+    uview_2dl<Real>  f_qr;
+    uview_1d<Real>   f_precl;  
+    uview_2dl<Real>  f_relhum;
 
     // Set number of variables for ATMBufferManager
     static constexpr int num_1d_intgr = 0;  // number of 1D integer views
@@ -250,12 +250,12 @@ struct KesslerMicrophysicsFunctions
     view_1d<Scalar>  phis;
     view_2d<Spack>   st_energy;
 
-    view_2dl<Real>  f_temp_prev;
-    view_2dl<Real>  f_temp;
-    view_2dl<Real>  f_temp_tend;
-    // view_2dl<Real>  f_z_mid;
-    view_1d<Real>   f_phis;
-    view_2dl<Real>  f_st_energy;
+    uview_2dl<Real>  f_temp_prev;
+    uview_2dl<Real>  f_temp;
+    uview_2dl<Real>  f_temp_tend;
+    // uview_2dl<Real>  f_z_mid;
+    uview_1d<Real>   f_phis;
+    uview_2dl<Real>  f_st_energy;
 
     // Set number of variables for ATMBufferManager
     static constexpr int num_1d_intgr = 0;  // number of 1D integer views

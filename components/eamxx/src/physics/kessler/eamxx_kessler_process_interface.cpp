@@ -152,7 +152,7 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
     auto ice_flux   = get_field_out("ice_flux").get_view<Real*>();
     auto heat_flux  = get_field_out("heat_flux").get_view<Real*>();
 
-    Kokkos::parallel_for("init_boundary_fluxes", m_num_cols, KOKKOS_LAMBDA(const int i) {
+    Kokkos::parallel_for("init_boundary_fluxes", m_num_cols, KOKKOS_CLASS_LAMBDA(const int i) {
       vapor_flux(i) = 0.0;
       water_flux(i) = 0.0;
       ice_flux(i)   = 0.0;
@@ -249,13 +249,14 @@ void KesslerMicrophysics::run_impl (const double dt )
   const auto scan_policy = TPF::get_thread_range_parallel_scan_team_policy(m_num_cols, nlev_packs);
 
   printf("nlevs: %d \n", nlevs);
+
   Kokkos::parallel_for(scan_policy, KOKKOS_CLASS_LAMBDA (const KT::MemberType& team) {
     const int i = team.league_rank();
 
     auto z_mid_i = ekat::subview(params_in.z_mid, i);
     auto dz_i = ekat::subview(params_in.dz, i);
     auto z_int_i = ekat::subview(params_in.z_int, i);
-    Real z_surf = 0.0; // phis(i)/(PC::gravit);
+    Real z_surf = 0.0; 
 
     PF::calculate_z_int(team, nlevs, dz_i, z_surf, z_int_i);
     team.team_barrier();
@@ -263,14 +264,25 @@ void KesslerMicrophysics::run_impl (const double dt )
     team.team_barrier();
   });
 
-  // Initialize fortran data holders in struct
+  Kokkos::parallel_for(
+    "Kessler_preprocess", KT::RangePolicy(0, m_num_cols * nlevs),
+    KOKKOS_CLASS_LAMBDA(const int i) {
+      const int icol = i / nlevs;
+      const int klev = i % nlevs;
+      printf("z_mid(%d, %d): %f \n", icol, klev, params_in.z_mid(icol, klev / Spack::n)[klev % Spack::n]);
+    }
+  );
+
+  // Initialize fortran data holders in struct; TODO - update all params related lines to match updated scheme when we switch over
   params_in.init(m_num_cols, nlevs);
   params_out.init(m_num_cols, nlevs);
 
   double dt_timestep = dt;
 
+  printf("pre kessler_eamxx_bridge_run:\n");
   kessler_eamxx_bridge_run(m_num_cols, nlevs, dt_timestep, lyr_surf, lyr_toa, params_in, params_out);
-
+  printf("post kessler_eamxx_bridge_run:\n");
+  
   // <scheme>kessler_update</scheme> // updates st_energy & temperature related things
   auto T_mid_prev = get_field_out("T_mid_prev").get_view<Spack**>();
   auto T_mid_tend = get_field_out("T_mid_tend").get_view<Spack**>();
@@ -283,7 +295,7 @@ void KesslerMicrophysics::run_impl (const double dt )
   params_update.temp_tend = T_mid_tend;
   params_update.phis = phis;
 
-  // Initialize fortran data holders in struct
+  // Initialize fortran data holders in struct ; TODO - remove these lines after struct cleanup
   params_update.init(m_num_cols, nlevs);
 
   kessler_eamxx_bridge_update(m_num_cols, nlevs, dt_timestep, params_in, params_out, params_update);
@@ -312,7 +324,7 @@ void KesslerMicrophysics::run_impl (const double dt )
     auto ice_flux   = get_field_out("ice_flux").get_view<Real*>();
     auto heat_flux  = get_field_out("heat_flux").get_view<Real*>();
 
-    Kokkos::parallel_for("check_energy_scaling", m_num_cols, KOKKOS_LAMBDA(const int i) {
+    Kokkos::parallel_for("check_energy_scaling", m_num_cols, KOKKOS_CLASS_LAMBDA(const int i) {
       vapor_flux(i) = 0.0;
       water_flux(i) = 0.0;
       ice_flux(i)   = 0.0;
@@ -330,12 +342,12 @@ void KesslerMicrophysics::run_impl (const double dt )
   // <scheme>sima_tend_diagnostics</scheme> // -> only writes out dTdt_total, dudt_total, dvdt_total to file. Can be set in the output_fields.yml file and taken care of by EAMxx
 
     // Update with the new values from the run
-    Kokkos::parallel_for("update_output_1d",m_num_cols, KOKKOS_LAMBDA (const int i) {
+    Kokkos::parallel_for("update_output_1d",m_num_cols, KOKKOS_CLASS_LAMBDA (const int i) {
       precl(i) = params_out.precl(i);
       }
     );
 
-    Kokkos::parallel_for("update_output_2d",KT::RangePolicy(0, m_num_cols * nlevs), KOKKOS_LAMBDA (const int idx) { // clean up
+    Kokkos::parallel_for("update_output_2d",KT::RangePolicy(0, m_num_cols * nlevs), KOKKOS_CLASS_LAMBDA (const int idx) { // clean up
       const int icol = idx/nlevs;
       const int klev = idx%nlevs;
 
@@ -379,7 +391,7 @@ void KesslerMicrophysics::finalize_impl()
 size_t KesslerMicrophysics::requested_buffer_size_in_bytes() const
 {
   const int nlevm_packs = ekat::npack<Spack>(m_num_levs);
-  // const int nlev_int_packs = ekat::npack<Spack>(m_num_levs+1);
+  const int nlev_int_packs = ekat::npack<Spack>(m_num_levs+1);
 
   // constexpr auto num_1d_intgr = KMF::params_in::num_1d_intgr + KMF::params_out::num_1d_intgr;
   // constexpr auto num_1d_scalr   = KMF::params_in::num_1d_scalr + KMF::params_out::num_1d_scalr + KMF::params_update::num_1d_scalr;
@@ -402,7 +414,8 @@ size_t KesslerMicrophysics::requested_buffer_size_in_bytes() const
 
   buffer_size+= KMF::params_out::num_1d_intgr * sizeof(Int)   * m_num_cols; // should be 0
   buffer_size+= KMF::params_out::num_1d_scalr * sizeof(Scalar)* m_num_cols; // should be 1
-  buffer_size+= KMF::params_out::num_2d_c * sizeof(Spack) * m_num_cols * nlevm_packs; // should be 5
+  buffer_size+= KMF::params_out::num_2d_c * sizeof(Spack) * m_num_cols * nlevm_packs; // should be 4
+  buffer_size+= 1 * sizeof(Spack) * m_num_cols * nlev_int_packs; // for z_int, which is an interface variable. 
 
   buffer_size+= KMF::params_update::num_1d_intgr * sizeof(Int)   * m_num_cols; // should be 0
   buffer_size+= KMF::params_update::num_1d_scalr * sizeof(Scalar)* m_num_cols; // should be 1
@@ -436,18 +449,18 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
   EKAT_REQUIRE_MSG(buffer_chk,"Error! Buffers size not sufficient.\n");
 
   const int nlev_mid_packs = ekat::npack<Spack>(m_num_levs);
-  // const int nlev_int_packs = ekat::npack<Spack>(m_num_levs+1);
+  const int nlev_int_packs = ekat::npack<Spack>(m_num_levs+1);
 
   // constexpr auto num_1d_intgr = KMF::params_in::num_1d_intgr + KMF::params_out::num_1d_intgr;
   constexpr auto num_1d_scalr   = KMF::params_in::num_1d_scalr + KMF::params_out::num_1d_scalr + KMF::params_update::num_1d_scalr;
   constexpr auto num_2d_midlv_c = KMF::params_in::num_2d_c + KMF::params_out::num_2d_c + KMF::params_update::num_2d_c;
   constexpr auto num_2d_midlv_f = KMF::params_in::num_2d_f + KMF::params_out::num_2d_f + KMF::params_update::num_2d_f;
-
+  constexpr auto num_2d_intlv_c = 1; // for z_int, which is an interface variable.
   
   Scalar* scl_mem = reinterpret_cast<Scalar*>(buffer_manager.get_memory());
   //----------------------------------------------------------------------------
   // device 1D integer variables
-  KMF::view_1d<Scalar>* ptrs_1d_scalr[num_1d_scalr]             = { &params_out.precl, &params_update.phis };
+  KMF::view_1d<Scalar>* ptrs_1d_scalr[num_1d_scalr] = { &params_out.precl, &params_update.phis };
   for (auto& v : ptrs_1d_scalr) {
     *v = KMF::view_1d<Scalar>(scl_mem, m_num_cols);
     scl_mem += v->size();
@@ -456,9 +469,9 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
   Real* r1_mem = reinterpret_cast<Real*>(scl_mem);
   //----------------------------------------------------------------------------
   // device 1D scalar scalars
-  KMF::view_1d<Real>* ptrs_1d_real[num_1d_scalr]          = { &params_out.f_precl, &params_update.f_phis};
+  KMF::uview_1d<Real>* ptrs_1d_real[num_1d_scalr] = { &params_out.f_precl, &params_update.f_phis};
   for (auto& v : ptrs_1d_real) {
-    *v = KMF::view_1d<Real>(r1_mem, m_num_cols);
+    *v = KMF::uview_1d<Real>(r1_mem, m_num_cols);
     r1_mem += v->size();
   } 
   //----------------------------------------------------------------------------
@@ -466,7 +479,7 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
   Real* r_mem = reinterpret_cast<Real*>(r1_mem);
   //----------------------------------------------------------------------------
   // 2D "f_" views
-  KMF::view_2dl<Real>* midlv_f_ptrs[num_2d_midlv_f]  = { &params_in.f_cpair,
+  KMF::uview_2dl<Real>* midlv_f_ptrs[num_2d_midlv_f] = { &params_in.f_cpair,
                                                       &params_in.f_rair,
                                                       &params_in.f_rho,
                                                       // &params_in.f_dz,
@@ -484,18 +497,18 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
                                                       &params_update.f_st_energy
                                                     };
   for (int i=0; i<num_2d_midlv_f; ++i) {
-    *midlv_f_ptrs[i] = KMF::view_2dl<Real>(r_mem, m_num_cols, m_num_levs);
+    *midlv_f_ptrs[i] = KMF::uview_2dl<Real>(r_mem, m_num_cols, m_num_levs);
     r_mem += midlv_f_ptrs[i]->size();
   }
   //----------------------------------------------------------------------------
   Spack* spk_mem = reinterpret_cast<Spack*>(r_mem);
   //----------------------------------------------------------------------------
   // 2D views 
-  KMF::view_2d<Spack>* midlv_c_ptrs[num_2d_midlv_c]  = { &params_in.rho,
+  KMF::view_2d<Spack>* midlv_c_ptrs[num_2d_midlv_c] = { &params_in.rho,
                                                       &params_in.dz,
                                                       &params_in.pk,
                                                       &params_in.z_mid,
-                                                      &params_in.z_int,
+                                                      // &params_in.z_int,
                                                       &params_out.theta,
                                                       &params_out.qv,
                                                       &params_out.qc,
@@ -512,6 +525,14 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
     *midlv_c_ptrs[i] = KMF::view_2d<Spack>(spk_mem, m_num_cols, nlev_mid_packs);
     spk_mem += midlv_c_ptrs[i]->size();
   }
+
+  // allocate z_int which is our only interface variable. 
+  KMF::view_2d<Spack>* intlv_c_ptrs[num_2d_intlv_c] = { &params_in.z_int };
+  for (int i=0; i<num_2d_intlv_c; ++i) {
+     *intlv_c_ptrs[i] = KMF::view_2d<Spack>(spk_mem, m_num_cols, nlev_int_packs);
+     spk_mem += intlv_c_ptrs[i]->size();
+  }
+
   //----------------------------------------------------------------------------
   Real* total_mem = reinterpret_cast<Real*>(spk_mem);
   size_t used_mem = (reinterpret_cast<Real*>(total_mem) - buffer_manager.get_memory())*sizeof(Real);

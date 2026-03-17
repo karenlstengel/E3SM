@@ -35,6 +35,10 @@ namespace scream {
         // Need to transpose to match how Fortran handles things
         params_in.transpose<ekat::TransposeDirection::c2f>(pcols,pver);
         params_out.transpose<ekat::TransposeDirection::c2f>(pcols,pver); // needed for updated values
+        printf("pre kessler_eamxx_bridge_run_c:\n");
+
+        printf("%f\n", params_in.f_z_mid.data()[0]);
+
         
         kessler_eamxx_bridge_run_c(pcols, pver, dt, lyr_surf, lyr_toa, params_in.f_cpair.data(),
                                                                         params_in.f_rair.data(),

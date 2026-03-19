@@ -5,7 +5,7 @@
 #PBS -k eod
 #PBS -q develop
 #PBS -l walltime=00:20:00
-#PBS -l select=1:ncpus=64:mem=200GB:ngpus=4:gpu_type=a100
+#PBS -l select=1:ncpus=64:mem=480GB:ngpus=4:gpu_type=a100
 #PBS -M kstengel@ucar.edu
 #PBS -m e
 

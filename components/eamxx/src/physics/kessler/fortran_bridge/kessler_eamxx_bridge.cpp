@@ -29,60 +29,40 @@ namespace scream {
         kessler_eamxx_bridge_update_init_c( pcols, pver, gravit_in);
     }
 
-    void kessler_eamxx_bridge_run( Int pcols, Int pver, double dt, Int lyr_surf, Int lyr_toa, KMF::params_in &params_in, KMF::params_out &params_out ){ 
+    void kessler_eamxx_bridge_run( Int pcols, Int pver, double dt, Int lyr_surf, Int lyr_toa, KMF::params_helpers &params_helpers, KMF::params_computed &params_computed ){ 
 
         //----------------------------------------------------------------------------
         // Need to transpose to match how Fortran handles things
-        params_in.transpose<ekat::TransposeDirection::c2f>(pcols,pver);
-        params_out.transpose<ekat::TransposeDirection::c2f>(pcols,pver); // needed for updated values
-        printf("pre kessler_eamxx_bridge_run_c:\n");
+        params_helpers.transpose<ekat::TransposeDirection::c2f>(pcols,pver);
+        params_computed.transpose<ekat::TransposeDirection::c2f>(pcols,pver);
 
-        printf("%f\n", params_in.f_z_mid.data()[0]);
-
+        kessler_eamxx_bridge_run_c(pcols, pver, dt, lyr_surf, lyr_toa, params_helpers.f_cpair.data(),
+                                                                       params_helpers.f_rair.data(),
+                                                                       params_helpers.f_rho.data(),
+                                                                       params_helpers.f_z_mid.data(),
+                                                                       params_helpers.f_pk.data(), 
+                                                                       params_computed.f_theta.data(), 
+                                                                       params_computed.f_qv.data(), 
+                                                                       params_computed.f_qc.data(), 
+                                                                       params_computed.f_qr.data(), 
+                                                                       params_computed.f_precl.data(), 
+                                                                       params_computed.f_relhum.data());
         
-        kessler_eamxx_bridge_run_c(pcols, pver, dt, lyr_surf, lyr_toa, params_in.f_cpair.data(),
-                                                                        params_in.f_rair.data(),
-                                                                        params_in.f_rho.data(),
-                                                                        params_in.f_z_mid.data(),
-                                                                        params_in.f_pk.data(), 
-                                                                        params_out.f_theta.data(), 
-                                                                        params_out.f_qv.data(), 
-                                                                        params_out.f_qc.data(), 
-                                                                        params_out.f_qr.data(), 
-                                                                        params_out.f_precl.data(), 
-                                                                        params_out.f_relhum.data());
-
+        kessler_eamxx_bridge_update_c(pcols, pver, dt, params_helpers.f_cpair.data(),
+                                                       params_helpers.f_pk.data(),
+                                                       params_computed.f_theta.data(), 
+                                                       params_computed.f_temp_prev.data(),  
+                                                       params_computed.f_temp.data(), 
+                                                       params_computed.f_temp_tend.data(),
+                                                       params_helpers.f_z_mid.data(), 
+                                                       params_helpers.f_phis.data(), 
+                                                       params_computed.f_st_energy.data());
         // Transpose back to C++ convention
-        params_out.transpose<ekat::TransposeDirection::f2c>(pcols,pver);
+        params_helpers.transpose<ekat::TransposeDirection::f2c>(pcols,pver);
+        params_computed.transpose<ekat::TransposeDirection::f2c>(pcols,pver);
 
         //----------------------------------------------------------------------------
-        } // end run
-
-    void kessler_eamxx_bridge_update(Int pcols, Int pver, double dt, KMF::params_in &params_in, KMF::params_out &params_out, KMF::params_update &params_update){ 
-        //----------------------------------------------------------------------------
-        // Need to transpose to match how Fortran handles things
-        params_in.transpose<ekat::TransposeDirection::c2f>(pcols,pver);
-        params_out.transpose<ekat::TransposeDirection::c2f>(pcols,pver);
-        params_update.transpose<ekat::TransposeDirection::c2f>(pcols,pver); // needed for updated values
-
-        // Call fortran update function here when available
-        kessler_eamxx_bridge_update_c(pcols, pver, dt, params_in.f_cpair.data(),
-                                                       params_in.f_pk.data(),
-                                                       params_out.f_theta.data(), 
-                                                       params_update.f_temp_prev.data(),  
-                                                       params_update.f_temp.data(), 
-                                                       params_update.f_temp_tend.data(),
-                                                       params_in.f_z_mid.data(), 
-                                                       params_update.f_phis.data(), 
-                                                       params_update.f_st_energy.data());
-
-
-        // Transpose back to C++ convention
-        params_update.transpose<ekat::TransposeDirection::f2c>(pcols,pver);
-
-        //----------------------------------------------------------------------------
-        }
-
+    } // end run
 
     // end _c impls
 

@@ -69,12 +69,9 @@ public:
     Int m_num_cols;
     Int m_num_levs;
 
-    // Parameters struct to pass through fortran bridge
-    KMF::params_in params_in;
-    KMF::params_out params_out;
-    KMF:: params_update params_update;
-    // KMF:: params_helpers params_helpers; // Helper variables 
-    // KMF:: params_computed params_computed; // Variables computed in the run_impl function
+    // Parameters structs to pass through fortran bridge
+    KMF::params_helpers params_helpers; // Helper variables 
+    KMF::params_computed params_computed; // Variables computed in the run_impl function
 
 }; // class Kessler
 

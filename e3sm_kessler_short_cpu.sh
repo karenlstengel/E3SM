@@ -20,7 +20,7 @@ QUEUE_NAME=main
 # RESOURCES=1:ncpus=32:mem=100GB
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="AQP1_ne4_eamxx_kessler_nvidia_cpu_test" #"AQP1_ne30pg2_eamxx_kessler_nvidia_cpu"
+CASE_NAME="AQP1_ne30pg2_eamxx_kessler_nvidia_cpu"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build

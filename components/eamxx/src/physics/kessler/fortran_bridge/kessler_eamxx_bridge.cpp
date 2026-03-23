@@ -36,27 +36,27 @@ namespace scream {
         params_helpers.transpose<ekat::TransposeDirection::c2f>(pcols,pver);
         params_computed.transpose<ekat::TransposeDirection::c2f>(pcols,pver);
 
-        kessler_eamxx_bridge_run_c(pcols, pver, dt, lyr_surf, lyr_toa, params_helpers.f_cpair.data(),
-                                                                       params_helpers.f_rair.data(),
-                                                                       params_helpers.f_rho.data(),
-                                                                       params_helpers.f_z_mid.data(),
-                                                                       params_helpers.f_pk.data(), 
-                                                                       params_computed.f_theta.data(), 
-                                                                       params_computed.f_qv.data(), 
-                                                                       params_computed.f_qc.data(), 
-                                                                       params_computed.f_qr.data(), 
-                                                                       params_computed.f_precl.data(), 
-                                                                       params_computed.f_relhum.data());
+        kessler_eamxx_bridge_run_c(pcols, pver, dt, lyr_surf, lyr_toa, params_helpers.h_cpair.data(),
+                                                                       params_helpers.h_rair.data(),
+                                                                       params_helpers.h_rho.data(),
+                                                                       params_helpers.h_z_mid.data(),
+                                                                       params_helpers.h_pk.data(), 
+                                                                       params_computed.h_theta.data(), 
+                                                                       params_computed.h_qv.data(), 
+                                                                       params_computed.h_qc.data(), 
+                                                                       params_computed.h_qr.data(), 
+                                                                       params_computed.h_precl.data(), 
+                                                                       params_computed.h_relhum.data());
         
-        kessler_eamxx_bridge_update_c(pcols, pver, dt, params_helpers.f_cpair.data(),
-                                                       params_helpers.f_pk.data(),
-                                                       params_computed.f_theta.data(), 
-                                                       params_computed.f_temp_prev.data(),  
-                                                       params_computed.f_temp.data(), 
-                                                       params_computed.f_temp_tend.data(),
-                                                       params_helpers.f_z_mid.data(), 
-                                                       params_helpers.f_phis.data(), 
-                                                       params_computed.f_st_energy.data());
+        kessler_eamxx_bridge_update_c(pcols, pver, dt, params_helpers.h_cpair.data(),
+                                                       params_helpers.h_pk.data(),
+                                                       params_computed.h_theta.data(), 
+                                                       params_computed.h_temp_prev.data(),  
+                                                       params_computed.h_temp.data(), 
+                                                       params_computed.h_temp_tend.data(),
+                                                       params_helpers.h_z_mid.data(), 
+                                                       params_helpers.h_phis.data(), 
+                                                       params_computed.h_st_energy.data());
         // Transpose back to C++ convention
         params_helpers.transpose<ekat::TransposeDirection::f2c>(pcols,pver);
         params_computed.transpose<ekat::TransposeDirection::f2c>(pcols,pver);

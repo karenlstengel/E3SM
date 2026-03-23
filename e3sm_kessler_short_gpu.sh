@@ -17,7 +17,7 @@ MYCOMPILER=nvidiagpu
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="kessler_ne4_short_eamxx_gpu_test"
+CASE_NAME="AQP1_ne4_eamxx_kessler_nvidia_cpugpu"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -87,8 +87,8 @@ else
 fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
-./xmlchange STOP_N='2',STOP_OPTION='ndays'
-./xmlchange JOB_WALLCLOCK_TIME='00:05:00'
+./xmlchange STOP_N='15',STOP_OPTION='ndays'
+./xmlchange JOB_WALLCLOCK_TIME='00:30:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE
 

@@ -141,6 +141,25 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
 
   kessler::kessler_eamxx_bridge_init(m_num_cols, m_num_levs, latvap, P0, rhoqr, gravit);
 
+  // Allocate host mirror views for GPU -> CPU Fortran bridge
+  params_helpers.h_cpair      = KMF::view_2dh<Real>("kessler.h_cpair",     m_num_cols, m_num_levs);
+  params_helpers.h_rair       = KMF::view_2dh<Real>("kessler.h_rair",      m_num_cols, m_num_levs);
+  params_helpers.h_rho        = KMF::view_2dh<Real>("kessler.h_rho",       m_num_cols, m_num_levs);
+  params_helpers.h_pk         = KMF::view_2dh<Real>("kessler.h_pk",        m_num_cols, m_num_levs);
+  params_helpers.h_z_mid      = KMF::view_2dh<Real>("kessler.h_z_mid",     m_num_cols, m_num_levs);
+  params_helpers.h_phis       = KMF::view_1dh<Real>("kessler.h_phis",      m_num_cols);
+
+  params_computed.h_theta     = KMF::view_2dh<Real>("kessler.h_theta",     m_num_cols, m_num_levs);
+  params_computed.h_qv        = KMF::view_2dh<Real>("kessler.h_qv",        m_num_cols, m_num_levs);
+  params_computed.h_qc        = KMF::view_2dh<Real>("kessler.h_qc",        m_num_cols, m_num_levs);
+  params_computed.h_qr        = KMF::view_2dh<Real>("kessler.h_qr",        m_num_cols, m_num_levs);
+  params_computed.h_precl     = KMF::view_1dh<Real>("kessler.h_precl",     m_num_cols);
+  params_computed.h_relhum    = KMF::view_2dh<Real>("kessler.h_relhum",    m_num_cols, m_num_levs);
+  params_computed.h_temp_prev = KMF::view_2dh<Real>("kessler.h_temp_prev", m_num_cols, m_num_levs);
+  params_computed.h_temp      = KMF::view_2dh<Real>("kessler.h_temp",      m_num_cols, m_num_levs);
+  params_computed.h_temp_tend = KMF::view_2dh<Real>("kessler.h_temp_tend", m_num_cols, m_num_levs);
+  params_computed.h_st_energy = KMF::view_2dh<Real>("kessler.h_st_energy", m_num_cols, m_num_levs);
+
   if (has_energy_fixer()) {
     // Set the boundary fluxes to 0.0 at the start of the run
     auto vapor_flux = get_field_out("vapor_flux").get_view<Real*>();

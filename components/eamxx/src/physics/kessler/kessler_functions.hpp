@@ -38,9 +38,12 @@ struct KesslerMicrophysicsFunctions
   template <typename S> using view_1d   = typename KT::template view_1d<S>;
   template <typename S> using view_2d   = typename KT::template view_2d<S>;
   template <typename S> using view_2dl  = typename KT::template lview<S**>;
+  
+  // Needed for running the Fortran without OpenACC
   template <typename S> using uview_1d  = typename ekat::template Unmanaged<view_1d<S> >;
-  // template <typename S> using uview_2d  = typename ekat::template Unmanaged<view_2d<S> >;
   template <typename S> using uview_2dl = typename ekat::template Unmanaged<view_2dl<S> >;
+  template <typename S> using view_1dh  = typename view_1d<S>::HostMirror;
+  template <typename S> using view_2dh  = typename view_2dl<S>::HostMirror;
 
   // ----------------------------------------
   // Structs
@@ -73,6 +76,14 @@ struct params_helpers {
     uview_2dl<Real>  f_z_mid;
     // kessler_update Fortran holders/in Fortran format
     uview_1d<Real>   f_phis;
+
+    // Host mirror views for passing to Fortran code on CPU
+    view_2dh<Real>   h_cpair;
+    view_2dh<Real>   h_rair;
+    view_2dh<Real>   h_rho;
+    view_2dh<Real>   h_pk;
+    view_2dh<Real>   h_z_mid;
+    view_1dh<Real>   h_phis;
 
     // Set number of variables for ATMBufferManager
     static constexpr int num_1d_intgr   = 0;  // number of 1D integer views
@@ -115,21 +126,33 @@ struct params_helpers {
       if (D == ekat::TransposeDirection::c2f) {
 
         Kokkos::parallel_for(
-            "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in),
-            KOKKOS_CLASS_LAMBDA(const int i) {
-              const int icol            = i / pver_in;
-              const int klev            = i % pver_in;
-              // Don't need to transpose cpair, rair
+          "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in),
+          KOKKOS_CLASS_LAMBDA(const int i) {
+            const int icol            = i / pver_in;
+            const int klev            = i % pver_in;
+            // Don't need to transpose cpair, rair
 
-              f_rho(icol, klev) = rho(icol, klev / Spack::n)[klev % Spack::n];
-              f_pk(icol, klev) = pk(icol, klev / Spack::n)[klev % Spack::n];
-              f_z_mid(icol, klev) = z_mid(icol, klev / Spack::n)[klev % Spack::n];
+            f_rho(icol, klev) = rho(icol, klev / Spack::n)[klev % Spack::n];
+            f_pk(icol, klev) = pk(icol, klev / Spack::n)[klev % Spack::n];
+            f_z_mid(icol, klev) = z_mid(icol, klev / Spack::n)[klev % Spack::n];
 
-              f_phis(icol) = phis(icol);
-            }
-          );
+            f_phis(icol) = phis(icol);
+          }
+        );
+        // Copy from device to host mirrors for Fortran
+        Kokkos::deep_copy(h_cpair, f_cpair);
+        Kokkos::deep_copy(h_rair,  f_rair);
+        Kokkos::deep_copy(h_rho,   f_rho);
+        Kokkos::deep_copy(h_pk,    f_pk);
+        Kokkos::deep_copy(h_z_mid, f_z_mid);
+        Kokkos::deep_copy(h_phis,  f_phis);
       }
       if (D == ekat::TransposeDirection::f2c) {  // Not needed but leaving in just in case/temporary
+        // Copy from host mirrors back to device
+        Kokkos::deep_copy(f_rho,   h_rho);
+        Kokkos::deep_copy(f_pk,    h_pk);
+        Kokkos::deep_copy(f_z_mid, h_z_mid);
+        Kokkos::deep_copy(f_phis,  h_phis);
 
         Kokkos::parallel_for(
             "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in),
@@ -191,6 +214,18 @@ struct params_computed {
     uview_2dl<Real>  f_temp_tend;
     uview_2dl<Real>  f_st_energy;
 
+    // Host mirror views for passing to Fortran code on CPU
+    view_2dh<Real>   h_theta;
+    view_2dh<Real>   h_qv;
+    view_2dh<Real>   h_qc;
+    view_2dh<Real>   h_qr;
+    view_1dh<Real>   h_precl;
+    view_2dh<Real>   h_relhum;
+    view_2dh<Real>   h_temp_prev;
+    view_2dh<Real>   h_temp;
+    view_2dh<Real>   h_temp_tend;
+    view_2dh<Real>   h_st_energy;
+
     // Set number of variables for ATMBufferManager
     static constexpr int num_1d_intgr   = 0; // number of 1D integer views
     static constexpr int num_1d_scalr   = 1; // number of 1D scalar views (precl or f_precl)
@@ -231,26 +266,48 @@ struct params_computed {
       if (D == ekat::TransposeDirection::c2f) {
 
         Kokkos::parallel_for(
-            "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in),
-            KOKKOS_CLASS_LAMBDA(const int i) {
-              const int icol = i / pver_in;
-              const int klev = i % pver_in;
-              f_theta(icol, klev) = theta(icol, klev / Spack::n)[klev % Spack::n];
-              f_qv(icol, klev) = qv(icol, klev / Spack::n)[klev % Spack::n];
-              f_qc(icol, klev) = qc(icol, klev / Spack::n)[klev % Spack::n];
-              f_qr(icol, klev) = qr(icol, klev / Spack::n)[klev % Spack::n];
-              f_relhum(icol, klev) = relhum(icol, klev / Spack::n)[klev % Spack::n];
-              f_precl(icol) = precl(icol);
+          "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in),
+          KOKKOS_CLASS_LAMBDA(const int i) {
+            const int icol = i / pver_in;
+            const int klev = i % pver_in;
+            f_theta(icol, klev) = theta(icol, klev / Spack::n)[klev % Spack::n];
+            f_qv(icol, klev) = qv(icol, klev / Spack::n)[klev % Spack::n];
+            f_qc(icol, klev) = qc(icol, klev / Spack::n)[klev % Spack::n];
+            f_qr(icol, klev) = qr(icol, klev / Spack::n)[klev % Spack::n];
+            f_relhum(icol, klev) = relhum(icol, klev / Spack::n)[klev % Spack::n];
+            f_precl(icol) = precl(icol);
 
-              f_temp_prev(icol, klev) = temp_prev(icol, klev / Spack::n)[klev % Spack::n];
-              f_temp(icol, klev) = temp(icol, klev / Spack::n)[klev % Spack::n];
-              f_temp_tend(icol, klev) = temp_tend(icol, klev / Spack::n)[klev % Spack::n];
-              f_st_energy(icol, klev) = st_energy(icol, klev / Spack::n)[klev % Spack::n];
-              
-            }
-          );
+            f_temp_prev(icol, klev) = temp_prev(icol, klev / Spack::n)[klev % Spack::n];
+            f_temp(icol, klev) = temp(icol, klev / Spack::n)[klev % Spack::n];
+            f_temp_tend(icol, klev) = temp_tend(icol, klev / Spack::n)[klev % Spack::n];
+            f_st_energy(icol, klev) = st_energy(icol, klev / Spack::n)[klev % Spack::n];
+            
+          }
+        );
+        // Copy from device to host mirrors for Fortran
+        Kokkos::deep_copy(h_theta, f_theta);
+        Kokkos::deep_copy(h_qv, f_qv);
+        Kokkos::deep_copy(h_qc, f_qc);
+        Kokkos::deep_copy(h_qr, f_qr);
+        Kokkos::deep_copy(h_relhum, f_relhum);
+        Kokkos::deep_copy(h_precl, f_precl);
+        Kokkos::deep_copy(h_temp_prev, f_temp_prev);
+        Kokkos::deep_copy(h_temp, f_temp);
+        Kokkos::deep_copy(h_temp_tend, f_temp_tend);
+        Kokkos::deep_copy(h_st_energy, f_st_energy);
       }
       if (D == ekat::TransposeDirection::f2c) {
+        // Copy from host mirrors back to device
+        Kokkos::deep_copy(f_theta, h_theta);
+        Kokkos::deep_copy(f_qv, h_qv);
+        Kokkos::deep_copy(f_qc, h_qc);
+        Kokkos::deep_copy(f_qr, h_qr);
+        Kokkos::deep_copy(f_relhum, h_relhum);
+        Kokkos::deep_copy(f_precl, h_precl);
+        Kokkos::deep_copy(f_temp_prev, h_temp_prev);
+        Kokkos::deep_copy(f_temp, h_temp);
+        Kokkos::deep_copy(f_temp_tend, h_temp_tend);
+        Kokkos::deep_copy(f_st_energy, h_st_energy);
 
         Kokkos::parallel_for(
             "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in),

@@ -12,7 +12,7 @@ scratch=/glade/derecho/scratch/$user/E3SM
 CCSMROOT=$scratch/E3SM
 # CCSMROOT=/glade/derecho/scratch/$user/E3SM/E3SM
 COMPSET=F2000-SCREAMv1-AQP1
-RESOLUTION=ne4_ne4 #ne30pg2_ne30pg2
+RESOLUTION=ne30_ne30 #ne30pg2_ne30pg2,ne4pg2_ne4pg2
 DYCORE=theta-l_kokkos
 MACH=derecho
 MYCOMPILER=nvidia
@@ -20,7 +20,7 @@ QUEUE_NAME=main
 # RESOURCES=1:ncpus=32:mem=100GB
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="AQP1_ne30pg2_eamxx_kessler_nvidia_cpu"
+CASE_NAME="AQP1_ne30_eamxx_kessler_nvidia_cpu"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -50,7 +50,7 @@ cd $CASE_SCRIPTS_DIR
 
 ./xmlchange DEBUG=TRUE
 
-./xmlchange NTASKS=64
+./xmlchange NTASKS=128
 # ./xmlchange NUM_NODES=2
 ./xmlchange NTHRDS=1
 ./xmlchange ROOTPE='0'
@@ -65,8 +65,8 @@ cd $CASE_SCRIPTS_DIR
 ./atmchange mac_aero_mic::atm_procs_list=kessler #kessler
 ./atmchange save_field_manager_content=true
 ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control.yml
-# ./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/screami_aquaplanet_ne30np4L72_20220823.nc
-# ./atmchange grids_manager::vertical_coordinate_filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/vertical_coordinates_L72_20220927.nc
+./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/screami_aquaplanet_ne30np4L72_20220823.nc
+./atmchange grids_manager::vertical_coordinate_filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/vertical_coordinates_L72_20220927.nc
 
 ./case.build 
 
@@ -86,7 +86,7 @@ fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
 ./xmlchange STOP_N='15',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
-./xmlchange JOB_WALLCLOCK_TIME='00:30:00'
+./xmlchange JOB_WALLCLOCK_TIME='02:00:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE
 

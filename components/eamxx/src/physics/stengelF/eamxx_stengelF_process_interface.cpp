@@ -1,3 +1,4 @@
+#include "physics/stengelF/stengelF_functions.hpp"
 #include "eamxx_stengelF_process_interface.hpp"
 #include "stengelF_eamxx_bridge.hpp"
 #include "share/property_checks/field_within_interval_check.hpp"
@@ -66,6 +67,12 @@ void StengelF::initialize_impl (const RunType /* run_type */)
 
   stengelF::stengelF_eamxx_bridge_init(m_num_cols, m_num_levs);
 
+  #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
+    // setup host views for Fortran
+    params.h_p_mid = stengelF::view_2dh<Real>("stengelF.h_p_mid", m_num_cols, m_num_levs);
+    params.h_T_mid = stengelF::view_2dh<Real>("stengelF.h_T_mid", m_num_cols, m_num_levs);
+  #endif
+
   m_atm_logger->info("[EAMxx] stengelF processes initialize_impl end: ");
 }
 
@@ -102,21 +109,16 @@ void StengelF::run_impl (const double /* dt */)
 
   stengelF_eamxx_bridge_run(m_num_cols, m_num_levs, params); 
 
-  // Update with the new (should be the same) values from the run
-  // TODO - figure out how to read the data from the params struct back into the fields on the C++ side.
-  // Look at ZM but also probably others
-
-  // for (int i=0; i<m_num_cols; ++i) {
-  //   for (int j=0; j<m_num_levs; ++j) {
-  //     p_mid(i,j) = params.p_mid(i,j);
-  //     T_mid(i,j) = params.T_mid(i,j);
-  //   }
-  // }
-
-  // T_mid_max = field_max<Real>(T_mid);
-  // m_atm_logger->info("\t max value for T_mid after the Fortran bridge: "+ std::to_string(T_mid_max));
-  // p_mid_max = field_max<Real>(p_mid);
-  // m_atm_logger->info("\t max value for p_mid after the Fortran bridge: "+ std::to_string(p_mid_max));
+  auto pver_in_packs = ekat::npack<Spack>(m_num_levs);
+  Kokkos::parallel_for(
+    "transpose f2c", KT::RangePolicy(0, m_num_cols * pver_in_packs),
+    KOKKOS_CLASS_LAMBDA(const int i) {
+      const int icol = i / pver_in_packs;
+      const int klev = i % pver_in_packs;
+      p_mid(icol, klev / Spack::n)[klev % Spack::n] = params.p_mid(icol, klev);
+      T_mid(icol, klev / Spack::n)[klev % Spack::n] = params.T_mid(icol, klev);
+    }
+  );
   
 }
 
@@ -156,9 +158,9 @@ void StengelF::init_buffers(const ATMBufferManager &buffer_manager)
   Real* r_mem = reinterpret_cast<Real*>(buffer_manager.get_memory());
   //----------------------------------------------------------------------------
   // 2D "f_" views on mid-point levels
-  StengelFFunc::view_2dl<Real>* midlv_f_ptrs[num_2d_midlv_f_views]  = { &params.f_p_mid, &params.f_T_mid};
+  StengelFFunc::fview_2dl<Real>* midlv_f_ptrs[num_2d_midlv_f_views]  = { &params.f_p_mid, &params.f_T_mid};
   for (int i=0; i<num_2d_midlv_f_views; ++i) {
-    *midlv_f_ptrs[i] = StengelFFunc::view_2dl<Real>(r_mem, m_num_cols, m_num_levs);
+    *midlv_f_ptrs[i] = StengelFFunc::fview_2dl<Real>(r_mem, m_num_cols, m_num_levs);
     r_mem += midlv_f_ptrs[i]->size();
   }
   //----------------------------------------------------------------------------

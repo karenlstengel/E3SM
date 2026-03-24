@@ -62,7 +62,7 @@ cd $CASE_SCRIPTS_DIR
 ./case.setup
 
 ./xmlchange CAM_TARGET=$DYCORE
-./xmlchange GMAKE_J='4'
+./xmlchange GMAKE_J='32'
 # ./atmchange initial_conditions::topography_filename=/glade/derecho/scratch/kstengel/inputdata/atm/cam/topo/USGS-gtopo30_ne30np4pg2_x6t-SGH.c20210614.nc
 ./atmchange mac_aero_mic::atm_procs_list+=stengelF
 

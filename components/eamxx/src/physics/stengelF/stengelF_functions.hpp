@@ -37,9 +37,18 @@ template <typename ScalarT, typename DeviceT> struct StengelFFunctions {
   template <typename S> using view_1d  = typename KT::template view_1d<S>;
   template <typename S> using view_2d  = typename KT::template view_2d<S>;
   template <typename S> using view_2dl = typename KT::template lview<S **>;
-  // template <typename S> using uview_1d  = typename ekat::template Unmanaged<view_1d<S> >;
-  // template <typename S> using uview_2d  = typename ekat::template Unmanaged<view_2d<S> >;
-  // template <typename S> using uview_2dl = typename ekat::template Unmanaged<view_2dl<S> >;
+
+  #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
+    template <typename S> using fview_1d  = typename ekat::template Unmanaged<view_1d<S> >;
+    template <typename S> using fview_2d  = typename ekat::template Unmanaged<view_2d<S> >;
+    template <typename S> using fview_2dl = typename ekat::template Unmanaged<view_2dl<S> >;
+    template <typename S> using view_1dh  = typename view_1d<S>::HostMirror;
+    template <typename S> using view_2dh  = typename view_2dl<S>::HostMirror;
+  #else 
+    template <typename S> using fview_1d  = typename KT::template view_1d<S>;
+    template <typename S> using fview_2d  = typename KT::template view_2d<S>;
+    template <typename S> using fview_2dl = typename KT::template lview<S **>;
+  #endif
   // ----------------------------------------
   // Structs
   struct params {
@@ -50,8 +59,15 @@ template <typename ScalarT, typename DeviceT> struct StengelFFunctions {
     view_2d<Spack> T_mid;
 
     // For fortran
-    view_2dl<Real> f_p_mid;
-    view_2dl<Real> f_T_mid;
+    fview_2dl<Real> f_p_mid;
+    fview_2dl<Real> f_T_mid;
+    
+    #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
+      // Host mirrors
+      view_2dh<Real> h_p_mid;
+      view_2dh<Real> h_T_mid;
+    #endif
+    
 
     // Set number of variables for ATMBufferManager
     static constexpr int num_2d_midlv_c_views = 2;
@@ -62,15 +78,6 @@ template <typename ScalarT, typename DeviceT> struct StengelFFunctions {
     init(int ncol_in, int pver_in)
     {
       Real init_fill_value = -999;
-
-      // auto f_p_mid_local = f_p_mid;
-      // auto f_T_mid_local = f_T_mid;
-      // Kokkos::parallel_for(
-      //     Kokkos::MDRangePolicy<Kokkos::Cuda, Kokkos::Rank<2>>({0, 0}, {ncol_in, pver_in}),
-      //     KOKKOS_LAMBDA(const int i, const int j) {
-      //       f_p_mid_local(i, j) = init_fill_value;
-      //       f_T_mid_local(i, j) = init_fill_value;
-      //     });
 
       Kokkos::parallel_for(
           Kokkos::MDRangePolicy<Kokkos::Cuda, Kokkos::Rank<2>>({0, 0}, {ncol_in, pver_in}),
@@ -87,32 +94,38 @@ template <typename ScalarT, typename DeviceT> struct StengelFFunctions {
     {
       auto pver_in_packs = ekat::npack<Spack>(pver_in);
       if (D == ekat::TransposeDirection::c2f) {
-        auto f_p_mid_local = f_p_mid;
-        auto f_T_mid_local = f_T_mid;
-        auto p_mid_local   = p_mid;
-        auto T_mid_local   = T_mid;
+
         Kokkos::parallel_for(
             "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in_packs),
-            KOKKOS_LAMBDA(const int i) {
+            KOKKOS_CLASS_LAMBDA(const int i) {
               const int icol            = i / pver_in_packs;
               const int klev            = i % pver_in_packs;
-              f_p_mid_local(icol, klev) = p_mid_local(icol, klev / Spack::n)[klev % Spack::n];
-              f_T_mid_local(icol, klev) = T_mid_local(icol, klev / Spack::n)[klev % Spack::n];
-            });
+              f_p_mid(icol, klev) = p_mid(icol, klev / Spack::n)[klev % Spack::n];
+              f_T_mid(icol, klev) = T_mid(icol, klev / Spack::n)[klev % Spack::n];
+            }
+          );
+          #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
+            // Copy from device to host mirrors for Fortran
+            Kokkos::deep_copy(h_p_mid, f_p_mid);
+            Kokkos::deep_copy(h_T_mid, f_T_mid);
+          #endif
       }
       if (D == ekat::TransposeDirection::f2c) {
-        auto f_p_mid_local = f_p_mid;
-        auto f_T_mid_local = f_T_mid;
-        auto p_mid_local   = p_mid;
-        auto T_mid_local   = T_mid;
+        #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
+          // Copy from host mirrors back to device
+          Kokkos::deep_copy(f_p_mid,   h_p_mid);
+          Kokkos::deep_copy(f_T_mid,   h_T_mid);
+        #endif
+
         Kokkos::parallel_for(
             "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in_packs),
-            KOKKOS_LAMBDA(const int i) {
+            KOKKOS_CLASS_LAMBDA(const int i) {
               const int icol                                      = i / pver_in_packs;
               const int klev                                      = i % pver_in_packs;
-              p_mid_local(icol, klev / Spack::n)[klev % Spack::n] = f_p_mid_local(icol, klev);
-              T_mid_local(icol, klev / Spack::n)[klev % Spack::n] = f_T_mid_local(icol, klev);
-            });
+              p_mid(icol, klev / Spack::n)[klev % Spack::n] = f_p_mid(icol, klev);
+              T_mid(icol, klev / Spack::n)[klev % Spack::n] = f_T_mid(icol, klev);
+            }
+          );
       }
     }; // End transpose
 

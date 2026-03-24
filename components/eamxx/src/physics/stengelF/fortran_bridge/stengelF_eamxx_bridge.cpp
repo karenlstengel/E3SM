@@ -34,7 +34,11 @@ namespace scream {
         // Need to transpose to match how Fortran handles things
         params.transpose<ekat::TransposeDirection::c2f>(pcols,pver);
 
-        stengelF_eamxx_bridge_run_c(pcols, params.f_p_mid.data(), params.f_T_mid.data()); 
+        #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
+            stengelF_eamxx_bridge_run_c(pcols, params.h_p_mid.data(), params.h_T_mid.data()); 
+        #else
+            stengelF_eamxx_bridge_run_c(pcols, params.f_p_mid.data(), params.f_T_mid.data());
+        #endif
 
         // Transpose back to C++ convention
         params.transpose<ekat::TransposeDirection::f2c>(pcols,pver);

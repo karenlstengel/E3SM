@@ -69,8 +69,10 @@ subroutine stengelF_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C, name="steng
   t_mid_max = 0.0
 
   ! Scale and get max value for each field
+#if defined(EAMXX_ENABLE_GPU) && defined(EAMXX_ENABLE_OPENACC)
   !$acc parallel deviceptr(p_mid, T_mid)
   !$acc loop gang vector collapse(2) reduction(max: p_mid_max, t_mid_max)
+#endif
   do k = 1,pver
     do i = 1,ncol
       p_mid(i,k) = p_mid(i,k) * 0.5
@@ -79,7 +81,9 @@ subroutine stengelF_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C, name="steng
       t_mid_max = max(t_mid_max,t_mid(i,k))
     end do
   end do
-  !$acc end parallel 
+#if defined(EAMXX_ENABLE_GPU) && defined(EAMXX_ENABLE_OPENACC)
+  !$acc end parallel
+#endif
 
   ! TODO - need to fix this in terms of running in parallel. (if (masterproc) write...)
   if (masterproc) then
@@ -88,8 +92,10 @@ subroutine stengelF_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C, name="steng
   end if
 
   ! Scale and get max value for each field
+#if defined(EAMXX_ENABLE_GPU) && defined(EAMXX_ENABLE_OPENACC)
   !$acc parallel deviceptr(p_mid, T_mid)
   !$acc loop gang vector collapse(2) reduction(max: p_mid_max, t_mid_max)
+#endif
   do k = 1,pver
     do i = 1,ncol
       p_mid(i,k) = p_mid(i,k) * 2.0
@@ -98,7 +104,9 @@ subroutine stengelF_eamxx_bridge_run_c( ncol, p_mid, T_mid ) bind(C, name="steng
       t_mid_max = max(t_mid_max,t_mid(i,k))
     end do
   end do
+#if defined(EAMXX_ENABLE_GPU) && defined(EAMXX_ENABLE_OPENACC)
   !$acc end parallel
+#endif
 
   ! TODO - need to fix this in terms of running in parallel. also newline?
   if (masterproc) then

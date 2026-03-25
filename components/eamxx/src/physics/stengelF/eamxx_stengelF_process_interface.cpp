@@ -69,8 +69,8 @@ void StengelF::initialize_impl (const RunType /* run_type */)
 
   #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
     // setup host views for Fortran
-    params.h_p_mid = stengelF::view_2dh<Real>("stengelF.h_p_mid", m_num_cols, m_num_levs);
-    params.h_T_mid = stengelF::view_2dh<Real>("stengelF.h_T_mid", m_num_cols, m_num_levs);
+    params.h_p_mid = StengelFFunc::view_2dh<Real>("stengelF.h_p_mid", m_num_cols, m_num_levs);
+    params.h_T_mid = StengelFFunc::view_2dh<Real>("stengelF.h_T_mid", m_num_cols, m_num_levs);
   #endif
 
   m_atm_logger->info("[EAMxx] stengelF processes initialize_impl end: ");
@@ -107,18 +107,7 @@ void StengelF::run_impl (const double /* dt */)
 
   m_atm_logger->info("[EAMxx] after init: ");
 
-  stengelF_eamxx_bridge_run(m_num_cols, m_num_levs, params); 
-
-  auto pver_in_packs = ekat::npack<Spack>(m_num_levs);
-  Kokkos::parallel_for(
-    "transpose f2c", KT::RangePolicy(0, m_num_cols * pver_in_packs),
-    KOKKOS_CLASS_LAMBDA(const int i) {
-      const int icol = i / pver_in_packs;
-      const int klev = i % pver_in_packs;
-      p_mid(icol, klev / Spack::n)[klev % Spack::n] = params.p_mid(icol, klev);
-      T_mid(icol, klev / Spack::n)[klev % Spack::n] = params.T_mid(icol, klev);
-    }
-  );
+  stengelF_eamxx_bridge_run(m_num_cols, m_num_levs, params);
   
 }
 

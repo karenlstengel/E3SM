@@ -80,7 +80,7 @@ template <typename ScalarT, typename DeviceT> struct StengelFFunctions {
       Real init_fill_value = -999;
 
       Kokkos::parallel_for(
-          Kokkos::MDRangePolicy<Kokkos::Cuda, Kokkos::Rank<2>>({0, 0}, {ncol_in, pver_in}),
+          Kokkos::MDRangePolicy<typename KT::ExeSpace, Kokkos::Rank<2>>({0, 0}, {ncol_in, pver_in}),
           KOKKOS_CLASS_LAMBDA(const int i, const int j) {
             f_p_mid(i, j) = init_fill_value;
             f_T_mid(i, j) = init_fill_value;

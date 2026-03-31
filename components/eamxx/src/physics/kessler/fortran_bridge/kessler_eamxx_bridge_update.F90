@@ -1,7 +1,7 @@
 module kessler_eamxx_bridge_update
 
   use iso_c_binding
-  ! use openacc_utils
+  use openacc_utils
   use cam_logfile,   only: iulog ! kinds instead of cam_logfile?
   use shr_sys_mod,   only: shr_sys_flush
   ! use spmd_utils,      only: masterproc

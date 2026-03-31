@@ -22,6 +22,9 @@
 // Whether this is a CUDA/HIP build
 #cmakedefine EAMXX_ENABLE_GPU
 
+// Whether Fortran physics has an OpenACC build
+#cmakedefine EAMXX_ENABLE_OPENACC
+
 // Whether scream uses leap years or not
 #cmakedefine SCREAM_HAS_LEAP_YEAR
 

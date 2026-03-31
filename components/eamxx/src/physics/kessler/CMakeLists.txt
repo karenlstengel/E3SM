@@ -1,6 +1,15 @@
 set(PATH_TO_LEGACY_EAM ${SCREAM_BASE_DIR}/../eam/src)
 set(PATH_TO_LEGACY_CAM ${SCREAM_BASE_DIR}/../eam/src/pyhsics/cam)
-set(PATH_TO_LEGACY_CAM_SIMA ${SCREAM_BASE_DIR}/../../../atmospheric_physics)
+
+# Decide on if we should use the OpenACC version of Kessler or not. 
+if (EAMXX_ENABLE_OPENACC)
+  message(STATUS "Using OpenACC version of Kessler")
+  set(PATH_TO_LEGACY_CAM_SIMA ${SCREAM_BASE_DIR}/../../../GPU_ports/atmospheric_physics)
+else()
+  message(STATUS "Using non-OpenACC version of Kessler")
+  set(PATH_TO_LEGACY_CAM_SIMA ${SCREAM_BASE_DIR}/../../../atmospheric_physics)
+endif()
+
 set(PATH_TO_LEGACY_KESSLER ${PATH_TO_LEGACY_CAM_SIMA}/schemes/kessler)
 
 # From Dockerfile in CAM-SIMA, to get CCPP-framework for building Kessler
@@ -35,7 +44,7 @@ set(KESSLER_F90_SRCS
   ${SCREAM_BASE_DIR}/../../share/util/shr_sys_mod.F90
   ${SCREAM_BASE_DIR}/../../share/util/shr_kind_mod.F90
   ${SCREAM_BASE_DIR}/../../share/util/shr_assert_mod.F90.in
-  #${PATH_TO_LEGACY_EAM}/physics/crm/openacc_utils.F90
+  ${PATH_TO_LEGACY_EAM}/physics/crm/openacc_utils.F90
   #${PATH_TO_LEGACY_EAM}/utils/spmd_utils.F90
 
   # ----------------------------------------------------------------------------

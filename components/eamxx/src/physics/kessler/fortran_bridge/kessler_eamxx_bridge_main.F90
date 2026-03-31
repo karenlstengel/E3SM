@@ -2,7 +2,7 @@ module kessler_eamxx_bridge_main
 
   use iso_c_binding
   use mpi
-  ! use openacc_utils
+  use openacc_utils
   use cam_logfile,   only: iulog ! kinds instead of cam_logfile?
   use shr_sys_mod,   only: shr_sys_flush
   ! use spmd_utils,      only: masterproc
@@ -94,6 +94,13 @@ subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, r
   ! real(kind=c_real) :: relhum_max, pk_max, theta_max, qv_max
 
   ! real(kind=c_real) :: qv_sum, qc_sum, qr_sum
+  if (masterproc) then
+    write(*,*) "ncol: ", ncol
+    write(*,*) "nz: ", nz
+    write(*,*) "cpair: ", cpair(1,1)
+    write(*,*) "z_mid: ", z_mid(1,1)
+    write(*,*) "precl: ", precl(1)
+  end if
 
   ! Call the Kessler run function
   call kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z_mid, &
@@ -114,15 +121,6 @@ subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, r
   !   end do
   ! end do
 
-  ! if (masterproc) then
-    ! write(*,*) "RELHUM max: ", relhum_max
-    ! write(*,*) "pk max: ", pk_max
-    ! write(*,*) "theta max: ", theta_max
-    ! write(*,*) "qv max: ", qv_max
-  ! end if
-  
-
-  
 end subroutine kessler_eamxx_bridge_run_c
 
 !===================================================================================================

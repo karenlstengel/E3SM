@@ -141,24 +141,27 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
 
   kessler::kessler_eamxx_bridge_init(m_num_cols, m_num_levs, latvap, P0, rhoqr, gravit);
 
-  // Allocate host mirror views for GPU -> CPU Fortran bridge
-  params_helpers.h_cpair      = KMF::view_2dh<Real>("kessler.h_cpair",     m_num_cols, m_num_levs);
-  params_helpers.h_rair       = KMF::view_2dh<Real>("kessler.h_rair",      m_num_cols, m_num_levs);
-  params_helpers.h_rho        = KMF::view_2dh<Real>("kessler.h_rho",       m_num_cols, m_num_levs);
-  params_helpers.h_pk         = KMF::view_2dh<Real>("kessler.h_pk",        m_num_cols, m_num_levs);
-  params_helpers.h_z_mid      = KMF::view_2dh<Real>("kessler.h_z_mid",     m_num_cols, m_num_levs);
-  params_helpers.h_phis       = KMF::view_1dh<Real>("kessler.h_phis",      m_num_cols);
+  #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
+    // Allocate host mirror views for GPU -> CPU Fortran bridge
+    printf("I shouldn't be accessed. \n");
+    params_helpers.h_cpair      = KMF::view_2dh<Real>("kessler.h_cpair",     m_num_cols, m_num_levs);
+    params_helpers.h_rair       = KMF::view_2dh<Real>("kessler.h_rair",      m_num_cols, m_num_levs);
+    params_helpers.h_rho        = KMF::view_2dh<Real>("kessler.h_rho",       m_num_cols, m_num_levs);
+    params_helpers.h_pk         = KMF::view_2dh<Real>("kessler.h_pk",        m_num_cols, m_num_levs);
+    params_helpers.h_z_mid      = KMF::view_2dh<Real>("kessler.h_z_mid",     m_num_cols, m_num_levs);
+    params_helpers.h_phis       = KMF::view_1dh<Real>("kessler.h_phis",      m_num_cols);
 
-  params_computed.h_theta     = KMF::view_2dh<Real>("kessler.h_theta",     m_num_cols, m_num_levs);
-  params_computed.h_qv        = KMF::view_2dh<Real>("kessler.h_qv",        m_num_cols, m_num_levs);
-  params_computed.h_qc        = KMF::view_2dh<Real>("kessler.h_qc",        m_num_cols, m_num_levs);
-  params_computed.h_qr        = KMF::view_2dh<Real>("kessler.h_qr",        m_num_cols, m_num_levs);
-  params_computed.h_precl     = KMF::view_1dh<Real>("kessler.h_precl",     m_num_cols);
-  params_computed.h_relhum    = KMF::view_2dh<Real>("kessler.h_relhum",    m_num_cols, m_num_levs);
-  params_computed.h_temp_prev = KMF::view_2dh<Real>("kessler.h_temp_prev", m_num_cols, m_num_levs);
-  params_computed.h_temp      = KMF::view_2dh<Real>("kessler.h_temp",      m_num_cols, m_num_levs);
-  params_computed.h_temp_tend = KMF::view_2dh<Real>("kessler.h_temp_tend", m_num_cols, m_num_levs);
-  params_computed.h_st_energy = KMF::view_2dh<Real>("kessler.h_st_energy", m_num_cols, m_num_levs);
+    params_computed.h_theta     = KMF::view_2dh<Real>("kessler.h_theta",     m_num_cols, m_num_levs);
+    params_computed.h_qv        = KMF::view_2dh<Real>("kessler.h_qv",        m_num_cols, m_num_levs);
+    params_computed.h_qc        = KMF::view_2dh<Real>("kessler.h_qc",        m_num_cols, m_num_levs);
+    params_computed.h_qr        = KMF::view_2dh<Real>("kessler.h_qr",        m_num_cols, m_num_levs);
+    params_computed.h_precl     = KMF::view_1dh<Real>("kessler.h_precl",     m_num_cols);
+    params_computed.h_relhum    = KMF::view_2dh<Real>("kessler.h_relhum",    m_num_cols, m_num_levs);
+    params_computed.h_temp_prev = KMF::view_2dh<Real>("kessler.h_temp_prev", m_num_cols, m_num_levs);
+    params_computed.h_temp      = KMF::view_2dh<Real>("kessler.h_temp",      m_num_cols, m_num_levs);
+    params_computed.h_temp_tend = KMF::view_2dh<Real>("kessler.h_temp_tend", m_num_cols, m_num_levs);
+    params_computed.h_st_energy = KMF::view_2dh<Real>("kessler.h_st_energy", m_num_cols, m_num_levs);
+  #endif
 
   if (has_energy_fixer()) {
     // Set the boundary fluxes to 0.0 at the start of the run
@@ -396,7 +399,7 @@ size_t KesslerMicrophysics::requested_buffer_size_in_bytes() const
   buffer_size+= num_1d_intgr   * sizeof(Int)    * m_num_cols;                  // should be 0
   buffer_size+= num_1d_scalr   * sizeof(Scalar) * m_num_cols;                  // should be 2, C++ holders
   buffer_size+= num_1d_scalr   * sizeof(Real)   * m_num_cols;                  // should be 2, for fortran holders
-  buffer_size+= num_2d_midlv_c * sizeof(Spack)  * m_num_cols * nlevm_packs;    // should be 14, C++ holders
+  buffer_size+= num_2d_midlv_c * sizeof(Spack)  * m_num_cols * nlevm_packs;    // should be 13, C++ holders
   buffer_size+= num_2d_intlv_c * sizeof(Spack)  * m_num_cols * nlev_int_packs; // should be 1, C++ holders
   buffer_size+= num_2d_midlv_f * sizeof(Real)   * m_num_cols * m_num_levs;     // should be 14, for fortran holders
 
@@ -437,11 +440,11 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
   Real* r1_mem = reinterpret_cast<Real*>(scl_mem);
   //----------------------------------------------------------------------------
   // device 1D scalar scalars
-  KMF::uview_1d<Real>* ptrs_1d_real[num_1d_scalr] = { &params_computed.f_precl, 
+  KMF::fview_1d<Real>* ptrs_1d_real[num_1d_scalr] = { &params_computed.f_precl, 
                                                       &params_helpers.f_phis
                                                     };
   for (auto& v : ptrs_1d_real) {
-    *v = KMF::uview_1d<Real>(r1_mem, m_num_cols);
+    *v = KMF::fview_1d<Real>(r1_mem, m_num_cols);
     r1_mem += v->size();
   } 
   //----------------------------------------------------------------------------
@@ -449,7 +452,7 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
   Real* r_mem = reinterpret_cast<Real*>(r1_mem);
   //----------------------------------------------------------------------------
   // 2D "f_" views
-  KMF::uview_2dl<Real>* midlv_f_ptrs[num_2d_midlv_f] = { &params_helpers.f_cpair,
+  KMF::fview_2dl<Real>* midlv_f_ptrs[num_2d_midlv_f] = { &params_helpers.f_cpair,
                                                          &params_helpers.f_rair,
                                                          &params_helpers.f_rho,
                                                          &params_helpers.f_pk,
@@ -465,7 +468,7 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
                                                          &params_computed.f_st_energy
                                                         };
   for (int i=0; i<num_2d_midlv_f; ++i) {
-    *midlv_f_ptrs[i] = KMF::uview_2dl<Real>(r_mem, m_num_cols, m_num_levs);
+    *midlv_f_ptrs[i] = KMF::fview_2dl<Real>(r_mem, m_num_cols, m_num_levs);
     r_mem += midlv_f_ptrs[i]->size();
   }
   //----------------------------------------------------------------------------

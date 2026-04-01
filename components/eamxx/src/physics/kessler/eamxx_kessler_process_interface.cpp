@@ -1,6 +1,7 @@
 #include "eamxx_kessler_process_interface.hpp"
 #include "kessler_eamxx_bridge.hpp"
 #include "share/property_checks/field_within_interval_check.hpp"
+#include "share/property_checks/field_lower_bound_check.hpp"
 #include "share/field/field_utils.hpp"
 
 #include "share/physics/physics_constants.hpp"
@@ -132,7 +133,7 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
   add_postcondition_check<FieldWithinIntervalCheck>(get_field_out("qc"),m_grid,0.0,0.1,true);
   add_postcondition_check<FieldWithinIntervalCheck>(get_field_out("qr"),m_grid,0.0,0.1,true);
   add_postcondition_check<FieldWithinIntervalCheck>(get_field_out("qi"),m_grid,0.0,0.1,true);
-
+  add_postcondition_check<FieldLowerBoundCheck>(get_field_out("precl"),m_grid,0.0,true);
 
   Real P0     = PC::P0;     // Reference pressure; pref_in
   Real latvap = PC::LatVap; // Latent heat of vaporization; lv_in
@@ -143,7 +144,7 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
 
   #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
     // Allocate host mirror views for GPU -> CPU Fortran bridge
-    printf("I shouldn't be accessed. \n");
+    
     params_helpers.h_cpair      = KMF::view_2dh<Real>("kessler.h_cpair",     m_num_cols, m_num_levs);
     params_helpers.h_rair       = KMF::view_2dh<Real>("kessler.h_rair",      m_num_cols, m_num_levs);
     params_helpers.h_rho        = KMF::view_2dh<Real>("kessler.h_rho",       m_num_cols, m_num_levs);

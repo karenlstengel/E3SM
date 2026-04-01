@@ -93,33 +93,9 @@ subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, r
   integer :: i,k
   ! real(kind=c_real) :: relhum_max, pk_max, theta_max, qv_max
 
-  ! real(kind=c_real) :: qv_sum, qc_sum, qr_sum
-  if (masterproc) then
-    write(*,*) "ncol: ", ncol
-    write(*,*) "nz: ", nz
-    write(*,*) "cpair: ", cpair(1,1)
-    write(*,*) "z_mid: ", z_mid(1,1)
-    write(*,*) "precl: ", precl(1)
-  end if
-
   ! Call the Kessler run function
   call kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z_mid, &
         pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg)
-  
-  
-  ! relhum_max = 0.0
-  ! pk_max = 0.0
-  ! theta_max = 0.0
-  ! qv_max = 0.0
-
-  ! do k = 1,pver
-  !   do i = 1,ncol
-  !     relhum_max = max(relhum_max,relhum(i,k))
-  !     pk_max = max(pk_max,pk(i,k))
-  !     theta_max = max(theta_max,theta(i,k))
-  !     qv_max = max(qv_max,qv(i,k))
-  !   end do
-  ! end do
 
 end subroutine kessler_eamxx_bridge_run_c
 

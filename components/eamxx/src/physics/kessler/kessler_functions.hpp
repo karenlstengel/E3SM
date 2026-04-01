@@ -86,7 +86,7 @@ struct params_helpers {
 
     #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
       // Host mirror views for passing to Fortran code on CPU
-      printf("I shouldn't be accessed. \n");
+      
       view_2dh<Real>   h_cpair;
       view_2dh<Real>   h_rair;
       view_2dh<Real>   h_rho;
@@ -131,15 +131,15 @@ struct params_helpers {
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     template <ekat::TransposeDirection::Enum D>
     void transpose(int ncol_in, int pver_in) { 
-      auto pver_in_packs = ekat::npack<Spack>(pver_in);
+      // auto pver_in_packs = ekat::npack<Spack>(pver_in);
 
       if (D == ekat::TransposeDirection::c2f) {
 
         Kokkos::parallel_for(
-          "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in_packs),
+          "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in),
           KOKKOS_CLASS_LAMBDA(const int i) {
-            const int icol            = i / pver_in_packs;
-            const int klev            = i % pver_in_packs;
+            const int icol            = i / pver_in;
+            const int klev            = i % pver_in;
             // Don't need to transpose cpair, rair
 
             f_rho(icol, klev) = rho(icol, klev / Spack::n)[klev % Spack::n];
@@ -151,7 +151,7 @@ struct params_helpers {
         );
         #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
           // Copy from device to host mirrors for Fortran
-          printf("I shouldn't be accessed. \n");
+          
           Kokkos::deep_copy(h_cpair, f_cpair);
           Kokkos::deep_copy(h_rair,  f_rair);
           Kokkos::deep_copy(h_rho,   f_rho);
@@ -163,7 +163,7 @@ struct params_helpers {
       if (D == ekat::TransposeDirection::f2c) {  // Not needed but leaving in just in case/temporary
         #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
           // Copy from host mirrors back to device
-          printf("I shouldn't be accessed. \n");
+          
           Kokkos::deep_copy(f_rho,   h_rho);
           Kokkos::deep_copy(f_pk,    h_pk);
           Kokkos::deep_copy(f_z_mid, h_z_mid);
@@ -171,10 +171,10 @@ struct params_helpers {
         #endif
 
         Kokkos::parallel_for(
-            "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in_packs),
+            "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in),
             KOKKOS_CLASS_LAMBDA(const int i) {
-              const int icol = i / pver_in_packs;
-              const int klev = i % pver_in_packs;
+              const int icol = i / pver_in;
+              const int klev = i % pver_in;
               // Don't need to transpose cpair, rair
 
               rho(icol, klev / Spack::n)[klev % Spack::n] = f_rho(icol, klev);
@@ -232,7 +232,7 @@ struct params_computed {
 
     #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
       // Host mirror views for passing to Fortran code on CPU
-      printf("I shouldn't be accessed. \n");
+      
       view_2dh<Real>   h_theta;
       view_2dh<Real>   h_qv;
       view_2dh<Real>   h_qc;
@@ -280,15 +280,15 @@ struct params_computed {
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     template <ekat::TransposeDirection::Enum D>
     void transpose(int ncol_in, int pver_in) { // TODO - Kokko-ize this
-      auto pver_in_packs = ekat::npack<Spack>(pver_in);
+      // auto pver_in_packs = ekat::npack<Spack>(pver_in);
 
       if (D == ekat::TransposeDirection::c2f) {
 
         Kokkos::parallel_for(
-          "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in_packs),
+          "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in),
           KOKKOS_CLASS_LAMBDA(const int i) {
-            const int icol = i / pver_in_packs;
-            const int klev = i % pver_in_packs;
+            const int icol = i / pver_in;
+            const int klev = i % pver_in;
             f_theta(icol, klev) = theta(icol, klev / Spack::n)[klev % Spack::n];
             f_qv(icol, klev) = qv(icol, klev / Spack::n)[klev % Spack::n];
             f_qc(icol, klev) = qc(icol, klev / Spack::n)[klev % Spack::n];
@@ -305,7 +305,7 @@ struct params_computed {
         );
         #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
           // Copy from device to host mirrors for Fortran
-          printf("I shouldn't be accessed. \n");
+          
           Kokkos::deep_copy(h_theta, f_theta);
           Kokkos::deep_copy(h_qv, f_qv);
           Kokkos::deep_copy(h_qc, f_qc);
@@ -321,7 +321,7 @@ struct params_computed {
       if (D == ekat::TransposeDirection::f2c) {
         #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
           // Copy from host mirrors back to device
-          printf("I shouldn't be accessed. \n");
+          
           Kokkos::deep_copy(f_theta, h_theta);
           Kokkos::deep_copy(f_qv, h_qv);
           Kokkos::deep_copy(f_qc, h_qc);
@@ -335,10 +335,10 @@ struct params_computed {
         #endif
 
         Kokkos::parallel_for(
-            "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in_packs),
+            "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in),
             KOKKOS_CLASS_LAMBDA(const int i) {
-              const int icol = i / pver_in_packs;
-              const int klev  = i % pver_in_packs;
+              const int icol = i / pver_in;
+              const int klev  = i % pver_in;
               theta(icol, klev / Spack::n)[klev % Spack::n] = f_theta(icol, klev);
               qv(icol, klev / Spack::n)[klev % Spack::n] = f_qv(icol, klev);
               qc(icol, klev / Spack::n)[klev % Spack::n] = f_qc(icol, klev);

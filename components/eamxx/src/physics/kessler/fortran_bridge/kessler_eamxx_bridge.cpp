@@ -37,7 +37,7 @@ namespace scream {
         params_computed.transpose<ekat::TransposeDirection::c2f>(pcols,pver);
 
         #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
-            printf("I shouldn't be accessed. \n");
+            
             kessler_eamxx_bridge_run_c(pcols, pver, dt, lyr_surf, lyr_toa, params_helpers.h_cpair.data(),
                                                                        params_helpers.h_rair.data(),
                                                                        params_helpers.h_rho.data(),

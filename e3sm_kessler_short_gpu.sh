@@ -51,7 +51,7 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange NTHRDS=1
 ./xmlchange NGPUS_PER_NODE=4
 ./xmlchange GPU_TYPE=a100 # NVIDIA A100 GPUs in Derecho
-./xmlchange OPENACC_GPU_OFFLOAD=TRUE
+./xmlchange OPENACC_GPU_OFFLOAD=TRUE # TRUE for with OpenACC 
 ./xmlchange OPENMP_GPU_OFFLOAD=FALSE
 ./xmlchange KOKKOS_GPU_OFFLOAD=TRUE
 ./xmlchange OVERSUBSCRIBE_GPU=FALSE
@@ -69,7 +69,9 @@ cd $CASE_SCRIPTS_DIR
 ./atmchange physics::atm_procs_list=mac_aero_mic # this removes the rrtmgp physics
 ./atmchange mac_aero_mic::atm_procs_list=kessler #kessler
 ./atmchange save_field_manager_content=true
-./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control.yml
+# ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control.yml
+# ./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/screami_aquaplanet_ne30np4L72_20220823.nc
+# ./atmchange grids_manager::vertical_coordinate_filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/vertical_coordinates_L72_20220927.nc
    
 ./case.build 
 #####################################################################

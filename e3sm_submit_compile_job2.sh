@@ -15,4 +15,4 @@
 
 
 # -l select=1:ncpus=64:mem=480GB:ngpus=4:gpu_type=a100
-./e3sm_kessler_short_gpu.sh
+./e3sm_kessler_short_gpucpu.sh

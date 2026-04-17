@@ -8,7 +8,7 @@ module kessler_eamxx_bridge_update
 
   ! Kessler code from CAM-SIMA
   use kessler_update 
-  use ccpp_kinds, only:  kind_phys
+  ! use ccpp_kinds, only:  kind_phys
   !-----------------------------------------------------------------------------
   implicit none
   private
@@ -26,7 +26,11 @@ module kessler_eamxx_bridge_update
 
 !===================================================================================================
 #include "eamxx_config.f"
+#ifdef SCREAM_DOUBLE_PRECISION
 # define c_real c_double
+#else
+# define c_real c_float
+#endif
 !===================================================================================================
 contains
 !===================================================================================================
@@ -39,7 +43,7 @@ subroutine kessler_eamxx_bridge_update_init_c(pcol_in, pver_in, gravit_in) bind(
   integer(kind=c_int), value, intent(in) :: pver_in
 
   ! Things to pass along to the Kessler base code
-  real(kind_phys), value,    intent(in)  :: gravit_in    ! gravity acceleration m/s^2
+  real(kind=c_real), value,    intent(in)  :: gravit_in    ! gravity acceleration m/s^2
 
   ! Set dimensions of fields
   pcols = pcol_in
@@ -62,25 +66,29 @@ subroutine kessler_eamxx_bridge_update_c( ncol, nz, dt, cpair, pk, theta, temp_p
   ! Arguments
   integer(kind=c_int), value,                intent(in)    :: ncol      ! Number of columns
   integer(kind=c_int), value,                intent(in)    :: nz        ! Number of vertical levels
-  real(kind_phys),     value,                intent(in)    :: dt        ! Physics time step (s)
+  real(kind=c_real),     value,                intent(in)    :: dt        ! Physics time step (s)
 
-  real(kind_phys),    dimension(pcols,pver), intent(in)    :: cpair     ! Specific_heat_of_dry_air_at_constant_pressure (J/kg/K)
-  real(kind_phys),    dimension(pcols,pver), intent(in)    :: pk        ! Exner function (p/p0)**(R/cp)
-  real(kind_phys),    dimension(pcols,pver), intent(in)    :: theta     ! Potential temperature (K)
+  real(kind=c_real),    dimension(pcols,pver), intent(in)    :: cpair     ! Specific_heat_of_dry_air_at_constant_pressure (J/kg/K)
+  real(kind=c_real),    dimension(pcols,pver), intent(in)    :: pk        ! Exner function (p/p0)**(R/cp)
+  real(kind=c_real),    dimension(pcols,pver), intent(in)    :: theta     ! Potential temperature (K)
 
-  real(kind_phys),    dimension(pcols,pver), intent(inout) :: temp_prev ! Temperature at previous timestep (K)
-  real(kind_phys),    dimension(pcols,pver), intent(inout) :: temp      ! Temperature updated (K)
-  real(kind_phys),    dimension(pcols,pver), intent(out)   :: temp_tend ! Temperature tendency (K)
-  real(kind_phys),    dimension(pcols,pver), intent(in)    :: z_mid     ! Geopotential height at each level (m)
-  real(kind_phys),    dimension(pcols),      intent(in)    :: phis      ! Geopotential height of surface (m2/s2)
-  real(kind_phys),    dimension(pcols,pver), intent(out)   :: st_energy ! Dry static energy J/kg
+  real(kind=c_real),    dimension(pcols,pver), intent(inout) :: temp_prev ! Temperature at previous timestep (K)
+  real(kind=c_real),    dimension(pcols,pver), intent(inout) :: temp      ! Temperature updated (K)
+  real(kind=c_real),    dimension(pcols,pver), intent(out)   :: temp_tend ! Temperature tendency (K)
+  real(kind=c_real),    dimension(pcols,pver), intent(in)    :: z_mid     ! Geopotential height at each level (m)
+  real(kind=c_real),    dimension(pcols),      intent(in)    :: phis      ! Geopotential height of surface (m2/s2)
+  real(kind=c_real),    dimension(pcols,pver), intent(out)   :: st_energy ! Dry static energy J/kg
 
-  ! Call the Kessler run function
-  call kessler_update_timestep_init(temp, temp_prev, temp_tend, errmsg, errflg)
-
-  call kessler_update_run(nz, ncol, dt, theta, pk, temp_prev, temp_tend, errmsg, errflg)
-  call kessler_update_timestep_final(nz, cpair, temp, z_mid, phis, st_energy, errflg, errmsg)
-  
+  ! Call the Kessler update Functions
+  #if defined(EAMXX_ENABLE_GPU) && defined(EAMXX_ENABLE_OPENACC)
+    call kessler_update_timestep_init(ncol, nz, temp, temp_prev, temp_tend, errmsg, errflg)
+    call kessler_update_run(nz, ncol, dt, theta, pk, temp_prev, temp_tend, errmsg, errflg)
+    call kessler_update_timestep_final(nz, ncol, cpair, temp, z_mid, phis, st_energy, errflg, errmsg)
+  #else
+    call kessler_update_timestep_init(temp, temp_prev, temp_tend, errmsg, errflg)
+    call kessler_update_run(nz, ncol, dt, theta, pk, temp_prev, temp_tend, errmsg, errflg)
+    call kessler_update_timestep_final(nz, cpair, temp, z_mid, phis, st_energy, errflg, errmsg)
+  #endif
 end subroutine kessler_eamxx_bridge_update_c
 
 !===================================================================================================

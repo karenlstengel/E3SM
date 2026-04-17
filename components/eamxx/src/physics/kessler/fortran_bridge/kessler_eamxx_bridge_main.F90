@@ -28,7 +28,11 @@ module kessler_eamxx_bridge_main
 
 !===================================================================================================
 #include "eamxx_config.f"
+#ifdef SCREAM_DOUBLE_PRECISION
 # define c_real c_double
+#else
+# define c_real c_float
+#endif
 !===================================================================================================
 contains
 !===================================================================================================
@@ -41,9 +45,9 @@ subroutine kessler_eamxx_bridge_init_c( pcol_in, pver_in, lv_in, pref_in, rhoqr_
   integer(kind=c_int), value, intent(in) :: pver_in
 
   ! Things to pass along to the Kessler base code
-  real(kind_phys), value,    intent(in)  :: lv_in    ! latent heat of vaporization, J/kg
-  real(kind_phys), value,    intent(in)  :: pref_in  ! reference pressure, Pa
-  real(kind_phys), value,    intent(in)  :: rhoqr_in ! density of fresh liquid water, kg/m^3
+  real(kind=c_real), value,    intent(in)  :: lv_in    ! latent heat of vaporization, J/kg
+  real(kind=c_real), value,    intent(in)  :: pref_in  ! reference pressure, Pa
+  real(kind=c_real), value,    intent(in)  :: rhoqr_in ! density of fresh liquid water, kg/m^3
 
   integer :: mpi_rank, ierror
 
@@ -73,22 +77,22 @@ subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, r
   ! Arguments
   integer(kind=c_int), value,                intent(in)    :: ncol     ! Number of columns
   integer(kind=c_int), value,                intent(in)    :: nz       ! Number of vertical levels
-  real(kind_phys),     value,                intent(in)    :: dt       ! Physics time step (s)
+  real(kind=c_real),     value,                intent(in)    :: dt       ! Physics time step (s)
   integer(kind=c_int), value,                intent(in)    :: lyr_surf ! Index of surface layer in the vertical coordinate
   integer(kind=c_int), value,                intent(in)    :: lyr_toa  ! Index of top of the atmosphere in the vertical coordinate
   real(kind=c_real),  dimension(pcols,pver), intent(in)    :: cpair    ! Specific_heat_of_dry_air_at_constant_pressure (J/kg/K)
-  real(kind_phys),    dimension(pcols,pver), intent(in)    :: rair     ! Gas constant of dry air (J/kg/K)
-  real(kind_phys),    dimension(pcols,pver), intent(in)    :: rho      ! Dry air density (kg/m^3)
-  real(kind_phys),    dimension(pcols,pver), intent(in)    :: z_mid    ! Heights of thermo. levels (m)
-  real(kind_phys),    dimension(pcols,pver), intent(in)    :: pk       ! Exner function (p/p0)**(R/cp)
+  real(kind=c_real),    dimension(pcols,pver), intent(in)    :: rair     ! Gas constant of dry air (J/kg/K)
+  real(kind=c_real),    dimension(pcols,pver), intent(in)    :: rho      ! Dry air density (kg/m^3)
+  real(kind=c_real),    dimension(pcols,pver), intent(in)    :: z_mid    ! Heights of thermo. levels (m)
+  real(kind=c_real),    dimension(pcols,pver), intent(in)    :: pk       ! Exner function (p/p0)**(R/cp)
 
-  real(kind_phys),    dimension(pcols,pver), intent(inout) :: theta    ! Potential temperature (K)
-  real(kind_phys),    dimension(pcols,pver), intent(inout) :: qv       ! Water vapor mixing ratio wrt dry air (kg/kg)
-  real(kind_phys),    dimension(pcols,pver), intent(inout) :: qc       ! Cloud water mixing ratio wrt dry air (kg/kg)
-  real(kind_phys),    dimension(pcols,pver), intent(inout) :: qr       ! Rain water mixing ratio wrt dry air (kg/kg)
+  real(kind=c_real),    dimension(pcols,pver), intent(inout) :: theta    ! Potential temperature (K)
+  real(kind=c_real),    dimension(pcols,pver), intent(inout) :: qv       ! Water vapor mixing ratio wrt dry air (kg/kg)
+  real(kind=c_real),    dimension(pcols,pver), intent(inout) :: qc       ! Cloud water mixing ratio wrt dry air (kg/kg)
+  real(kind=c_real),    dimension(pcols,pver), intent(inout) :: qr       ! Rain water mixing ratio wrt dry air (kg/kg)
 
-  real(kind_phys),    dimension(pcols),      intent(out)   :: precl    ! Precipitation rate (m_water / s)
-  real(kind_phys),    dimension(pcols,pver), intent(out)   :: relhum   ! Relative humidity in percent
+  real(kind=c_real),    dimension(pcols),      intent(out)   :: precl    ! Precipitation rate (m_water / s)
+  real(kind=c_real),    dimension(pcols,pver), intent(out)   :: relhum   ! Relative humidity in percent
 
   integer :: i,k
   ! real(kind=c_real) :: relhum_max, pk_max, theta_max, qv_max

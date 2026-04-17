@@ -35,6 +35,7 @@ namespace scream {
         // Need to transpose to match how Fortran handles things
         params_helpers.transpose<ekat::TransposeDirection::c2f>(pcols,pver);
         params_computed.transpose<ekat::TransposeDirection::c2f>(pcols,pver);
+        Kokkos::fence();
 
         #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
             

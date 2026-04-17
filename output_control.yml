@@ -1,9 +1,10 @@
 %YAML 1.1
 ---
-filename_prefix: AQP1_ne4pg2_eamxx_kessler_nvidia_cpu.scream.phys.h
+filename_prefix: AQP1_ne4_eamxx_kessler_nvidia_gpu.scream.phys.h
 Averaging Type: Average
-Max Snapshots Per File: 10
+Max Snapshots Per File: 20
 averaging_type: average
+floating_point_precision: double
 fields:
   physics_gll:
     field_names:

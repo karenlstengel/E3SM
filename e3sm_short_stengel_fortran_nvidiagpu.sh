@@ -17,7 +17,7 @@ MYCOMPILER=nvidiagpu
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="AQP1_ne4_stengel_fortran_eamxx_nvidia_gpu2" # "stengel_fortran_eamxx_nvidia_koacc"
+CASE_NAME="AQP1_ne4_stengelF_eamxx_nvidia_gpu" # "stengel_fortran_eamxx_nvidia_koacc"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -51,7 +51,7 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange NTHRDS=1
 ./xmlchange NGPUS_PER_NODE=4
 ./xmlchange GPU_TYPE=a100 # NVIDIA A100 GPUs in Derecho
-./xmlchange OPENACC_GPU_OFFLOAD=FALSE
+./xmlchange OPENACC_GPU_OFFLOAD=TRUE
 ./xmlchange OPENMP_GPU_OFFLOAD=FALSE
 ./xmlchange KOKKOS_GPU_OFFLOAD=TRUE
 ./xmlchange OVERSUBSCRIBE_GPU=FALSE
@@ -63,10 +63,12 @@ cd $CASE_SCRIPTS_DIR
 
 ./xmlchange CAM_TARGET=$DYCORE
 ./xmlchange GMAKE_J='32'
+./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control.yml
+./atmchange save_field_manager_content=true
 # ./atmchange initial_conditions::topography_filename=/glade/derecho/scratch/kstengel/inputdata/atm/cam/topo/USGS-gtopo30_ne30np4pg2_x6t-SGH.c20210614.nc
-./atmchange mac_aero_mic::atm_procs_list+=stengelF
+# ./atmchange mac_aero_mic::atm_procs_list+=stengelF
 
-# ./atmquery --grep topography
+./atmquery --listall
    
 ./case.build #--clean atm # note that you need to have built this at least once successfully before using this flag
 
@@ -85,8 +87,8 @@ else
 fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
-./xmlchange STOP_N='1',STOP_OPTION='ndays'
-./xmlchange JOB_WALLCLOCK_TIME='00:05:00'
+./xmlchange STOP_N='5',STOP_OPTION='ndays'
+./xmlchange JOB_WALLCLOCK_TIME='00:20:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE
 # ./xmlchange MPI_RUN_COMMAND="mpiexec -n 4 -ppn 4 set_gpu_rank /glade/u/home/$user/cesm/run_script/CAM7/$MACH/wrapper_scripts/nsys_all_mpi.sh "

@@ -17,7 +17,7 @@ MYCOMPILER=nvidia
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="AQP1_ne4_stengel_fortran_eamxx_nvidia_cpu2" # "AQP1_ne4_eamxx_nvidia_cpu"
+CASE_NAME="AQP1_ne4_stengelF_eamxx_nvidia_cpu" # "AQP1_ne4_eamxx_nvidia_cpu"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -58,7 +58,8 @@ cd $CASE_SCRIPTS_DIR
 ./case.setup
 
 ./xmlchange CAM_TARGET=$DYCORE
-./xmlchange GMAKE_J='16'
+./xmlchange GMAKE_J='32'
+./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control.yml
 # ./atmchange initial_conditions::topography_filename=/glade/derecho/scratch/kstengel/inputdata/atm/cam/topo/USGS-gtopo30_ne30np4pg2_x6t-SGH.c20210614.nc
 ./atmchange mac_aero_mic::atm_procs_list+=stengelF
 
@@ -81,8 +82,8 @@ else
 fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
-./xmlchange STOP_N='1',STOP_OPTION='ndays'
-./xmlchange JOB_WALLCLOCK_TIME='00:05:00'
+./xmlchange STOP_N='5',STOP_OPTION='ndays'
+./xmlchange JOB_WALLCLOCK_TIME='00:20:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE
 

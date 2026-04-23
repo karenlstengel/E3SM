@@ -15,7 +15,7 @@ if (OPENACC_GPU_OFFLOAD)
   # string(APPEND CMAKE_EXE_LINKER_FLAGS " -noacc")
   # string(APPEND CMAKE_EXE_LINKER_FLAGS="-acc -gpu=cc80")
   set(EAMXX_ENABLE_OPENACC TRUE)
-  string(APPEND CMAKE_Fortran_FLAGS " -acc -gpu=cc80 -Minfo=accel")
+  string(APPEND CMAKE_Fortran_FLAGS " -acc -gpu=cc80 -Minfo=accel -Mpreprocess -mp=gpu -gpu=mem:separate,math_uniform -DUSE_GPU")
   string(APPEND CMAKE_EXE_LINKER_FLAGS " -acc -gpu=cc80 -Minfo=accel")
 endif()
 set(HOMME_QUAD_PREC FALSE CACHE BOOL "") # nvidia does not seem to support QUAD 

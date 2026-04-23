@@ -35,7 +35,7 @@ site
 *~
 
 #Ignore Mac folder files
-.DS_Store
+*.DS_Store
 
 #Ignore vscode dir
 .vscode

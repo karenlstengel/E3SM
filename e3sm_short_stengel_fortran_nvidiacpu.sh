@@ -45,7 +45,7 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange EXEROOT=${CASE_BUILD_DIR}
 ./xmlchange RUNDIR=${CASE_RUN_DIR}
 
-./xmlchange DEBUG=FALSE
+./xmlchange DEBUG=TRUE
 
 ./xmlchange NTASKS=64
 ./xmlchange NTHRDS=1
@@ -83,7 +83,7 @@ fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
 ./xmlchange STOP_N='5',STOP_OPTION='ndays'
-./xmlchange JOB_WALLCLOCK_TIME='00:20:00'
+./xmlchange JOB_WALLCLOCK_TIME='01:00:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE
 

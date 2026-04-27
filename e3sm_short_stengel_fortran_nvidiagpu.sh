@@ -17,7 +17,7 @@ MYCOMPILER=nvidiagpu
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="AQP1_ne4_stengelF_eamxx_nvidia_gpu" # "stengel_fortran_eamxx_nvidia_koacc"
+CASE_NAME="AQP1_ne4_stengelF_eamxx_nvidia_gpucpu" # "stengel_fortran_eamxx_nvidia_koacc"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -45,13 +45,13 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange EXEROOT=${CASE_BUILD_DIR}
 ./xmlchange RUNDIR=${CASE_RUN_DIR}
 
-./xmlchange DEBUG=FALSE
+./xmlchange DEBUG=TRUE
 
 ./xmlchange NTASKS=4
 ./xmlchange NTHRDS=1
 ./xmlchange NGPUS_PER_NODE=4
 ./xmlchange GPU_TYPE=a100 # NVIDIA A100 GPUs in Derecho
-./xmlchange OPENACC_GPU_OFFLOAD=TRUE
+./xmlchange OPENACC_GPU_OFFLOAD=FALSE
 ./xmlchange OPENMP_GPU_OFFLOAD=FALSE
 ./xmlchange KOKKOS_GPU_OFFLOAD=TRUE
 ./xmlchange OVERSUBSCRIBE_GPU=FALSE

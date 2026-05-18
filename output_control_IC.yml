@@ -1,9 +1,9 @@
 %YAML 1.1
 ---
-filename_prefix: SSIC_ne30np4_eamxx_kessler_nvidia_cpu.scream.phys.h
-Averaging Type: Average
-Max Snapshots Per File: 20
-averaging_type: average
+filename_prefix: SSIC_ne30np4_eamxx_kessler_nvidia_cpu_nsteps.scream.phys.h
+Averaging Type: Instant
+Max Snapshots Per File: 97
+averaging_type: instant
 floating_point_precision: double
 fields:
   physics_gll:
@@ -25,6 +25,7 @@ fields:
     - theta
     - relhum 
     - precl
+    - ps
     # - RelativeHumidity
     # - Exner
     # - DryStaticEnergy
@@ -36,5 +37,5 @@ fields:
   #     - omega_dyn
 output_control:
   frequency: 1
-  frequency_units: ndays
+  frequency_units: nsteps
   save_grid_data: true

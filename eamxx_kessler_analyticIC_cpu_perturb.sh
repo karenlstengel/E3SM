@@ -16,7 +16,7 @@ RESOLUTION=ne30_ne30 #ne30pg2_ne30pg2,ne4pg2_ne4pg2
 DYCORE=theta-l_kokkos
 MACH=derecho
 MYCOMPILER=nvidia
-QUEUE_NAME=develop
+QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
 CASE_NAME="SSIC_ne30np4_eamxx_kessler_nvidia_cpu"
@@ -50,6 +50,7 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange DEBUG=FALSE
 
 ./xmlchange NTASKS=128
+# ./xmlchange NUM_NODES=2
 ./xmlchange NTHRDS=1
 ./xmlchange ROOTPE='0'
 
@@ -68,45 +69,43 @@ cd $CASE_SCRIPTS_DIR
 ./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/FKESSLER_NE30NP4.cam.i.moist_baroclinic_wave_dcmip2016.nc
 ./atmchange grids_manager::vertical_coordinate_filename=/glade/campaign/cesm/cesmdata/inputdata/atm/cam/inic/cam_vcoords_L58_c250227.nc
 
-# use below to match to stormspeed
-./atmchange ctl_nl::dt_tracer_factor=6
-./atmchange ctl_nl::hypervis_subcycle_q=6
-./atmchange ctl_nl::se_ftype=2
-./atmchange ctl_nl::se_nsplit=2
-./atmchange ctl_nl::statefreq=488
-./atmchange ctl_nl::transport_alg=12
+# Perturbations are set as follows:
+./atmchange intial_conditions::perturbed_fields=T_mid, ...
+./atmchange intial_conditions::generate_perturbation_random_seed: false
+./atmchange intial_conditions::perturbation_random_seed: 0
+./atmchange intial_conditions::perturbation_limit: 0.001
+./atmchange intial_conditions::perturbation_minimum_pressure: 900.0
 
 
-# -------------------------------------------
 ./atmquery --listall
-./case.build 
+# ./case.build 
 
 # ####################################################################
 # Run E3SM
 # ####################################################################
-cd $CASE_SCRIPTS_DIR
+# cd $CASE_SCRIPTS_DIR
 
-./xmlchange RUN_TYPE="startup"
-if [[ $COMPSET == *"F20TR"* ]]; then
-   ./xmlchange RUN_STARTDATE='1850-01-01'
-elif [[ $COMPSET == "FMTHIST" || $COMPSET == "FLTHIST" ]]; then
-   ./xmlchange RUN_STARTDATE='2001-01-01'
-else
-   ./xmlchange RUN_STARTDATE='0001-01-01'
-fi
-./xmlchange RESUBMIT='0'
-./xmlchange CONTINUE_RUN='FALSE'
-./xmlchange STOP_N='20',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
-./xmlchange JOB_WALLCLOCK_TIME='00:30:00'
-./xmlchange JOB_QUEUE=$QUEUE_NAME
-./xmlchange BUDGETS=TRUE
+# ./xmlchange RUN_TYPE="startup"
+# if [[ $COMPSET == *"F20TR"* ]]; then
+#    ./xmlchange RUN_STARTDATE='1850-01-01'
+# elif [[ $COMPSET == "FMTHIST" || $COMPSET == "FLTHIST" ]]; then
+#    ./xmlchange RUN_STARTDATE='2001-01-01'
+# else
+#    ./xmlchange RUN_STARTDATE='0001-01-01'
+# fi
+# ./xmlchange RESUBMIT='0'
+# ./xmlchange CONTINUE_RUN='FALSE'
+# ./xmlchange STOP_N='2',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
+# ./xmlchange JOB_WALLCLOCK_TIME='00:30:00'
+# ./xmlchange JOB_QUEUE=$QUEUE_NAME
+# ./xmlchange BUDGETS=TRUE
 
-if [[ $DYCORE == "theta-l_kokkos" ]]; then
-cat << EOF >> user_nl_elm
-   check_finidat_year_consistency = .false.
-   check_dynpft_consistency = .false.
-   create_crop_landunit = .false.
-EOF
-fi
+# if [[ $DYCORE == "theta-l_kokkos" ]]; then
+# cat << EOF >> user_nl_elm
+#    check_finidat_year_consistency = .false.
+#    check_dynpft_consistency = .false.
+#    create_crop_landunit = .false.
+# EOF
+# fi
 
-./case.submit
+# ./case.submit

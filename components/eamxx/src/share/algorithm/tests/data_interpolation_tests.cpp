@@ -52,6 +52,7 @@ void root_print (const ekat::Comm& comm,
 void run_tests (const std::shared_ptr<const AbstractGrid>& grid,
                 const strvec_t& input_files, util::TimeStamp t_beg,
                 const util::TimeLine timeline,
+                const DataInterpolation::TimeInterpType time_interp_type,
                 const DataInterpolation::VRemapType vr_type = DataInterpolation::None)
 {
   auto t_end = t_beg + t_beg.days_in_curr_month()*spd;
@@ -61,10 +62,13 @@ void run_tests (const std::shared_ptr<const AbstractGrid>& grid,
   auto nlevs = grid->get_num_vertical_levels();
 
   auto vcoarse_grid = grid->clone("vcoarse",true);
-  vcoarse_grid->reset_num_vertical_lev(data_nlevs);
+  auto vcoarse_vkind = vr_type==NOP ? AbstractGrid::VKind::Model
+                                    : AbstractGrid::VKind::Pressure;
+
+  vcoarse_grid->reset_vertical_configuration(data_nlevs, vcoarse_vkind);
 
   // These are the fields we will compute
-  auto fields = create_fields(grid,false,false);
+  auto fields = create_fields(grid,false);
   fields.pop_back(); // We don't interpolate p1d...
 
   std::string map_file = grid->get_num_global_dofs()==data_ngcols ? "" : map_file_name;
@@ -103,9 +107,9 @@ void run_tests (const std::shared_ptr<const AbstractGrid>& grid,
     // If we do remap, there is some P0 extrapolation,
     // for which we need to know the data at the top/bot
     // NOTE: the data has NO ilev coord in this case
-    expected_vcoarse = create_fields(vcoarse_grid,false,true);
-    base_vcoarse = create_fields(vcoarse_grid,true,true);
-    ones_vcoarse = create_fields(vcoarse_grid,false,true);
+    expected_vcoarse = create_fields(vcoarse_grid,false);
+    base_vcoarse = create_fields(vcoarse_grid,true);
+    ones_vcoarse = create_fields(vcoarse_grid,false);
     for (auto& f : ones_vcoarse) {
       f.deep_copy(1);
     }
@@ -121,7 +125,7 @@ void run_tests (const std::shared_ptr<const AbstractGrid>& grid,
 
   int nfields = fields.size();
   auto interp = create_interp(grid,fields);
-  interp->setup_time_database(input_files,util::TimeLine::YearlyPeriodic);
+  interp->setup_time_database(input_files,util::TimeLine::YearlyPeriodic,time_interp_type);
   interp->create_horiz_remappers (map_file);
   interp->create_vert_remapper (vremap_data);
   interp->init_data_interval(t0);
@@ -149,7 +153,6 @@ void run_tests (const std::shared_ptr<const AbstractGrid>& grid,
     // to do a convex interpolation between f(t=t_beg) and f(t=t_end).
     util::TimeInterval time_from_beg(t_beg,time,timeline);
     double alpha = time_from_beg.length / t_beg.days_in_curr_month();
-    double delta = delta_data[mm_beg]*(1-alpha) + delta_data[mm_end]*alpha;
 
     // Just in case our testing logic is buggy, the run call below should print
     // similar information, so we can more easily debug.
@@ -160,11 +163,14 @@ void run_tests (const std::shared_ptr<const AbstractGrid>& grid,
                 << " time : " << time.to_string() << "\n"
                 << " t-beg: " << time_from_beg.length << "\n"
                 << " days in mm_beg: " << t_beg.days_in_curr_month() << "\n"
-                << " alpha: " << alpha << "\n"
-                << " delta_beg: " << delta_data[mm_beg] << "\n"
-                << " delta_end: " << delta_data[mm_end] << "\n"
-                << " delta: " << delta << "\n";
+                << " alpha: " << alpha << "\n";
     }
+
+    if (time_interp_type==DataInterpolation::Nearest) {
+      alpha = alpha>0.5 ? 1 : 0;
+    }
+    double delta = delta_data[mm_beg]*(1-alpha) + delta_data[mm_end]*alpha;
+
     // Compute expected difference from base value
     interp->run(time);  
     for (int i=0; i<nfields; ++i) {
@@ -226,9 +232,9 @@ TEST_CASE ("exceptions")
   // Test correctness of some exception handling inside the DataInterpolation source code
   ekat::Comm comm(MPI_COMM_WORLD);
   scorpio::init_subsystem(comm);
-  auto grid = create_point_grid("pg",data_ngcols,data_nlevs,comm);
+  auto grid = create_point_grid("pg",data_ngcols,data_nlevs,comm,1);
 
-  auto fields = create_fields(grid,false,false);
+  auto fields = create_fields(grid,false);
 
   REQUIRE_THROWS (create_interp(nullptr,fields)); // Invalid grid pointer
 
@@ -256,115 +262,229 @@ TEST_CASE ("interpolation")
 
   scorpio::init_subsystem(comm);
 
-  auto data_grid   = create_point_grid("pg",data_ngcols,data_nlevs,comm);
-  auto hfine_grid  = create_point_grid("pg_h",fine_ngcols,data_nlevs,comm);
-  auto vfine_grid  = create_point_grid("pg_v",data_ngcols,fine_nlevs,comm);
-  auto hvfine_grid = create_point_grid("pg_hv",fine_ngcols,fine_nlevs,comm);
+  auto data_grid   = create_point_grid("pg",data_ngcols,data_nlevs,comm,1);
+  auto hfine_grid  = create_point_grid("pg_h",fine_ngcols,data_nlevs,comm,1);
+  auto vfine_grid  = create_point_grid("pg_v",data_ngcols,fine_nlevs,comm,1);
+  auto hvfine_grid = create_point_grid("pg_hv",fine_ngcols,fine_nlevs,comm,1);
 
-  SECTION ("periodic") {
-    // We assume we start with t0 sometime between the first and second input slice.
-    auto t_beg = reset_year(get_last_slice_time(),2019);
-    auto timeline = util::TimeLine::YearlyPeriodic;
-    strvec_t files = {"data_interpolation_0.nc","data_interpolation_1.nc"};
-    strvec_t files_no_ilev = {"data_interpolation_0_no_ilev.nc","data_interpolation_1_no_ilev.nc"};
+  SECTION ("linear_interp") {
+    auto time_interp_type = DataInterpolation::Linear;
+    SECTION ("periodic") {
+      // We assume we start with t0 sometime between the first and second input slice.
+      auto t_beg = reset_year(get_last_slice_time(),2019);
+      auto timeline = util::TimeLine::YearlyPeriodic;
+      strvec_t files = {"data_interpolation_0.nc","data_interpolation_1.nc"};
+      strvec_t files_no_ilev = {"data_interpolation_0_no_ilev.nc","data_interpolation_1_no_ilev.nc"};
 
-    SECTION ("no-horiz") {
-      SECTION ("no-vert") {
-        root_print(comm,"  timeline=PERIODIC, horiz_remap=NO,  vert_remap=NO ..........\n");
-        run_tests (data_grid,files,t_beg,timeline);
-        root_print(comm,"  timeline=PERIODIC, horiz_remap=NO,  vert_remap=NO .......... PASS\n");
+      SECTION ("no-horiz") {
+        SECTION ("no-vert") {
+          root_print(comm,"  interp=LINEAR, timeline=PERIODIC, horiz_remap=NO,  vert_remap=NO ..........\n");
+          run_tests (data_grid,files,t_beg,timeline,time_interp_type);
+          root_print(comm,"  interp=LINEAR, timeline=PERIODIC, horiz_remap=NO,  vert_remap=NO .......... PASS\n");
+        }
+        SECTION ("p1d-vert") {
+          root_print(comm,"  interp=LINEAR, timeline=PERIODIC, horiz_remap=NO,  vert_remap=p1d .........\n");
+          run_tests (vfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P1D);
+          root_print(comm,"  interp=LINEAR, timeline=PERIODIC, horiz_remap=NO,  vert_remap=p1d ......... PASS\n");
+        }
+        SECTION ("p2d-vert") {
+          root_print(comm,"  interp=LINEAR, timeline=PERIODIC, horiz_remap=NO,  vert_remap=p2d .........\n");
+          run_tests (vfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P2D);
+          root_print(comm,"  interp=LINEAR, timeline=PERIODIC, horiz_remap=NO,  vert_remap=p2d ......... PASS\n");
+        }
+        SECTION ("p3d-vert") {
+          root_print(comm,"  interp=LINEAR, timeline=PERIODIC, horiz_remap=NO,  vert_remap=p3d .........\n");
+          run_tests (vfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P3D);
+          root_print(comm,"  interp=LINEAR, timeline=PERIODIC, horiz_remap=NO,  vert_remap=p3d ......... PASS\n");
+        }
       }
-      SECTION ("p1d-vert") {
-        root_print(comm,"  timeline=PERIODIC, horiz_remap=NO,  vert_remap=p1d .........\n");
-        run_tests (vfine_grid,files_no_ilev,t_beg,timeline,P1D);
-        root_print(comm,"  timeline=PERIODIC, horiz_remap=NO,  vert_remap=p1d ......... PASS\n");
-      }
-      SECTION ("p2d-vert") {
-        root_print(comm,"  timeline=PERIODIC, horiz_remap=NO,  vert_remap=p2d .........\n");
-        run_tests (vfine_grid,files_no_ilev,t_beg,timeline,P2D);
-        root_print(comm,"  timeline=PERIODIC, horiz_remap=NO,  vert_remap=p2d ......... PASS\n");
-      }
-      SECTION ("p3d-vert") {
-        root_print(comm,"  timeline=PERIODIC, horiz_remap=NO,  vert_remap=p3d .........\n");
-        run_tests (vfine_grid,files_no_ilev,t_beg,timeline,P3D);
-        root_print(comm,"  timeline=PERIODIC, horiz_remap=NO,  vert_remap=p3d ......... PASS\n");
+
+      SECTION ("yes-horiz") {
+        SECTION ("no-vert") {
+          root_print(comm,"  interp=LINEAR, timeline=PERIODIC, horiz_remap=YES, vert_remap=NO ..........\n");
+          run_tests (hfine_grid,files,t_beg,timeline,time_interp_type);
+          root_print(comm,"  interp=LINEAR, timeline=PERIODIC, horiz_remap=YES, vert_remap=NO .......... PASS\n");
+        }
+        SECTION ("p1d-vert") {
+          root_print(comm,"  interp=LINEAR, timeline=PERIODIC, horiz_remap=YES, vert_remap=p1d .........\n");
+          run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P1D);
+          root_print(comm,"  interp=LINEAR, timeline=PERIODIC, horiz_remap=YES, vert_remap=p1d ......... PASS\n");
+        }
+        SECTION ("p2d-vert") {
+          root_print(comm,"  interp=LINEAR, timeline=PERIODIC, horiz_remap=YES, vert_remap=p2d .........\n");
+          run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P2D);
+          root_print(comm,"  interp=LINEAR, timeline=PERIODIC, horiz_remap=YES, vert_remap=p2d ......... PASS\n");
+        }
+        SECTION ("p3d-vert") {
+          root_print(comm,"  interp=LINEAR, timeline=PERIODIC, horiz_remap=YES, vert_remap=p3d .........\n");
+          run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P3D);
+          root_print(comm,"  interp=LINEAR, timeline=PERIODIC, horiz_remap=YES, vert_remap=p3d ......... PASS\n");
+        }
       }
     }
 
-    SECTION ("yes-horiz") {
-      SECTION ("no-vert") {
-        root_print(comm,"  timeline=PERIODIC, horiz_remap=YES, vert_remap=NO ..........\n");
-        run_tests (hfine_grid,files,t_beg,timeline);
-        root_print(comm,"  timeline=PERIODIC, horiz_remap=YES, vert_remap=NO .......... PASS\n");
+    SECTION ("linear_history") {
+      // We assume we start with t0 sometime between the first and second input slice.
+      auto t_beg = get_first_slice_time();
+      auto timeline = util::TimeLine::Linear;
+      strvec_t files = {"data_interpolation_0.nc","data_interpolation_1.nc"};
+      strvec_t files_no_ilev = {"data_interpolation_0_no_ilev.nc","data_interpolation_1_no_ilev.nc"};
+
+      SECTION ("no-horiz") {
+        SECTION ("no-vert") {
+          root_print(comm,"  interp=LINEAR, timeline=LINEAR,   horiz_remap=NO,  vert_remap=NO ..........\n");
+          run_tests (data_grid,files,t_beg,timeline,time_interp_type);
+          root_print(comm,"  interp=LINEAR, timeline=LINEAR,   horiz_remap=NO,  vert_remap=NO .......... PASS\n");
+        }
+        SECTION ("p1d-vert") {
+          root_print(comm,"  interp=LINEAR, timeline=LINEAR,   horiz_remap=NO,  vert_remap=p1d .........\n");
+          run_tests (vfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P1D);
+          root_print(comm,"  interp=LINEAR, timeline=LINEAR,   horiz_remap=NO,  vert_remap=p1d ......... PASS\n");
+        }
+        SECTION ("p2d-vert") {
+          root_print(comm,"  interp=LINEAR, timeline=LINEAR,   horiz_remap=NO,  vert_remap=p2d .........\n");
+          run_tests (vfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P2D);
+          root_print(comm,"  interp=LINEAR, timeline=LINEAR,   horiz_remap=NO,  vert_remap=p2d ......... PASS\n");
+        }
+        SECTION ("p3d-vert") {
+          root_print(comm,"  interp=LINEAR, timeline=LINEAR,   horiz_remap=NO,  vert_remap=p3d .........\n");
+          run_tests (vfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P3D);
+          root_print(comm,"  interp=LINEAR, timeline=LINEAR,   horiz_remap=NO,  vert_remap=p3d ......... PASS\n");
+        }
       }
-      SECTION ("p1d-vert") {
-        root_print(comm,"  timeline=PERIODIC, horiz_remap=YES, vert_remap=p1d .........\n");
-        run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,P1D);
-        root_print(comm,"  timeline=PERIODIC, horiz_remap=YES, vert_remap=p1d ......... PASS\n");
-      }
-      SECTION ("p2d-vert") {
-        root_print(comm,"  timeline=PERIODIC, horiz_remap=YES, vert_remap=p2d .........\n");
-        run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,P2D);
-        root_print(comm,"  timeline=PERIODIC, horiz_remap=YES, vert_remap=p2d ......... PASS\n");
-      }
-      SECTION ("p3d-vert") {
-        root_print(comm,"  timeline=PERIODIC, horiz_remap=YES, vert_remap=p3d .........\n");
-        run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,P3D);
-        root_print(comm,"  timeline=PERIODIC, horiz_remap=YES, vert_remap=p3d ......... PASS\n");
+
+      SECTION ("yes-horiz") {
+        SECTION ("no-vert") {
+          root_print(comm,"  interp=LINEAR, timeline=LINEAR,   horiz_remap=YES, vert_remap=NO ..........\n");
+          run_tests (hfine_grid,files,t_beg,timeline,time_interp_type);
+          root_print(comm,"  interp=LINEAR, timeline=LINEAR,   horiz_remap=YES, vert_remap=NO .......... PASS\n");
+        }
+        SECTION ("p1d-vert") {
+          root_print(comm,"  interp=LINEAR, timeline=LINEAR,   horiz_remap=YES, vert_remap=p1d .........\n");
+          run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P1D);
+          root_print(comm,"  interp=LINEAR, timeline=LINEAR,   horiz_remap=YES, vert_remap=p1d ......... PASS\n");
+        }
+        SECTION ("p2d-vert") {
+          root_print(comm,"  interp=LINEAR, timeline=LINEAR,   horiz_remap=YES, vert_remap=p2d .........\n");
+          run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P2D);
+          root_print(comm,"  interp=LINEAR, timeline=LINEAR,   horiz_remap=YES, vert_remap=p2d ......... PASS\n");
+        }
+        SECTION ("p3d-vert") {
+          root_print(comm,"  interp=LINEAR, timeline=LINEAR,   horiz_remap=YES, vert_remap=p3d .........\n");
+          run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P3D);
+          root_print(comm,"  interp=LINEAR, timeline=LINEAR,   horiz_remap=YES, vert_remap=p3d ......... PASS\n");
+        }
       }
     }
   }
 
-  SECTION ("linear") {
-    // We assume we start with t0 sometime between the first and second input slice.
-    auto t_beg = get_first_slice_time();
-    auto timeline = util::TimeLine::Linear;
-    strvec_t files = {"data_interpolation_0.nc","data_interpolation_1.nc"};
-    strvec_t files_no_ilev = {"data_interpolation_0_no_ilev.nc","data_interpolation_1_no_ilev.nc"};
+  SECTION ("nearest_interp") {
+    auto time_interp_type = DataInterpolation::Nearest;
+    SECTION ("periodic") {
+      // We assume we start with t0 sometime between the first and second input slice.
+      auto t_beg = reset_year(get_last_slice_time(),2019);
+      auto timeline = util::TimeLine::YearlyPeriodic;
+      strvec_t files = {"data_interpolation_0.nc","data_interpolation_1.nc"};
+      strvec_t files_no_ilev = {"data_interpolation_0_no_ilev.nc","data_interpolation_1_no_ilev.nc"};
 
-    SECTION ("no-horiz") {
-      SECTION ("no-vert") {
-        root_print(comm,"  timeline=LINEAR,   horiz_remap=NO,  vert_remap=NO ..........\n");
-        run_tests (data_grid,files,t_beg,timeline);
-        root_print(comm,"  timeline=LINEAR,   horiz_remap=NO,  vert_remap=NO .......... PASS\n");
+      SECTION ("no-horiz") {
+        SECTION ("no-vert") {
+          root_print(comm,"  interp=NEAREST, timeline=PERIODIC, horiz_remap=NO,  vert_remap=NO ..........\n");
+          run_tests (data_grid,files,t_beg,timeline,time_interp_type);
+          root_print(comm,"  interp=NEAREST, timeline=PERIODIC, horiz_remap=NO,  vert_remap=NO .......... PASS\n");
+        }
+        SECTION ("p1d-vert") {
+          root_print(comm,"  interp=NEAREST, timeline=PERIODIC, horiz_remap=NO,  vert_remap=p1d .........\n");
+          run_tests (vfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P1D);
+          root_print(comm,"  interp=NEAREST, timeline=PERIODIC, horiz_remap=NO,  vert_remap=p1d ......... PASS\n");
+        }
+        SECTION ("p2d-vert") {
+          root_print(comm,"  interp=NEAREST, timeline=PERIODIC, horiz_remap=NO,  vert_remap=p2d .........\n");
+          run_tests (vfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P2D);
+          root_print(comm,"  interp=NEAREST, timeline=PERIODIC, horiz_remap=NO,  vert_remap=p2d ......... PASS\n");
+        }
+        SECTION ("p3d-vert") {
+          root_print(comm,"  interp=NEAREST, timeline=PERIODIC, horiz_remap=NO,  vert_remap=p3d .........\n");
+          run_tests (vfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P3D);
+          root_print(comm,"  interp=NEAREST, timeline=PERIODIC, horiz_remap=NO,  vert_remap=p3d ......... PASS\n");
+        }
       }
-      SECTION ("p1d-vert") {
-        root_print(comm,"  timeline=LINEAR,   horiz_remap=NO,  vert_remap=p1d .........\n");
-        run_tests (vfine_grid,files_no_ilev,t_beg,timeline,P1D);
-        root_print(comm,"  timeline=LINEAR,   horiz_remap=NO,  vert_remap=p1d ......... PASS\n");
-      }
-      SECTION ("p2d-vert") {
-        root_print(comm,"  timeline=LINEAR,   horiz_remap=NO,  vert_remap=p2d .........\n");
-        run_tests (vfine_grid,files_no_ilev,t_beg,timeline,P2D);
-        root_print(comm,"  timeline=LINEAR,   horiz_remap=NO,  vert_remap=p2d ......... PASS\n");
-      }
-      SECTION ("p3d-vert") {
-        root_print(comm,"  timeline=LINEAR,   horiz_remap=NO,  vert_remap=p3d .........\n");
-        run_tests (vfine_grid,files_no_ilev,t_beg,timeline,P3D);
-        root_print(comm,"  timeline=LINEAR,   horiz_remap=NO,  vert_remap=p3d ......... PASS\n");
+
+      SECTION ("yes-horiz") {
+        SECTION ("no-vert") {
+          root_print(comm,"  interp=NEAREST, timeline=PERIODIC, horiz_remap=YES, vert_remap=NO ..........\n");
+          run_tests (hfine_grid,files,t_beg,timeline,time_interp_type);
+          root_print(comm,"  interp=NEAREST, timeline=PERIODIC, horiz_remap=YES, vert_remap=NO .......... PASS\n");
+        }
+        SECTION ("p1d-vert") {
+          root_print(comm,"  interp=NEAREST, timeline=PERIODIC, horiz_remap=YES, vert_remap=p1d .........\n");
+          run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P1D);
+          root_print(comm,"  interp=NEAREST, timeline=PERIODIC, horiz_remap=YES, vert_remap=p1d ......... PASS\n");
+        }
+        SECTION ("p2d-vert") {
+          root_print(comm,"  interp=NEAREST, timeline=PERIODIC, horiz_remap=YES, vert_remap=p2d .........\n");
+          run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P2D);
+          root_print(comm,"  interp=NEAREST, timeline=PERIODIC, horiz_remap=YES, vert_remap=p2d ......... PASS\n");
+        }
+        SECTION ("p3d-vert") {
+          root_print(comm,"  interp=NEAREST, timeline=PERIODIC, horiz_remap=YES, vert_remap=p3d .........\n");
+          run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P3D);
+          root_print(comm,"  interp=NEAREST, timeline=PERIODIC, horiz_remap=YES, vert_remap=p3d ......... PASS\n");
+        }
       }
     }
 
-    SECTION ("yes-horiz") {
-      SECTION ("no-vert") {
-        root_print(comm,"  timeline=LINEAR,   horiz_remap=YES, vert_remap=NO ..........\n");
-        run_tests (hfine_grid,files,t_beg,timeline);
-        root_print(comm,"  timeline=LINEAR,   horiz_remap=YES, vert_remap=NO .......... PASS\n");
+    SECTION ("linear_history") {
+      // We assume we start with t0 sometime between the first and second input slice.
+      auto t_beg = get_first_slice_time();
+      auto timeline = util::TimeLine::Linear;
+      strvec_t files = {"data_interpolation_0.nc","data_interpolation_1.nc"};
+      strvec_t files_no_ilev = {"data_interpolation_0_no_ilev.nc","data_interpolation_1_no_ilev.nc"};
+
+      SECTION ("no-horiz") {
+        SECTION ("no-vert") {
+          root_print(comm,"  interp=NEAREST, timeline=LINEAR,   horiz_remap=NO,  vert_remap=NO ..........\n");
+          run_tests (data_grid,files,t_beg,timeline,time_interp_type);
+          root_print(comm,"  interp=NEAREST, timeline=LINEAR,   horiz_remap=NO,  vert_remap=NO .......... PASS\n");
+        }
+        SECTION ("p1d-vert") {
+          root_print(comm,"  interp=NEAREST, timeline=LINEAR,   horiz_remap=NO,  vert_remap=p1d .........\n");
+          run_tests (vfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P1D);
+          root_print(comm,"  interp=NEAREST, timeline=LINEAR,   horiz_remap=NO,  vert_remap=p1d ......... PASS\n");
+        }
+        SECTION ("p2d-vert") {
+          root_print(comm,"  interp=NEAREST, timeline=LINEAR,   horiz_remap=NO,  vert_remap=p2d .........\n");
+          run_tests (vfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P2D);
+          root_print(comm,"  interp=NEAREST, timeline=LINEAR,   horiz_remap=NO,  vert_remap=p2d ......... PASS\n");
+        }
+        SECTION ("p3d-vert") {
+          root_print(comm,"  interp=NEAREST, timeline=LINEAR,   horiz_remap=NO,  vert_remap=p3d .........\n");
+          run_tests (vfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P3D);
+          root_print(comm,"  interp=NEAREST, timeline=LINEAR,   horiz_remap=NO,  vert_remap=p3d ......... PASS\n");
+        }
       }
-      SECTION ("p1d-vert") {
-        root_print(comm,"  timeline=LINEAR,   horiz_remap=YES, vert_remap=p1d .........\n");
-        run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,P1D);
-        root_print(comm,"  timeline=LINEAR,   horiz_remap=YES, vert_remap=p1d ......... PASS\n");
-      }
-      SECTION ("p2d-vert") {
-        root_print(comm,"  timeline=LINEAR,   horiz_remap=YES, vert_remap=p2d .........\n");
-        run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,P2D);
-        root_print(comm,"  timeline=LINEAR,   horiz_remap=YES, vert_remap=p2d ......... PASS\n");
-      }
-      SECTION ("p3d-vert") {
-        root_print(comm,"  timeline=LINEAR,   horiz_remap=YES, vert_remap=p3d .........\n");
-        run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,P3D);
-        root_print(comm,"  timeline=LINEAR,   horiz_remap=YES, vert_remap=p3d ......... PASS\n");
+
+      SECTION ("yes-horiz") {
+        SECTION ("no-vert") {
+          root_print(comm,"  interp=NEAREST, timeline=LINEAR,   horiz_remap=YES, vert_remap=NO ..........\n");
+          run_tests (hfine_grid,files,t_beg,timeline,time_interp_type);
+          root_print(comm,"  interp=NEAREST, timeline=LINEAR,   horiz_remap=YES, vert_remap=NO .......... PASS\n");
+        }
+        SECTION ("p1d-vert") {
+          root_print(comm,"  interp=NEAREST, timeline=LINEAR,   horiz_remap=YES, vert_remap=p1d .........\n");
+          run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P1D);
+          root_print(comm,"  interp=NEAREST, timeline=LINEAR,   horiz_remap=YES, vert_remap=p1d ......... PASS\n");
+        }
+        SECTION ("p2d-vert") {
+          root_print(comm,"  interp=NEAREST, timeline=LINEAR,   horiz_remap=YES, vert_remap=p2d .........\n");
+          run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P2D);
+          root_print(comm,"  interp=NEAREST, timeline=LINEAR,   horiz_remap=YES, vert_remap=p2d ......... PASS\n");
+        }
+        SECTION ("p3d-vert") {
+          root_print(comm,"  interp=NEAREST, timeline=LINEAR,   horiz_remap=YES, vert_remap=p3d .........\n");
+          run_tests (hvfine_grid,files_no_ilev,t_beg,timeline,time_interp_type,P3D);
+          root_print(comm,"  interp=NEAREST, timeline=LINEAR,   horiz_remap=YES, vert_remap=p3d ......... PASS\n");
+        }
       }
     }
   }

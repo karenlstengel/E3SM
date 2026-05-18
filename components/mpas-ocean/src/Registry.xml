@@ -221,6 +221,12 @@
 					possible_values="Any integer greater than or equal to 2."
 		/>
 	</nml_record>
+	<nml_record name="lateral_walls" mode="forward">
+		<nml_option name="config_wall_slip_factor" type="real" default_value="1.0"
+					description="Lateral wall slip boundary condition: no-slip=0.0, free-slip=1.0, with partial-slip lying in-between. This factor multiplies relative vorticity computed at vertices positioned on lateral boundaries."
+					possible_values="Any real number between 0.0 and 1.0"
+		/>
+	</nml_record>
 	<nml_record name="hmix" mode="forward">
 		<nml_option name="config_hmix_scaleWithMesh" type="logical" default_value=".false."
 					description="If false, del2 and del4 coefficients are constant throughout the mesh (equivalent to setting $\rho_m=1$ throughout the mesh).  If true, these coefficients scale as mesh density to the -3/4 power."
@@ -496,12 +502,16 @@
 					possible_values="Any non-negative real value."
 		/>
 		<nml_option name="config_cvmix_background_scheme" type="character" default_value="constant"
-					description="Scheme for background diffusivity, 'constant' for constant with depth and space, 'BryanLewis' for vertically variable, 'none' for no background diffusivity"
+					description="Scheme for background diffusivity, 'constant' for constant with depth and space, 'latitude-dependent' for latitude dependence and constant in depth, 'BryanLewis' for vertically variable, 'none' for no background diffusivity"
 					possible_values="'constant', 'BryanLewis', and 'none'"
 		/>
 		<nml_option name="config_cvmix_background_diffusion" type="real" default_value="1.0e-5" units="m^2 s^-1"
-					description="Background vertical diffusion applied to tracer quantities"
+					description="Background vertical diffusion applied to tracer quantities. For 'latitude-dependent' this is the maximum value"
 					possible_values="Any positive real value."
+		/>
+		<nml_option name="config_cvmix_background_diffusion_max_latitude" type="real" default_value="-50" units="degrees"
+					description="For 'latitude-dependent' this is the maximum latitude at which background diffusivity is non-zero"
+					possible_values="Any real value between -90 and 90."
 		/>
 		<nml_option name="config_cvmix_background_diffusion_passive" type="real" default_value="1.0e-5" units="m^2 s^-1"
 					description="Background vertical diffusion applied to passive tracer quantities"
@@ -3913,7 +3923,7 @@
 			 description="Heat flux associated with Evaporation at cell centers sent to coupler. Positive into the ocean."
 		/>
 		<var name="seaIceTemperatureFlux" type="real" dimensions="nCells Time" units="C m s^-1"
-			 description="Heat flux associated with sea ice melt water at cell centers sent to coupler. Positive into the ocean."
+			 description="Heat flux associated with sea ice melt water at cell centers sent to coupler. Positive into the ocean. Currently always assigned a value of 0 because it is included in seaIceHeatFlux as assigned by Icepack"
 		/>
 		<var name="icebergTemperatureFlux" type="real" dimensions="nCells Time" units="C m s^-1"
 			 description="Heat flux associated with iceberg melt at cell centers sent to coupler. Positive into the ocean."
@@ -4260,7 +4270,7 @@
 		/>
 		<var name="areaIntegAnnMeanDataIcebergIceShelfFreshwaterFlux"  type="real" dimensions="Time" units="kg s^-1"
 			description="The area integrated, annually averaged freshwater flux into the ocean from both data icebergs and ice-shelf melting."
-			packages="scaledDISMFPKG"
+			packages="scaledDISMFPKG;dataLandIceFluxesPKG"
 		/>
 
 		<!-- Input fields for forcing due to tides -->

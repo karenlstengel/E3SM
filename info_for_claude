@@ -1,0 +1,26 @@
+kessler_cpu_path = /glade/derecho/scratch/kstengel/E3SM/atmospheric_physics/schemes/kessler
+kessler_gpu_path = /glade/derecho/scratch/kstengel/E3SM/GPU_ports/atmospheric_physics/schemes/kessler
+
+existing E3SM Kokkos code to imitate: 
+Cloud Fraction (skipping python calls): /glade/derecho/scratch/kstengel/E3SM_claude/E3SM/components/eamxx/src/physics/cld_fraction 
+or 
+TMS: /glade/derecho/scratch/kstengel/E3SM_claude/E3SM/components/eamxx/src/physics/tms
+
+
+also would like to create a map between CAM fields to EAMxx fields that includes the matched names, units, and descriptions (including wet or dry, etc)
+
+
+
+Instructions 
+
+in the main directory start claude:
+
+> i would like your help to do some code conversion. In particular I have a fortran parameterization called Kessler and I would like to convert it to Kokkos. The fortran version has a driver and i would like you to create one as well. 
+
+> /btw 
+
+> say yes to reading the files 
+
+> /btw dont start the conversion process yet, I jsut want you to figure out how to do it first. 
+
+> say yes to code conversion process 

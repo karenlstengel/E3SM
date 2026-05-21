@@ -1,13 +1,8 @@
-#ifndef SCREAM_KESSLER_HPP
-#define SCREAM_KESSLER_HPP
+#ifndef SCREAM_KESSLER_PROCESS_HPP
+#define SCREAM_KESSLER_PROCESS_HPP
 
 #include "physics/kessler/kessler_functions.hpp"
 #include "share/atm_process/atmosphere_process.hpp"
-#include "share/atm_process/ATMBufferManager.hpp"
-
-#include "share/physics/physics_constants.hpp"
-#include "share/physics/eamxx_common_physics_functions.hpp"
-// #include "share/physics/eamxx_common_physics_functions_impls.hpp"
 
 #include <ekat_parameter_list.hpp>
 
@@ -17,64 +12,81 @@ namespace scream
 {
 
 /*
- * The class responsible to do Kessler microphysics
+ * The class responsible for running the Kessler (1969) warm rain
+ * microphysics parameterization as an EAMxx AtmosphereProcess.
  *
- * The AD should store exactly ONE instance of this class stored
- * in its list of subcomponents (the AD should make sure of this).
-*/
+ * Required fields (input):
+ *   T_mid         - air temperature at layer midpoints (K)
+ *   p_mid         - air pressure at layer midpoints (Pa)
+ *   pseudo_density- layer thickness in pressure units (Pa)
+ *   phis          - surface geopotential (m^2 s^-2)
+ *   qv, qc, qr    - moisture tracers (kg kg^-1, wrt dry air)
+ *
+ * Computed / updated fields (output):
+ *   T_mid         - updated by Kessler latent heating
+ *   qv, qc, qr    - updated moisture fields
+ *   precl         - total precipitation rate at surface (m s^-1)
+ *   relhum        - relative humidity (%)
+ *
+ * The AD should store exactly ONE instance of this class in its list
+ * of subcomponents.
+ */
 
-class KesslerMicrophysics : public AtmosphereProcess
+class Kessler : public AtmosphereProcess
 {
+  using KesslerFunc = kessler::KesslerFunctions<Real, DefaultDevice>;
+  using KesslerData = KesslerFunc::KesslerData;
+  using Pack        = ekat::Pack<Real, SCREAM_PACK_SIZE>;
+  using view_2d     = KesslerFunc::view_2d<Pack>;
+  using uview_2d    = ekat::Unmanaged<view_2d>;
+  using view_2d_int = KesslerFunc::view_2d<Pack>;
+  using uview_2d_int = ekat::Unmanaged<view_2d_int>;
+
 public:
-  using KT  = ekat::KokkosTypes<DefaultDevice>;
-  using KMF = kessler::KesslerMicrophysicsFunctions<Real, DefaultDevice>;
-  using PF  = scream::PhysicsFunctions<DefaultDevice>;
-  using PC  = scream::physics::Constants<Real>;
 
-  using Scalar = KMF::Scalar;
-  using Spack = KMF::Spack;
-  using Pack  = ekat::Pack<Real,Spack::n>;
+  Kessler (const ekat::Comm& comm, const ekat::ParameterList& params);
 
-  // Constructors
-  KesslerMicrophysics (const ekat::Comm& comm, const ekat::ParameterList& params);
+  AtmosphereProcessType type () const { return AtmosphereProcessType::Physics; }
+  std::string name () const { return "kessler"; }
 
-  // The type of subcomponent
-  AtmosphereProcessType type () const override { return AtmosphereProcessType::Physics; }
+  void create_requests ();
 
-  // The name of the subcomponent
-  std::string name () const override { return "kessler"; }
+  // Buffer for intermediate / scratch Pack views
+  struct Buffer {
+    // 2D midpoint scratch arrays
+    static constexpr int num_2d_mid = 5; // exner, dz, z_mid, rho, theta
+    uview_2d exner, dz, z_mid, rho, theta;
 
-  void set_grids(
-    const std::shared_ptr<const GridsManager> grids_manager) override;
-  
-  // Define the protected functions, usually at least initialize_impl, run_impl
-  // and finalize_impl, but others could be included.  See
-  // eamxx_template_process_interface.cpp for definitions of each of these.
-  #ifndef KOKKOS_ENABLE_CUDA
-    protected:
-  #endif
-    void initialize_impl(const RunType run_type) override;
-    void run_impl(const double dt) override;
-  protected:
-    void finalize_impl() override;
+    // 2D interface scratch array
+    static constexpr int num_2d_int = 1; // z_int
+    uview_2d_int z_int;
+  };
 
-    // Computes bytes needed in buffers
-    size_t requested_buffer_size_in_bytes() const;
+#ifndef KOKKOS_ENABLE_CUDA
+protected:
+#endif
 
-    // Set the variables using memory provided by the ATMBufferManager. Needed for Fortran?
-    void init_buffers(const ATMBufferManager &buffer_manager);
+  void run_impl (const double dt);
 
-    // Keep track of field dimensions
-    std::shared_ptr<const AbstractGrid> m_grid;
-    Int m_num_cols;
-    Int m_num_levs;
+protected:
 
-    // Parameters structs to pass through fortran bridge
-    KMF::params_helpers params_helpers; // Helper variables 
-    KMF::params_computed params_computed; // Variables computed in the run_impl function
+  void initialize_impl (const RunType run_type);
+  void finalize_impl   ();
+
+  size_t requested_buffer_size_in_bytes () const;
+  void   init_buffers (const ATMBufferManager& buffer_manager);
+
+  Buffer m_buffer;
+
+  int  m_ncols;
+  int  m_nlevs;
+
+  KesslerData m_kd;
+
+  std::shared_ptr<const AbstractGrid> m_grid;
 
 }; // class Kessler
 
 } // namespace scream
 
-#endif // SCREAM_KESSLER_HPP
+#endif // SCREAM_KESSLER_PROCESS_HPP

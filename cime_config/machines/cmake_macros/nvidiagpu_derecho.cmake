@@ -18,7 +18,7 @@ if (OPENACC_GPU_OFFLOAD)
   string(APPEND CMAKE_Fortran_FLAGS " -acc -gpu=cc80 -Minfo=accel -Mnofma")
   string(APPEND CMAKE_EXE_LINKER_FLAGS " -acc -gpu=cc80 -Minfo=accel -Mnofma")
 endif()
-set(HOMME_QUAD_PREC FALSE CACHE BOOL "") # nvidia does not seem to support QUAD 
+set(HOMME_QUAD_PREC FALSE CACHE BOOL "" FORCE) # nvidia does not seem to support QUAD
 set(SCC "cc")
 set(SCXX "CC")
 set(SFC "ftn")

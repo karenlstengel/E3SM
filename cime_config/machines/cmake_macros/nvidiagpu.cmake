@@ -28,5 +28,6 @@ string(APPEND CMAKE_EXE_LINKER_FLAGS " -Wl,--allow-multiple-definition -lstdc++"
 if (compile_threaded)
   string(APPEND CMAKE_EXE_LINKER_FLAGS " -mp")
 endif()
+set(HOMME_QUAD_PREC FALSE CACHE BOOL "" FORCE) # nvidia does not seem to support QUAD
 set(E3SM_LINK_WITH_FORTRAN "TRUE")
 

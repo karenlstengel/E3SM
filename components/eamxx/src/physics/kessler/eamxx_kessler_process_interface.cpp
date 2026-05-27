@@ -33,26 +33,27 @@ KesslerMicrophysics::KesslerMicrophysics (const ekat::Comm& comm, const ekat::Pa
 
 // =========================================================================================
 //  Inputs:
-//      grids_manager - The grids manager used by the dynamcial core
+//      None
 //  Outputs:
 //      None
 
-void KesslerMicrophysics::set_grids(const std::shared_ptr<const GridsManager> grids_manager)
+void KesslerMicrophysics::create_requests () //set_grids(const std::shared_ptr<const GridsManager> grids_manager)
 {
   using namespace ekat::units;
   // using namespace ShortFieldTagsNames;
 
   m_atm_logger->info("[EAMxx] Kessler processes set grids");
 
-  const auto s2           = pow(s,2);
-  const auto m2           = pow(m,2);
-  const auto m3           = pow(m,3);
-  constexpr auto nondim   = ekat::units::Units::nondimensional();
-  constexpr int pack_size = Spack::n;
+  static constexpr auto m2 = (m*m).rename("m2");
+  static constexpr auto m3 = (m*m*m).rename("m3");
+  static constexpr auto s2 = (s*s).rename("s2");
+  constexpr auto nondim    = ekat::units::Units::nondimensional();
+  constexpr int pack_size  = Pack::n;
 
 
   // specify which grid to use
-  m_grid = grids_manager->get_grid("physics");
+  m_grid = m_grids_manager->get_grid("physics");
+
   const auto& grid_name = m_grid->name();
   m_num_cols = m_grid->get_num_local_dofs(); // Number of columns on this rank
   m_num_levs = m_grid->get_num_vertical_levels();  // Number of levels per column
@@ -135,10 +136,10 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
   add_postcondition_check<FieldWithinIntervalCheck>(get_field_out("qi"),m_grid,0.0,0.1,true);
   add_postcondition_check<FieldLowerBoundCheck>(get_field_out("precl"),m_grid,0.0,true);
 
-  Real P0     = PC::P0;     // Reference pressure; pref_in
-  Real latvap = PC::LatVap; // Latent heat of vaporization; lv_in
-  Real rhoqr  = PC::RHOW;   // rhoqr_in
-  Real gravit = PC::gravit; // gravitational acceleration
+  const Real P0     = PC::P0.value;     // Reference pressure; pref_in
+  const Real latvap = PC::LatVap.value; // Latent heat of vaporization; lv_in
+  const Real rhoqr  = PC::RHOW.value;   // rhoqr_in
+  const Real gravit = PC::gravit.value; // gravitational acceleration
 
   kessler::kessler_eamxx_bridge_init(m_num_cols, m_num_levs, latvap, P0, rhoqr, gravit);
 
@@ -192,24 +193,24 @@ void KesslerMicrophysics::run_impl (const double dt )
 {
    
   // Pull in variables 
-  auto T_mid              = get_field_out("T_mid").get_view<Spack**>();
-  auto p_mid              = get_field_in("p_mid").get_view<const Spack**>();
-  auto pseudo_density     = get_field_in("pseudo_density").get_view<const Spack**>();
-  auto qv                 = get_field_out("qv").get_view<Spack**>();
-  auto qc                 = get_field_out("qc").get_view<Spack**>();
-  auto qr                 = get_field_out("qr").get_view<Spack**>();
-  auto rho                = get_field_out("rho").get_view<Spack**>();
-  auto dz                 = get_field_out("dz").get_view<Spack**>();
-  auto pk                 = get_field_out("pk").get_view<Spack**>();
-  auto theta              = get_field_out("theta").get_view<Spack**>();
+  auto T_mid              = get_field_out("T_mid").get_view<Pack**>();
+  auto p_mid              = get_field_in("p_mid").get_view<const Pack**>();
+  auto pseudo_density     = get_field_in("pseudo_density").get_view<const Pack**>();
+  auto qv                 = get_field_out("qv").get_view<Pack**>();
+  auto qc                 = get_field_out("qc").get_view<Pack**>();
+  auto qr                 = get_field_out("qr").get_view<Pack**>();
+  auto rho                = get_field_out("rho").get_view<Pack**>();
+  auto dz                 = get_field_out("dz").get_view<Pack**>();
+  auto pk                 = get_field_out("pk").get_view<Pack**>();
+  auto theta              = get_field_out("theta").get_view<Pack**>();
   auto precl              = get_field_out("precl").get_view<Real*>();
-  auto relhum             = get_field_out("relhum").get_view<Spack**>();
+  auto relhum             = get_field_out("relhum").get_view<Pack**>();
   // Need phis for z_mid computation
   auto phis               = get_field_out("phis").get_view<Real*>();
   // <scheme>kessler_update</scheme> // updates st_energy & temperature related things
-  auto T_mid_prev        = get_field_out("T_mid_prev").get_view<Spack**>();
-  auto T_mid_tend        = get_field_out("T_mid_tend").get_view<Spack**>();
-  auto st_energy         = get_field_out("st_energy").get_view<Spack**>();
+  auto T_mid_prev        = get_field_out("T_mid_prev").get_view<Pack**>();
+  auto T_mid_tend        = get_field_out("T_mid_tend").get_view<Pack**>();
+  auto st_energy         = get_field_out("st_energy").get_view<Pack**>();
 
   // Get lyr_surf, lyr_toa
   const int lyr_surf = m_num_levs;
@@ -227,7 +228,7 @@ void KesslerMicrophysics::run_impl (const double dt )
 
   using PF           = scream::PhysicsFunctions<DefaultDevice>;
   using PC           = scream::physics::Constants<Real>;
-  const Real inv_ggr = 1/(PC::gravit);
+  const Real inv_ggr = 1/(PC::gravit.value);
 
   int nlevs = m_num_levs; // local var, to avoid accessing *this.
 
@@ -236,12 +237,12 @@ void KesslerMicrophysics::run_impl (const double dt )
       KOKKOS_CLASS_LAMBDA(const int i) {
         const int icol = i / nlevs;
         const int klev = i % nlevs;
-        pk(icol, klev / Spack::n)[klev % Spack::n]    = PF::exner_function(p_mid(icol, klev / Spack::n)[klev % Spack::n]);
-        theta(icol, klev / Spack::n)[klev % Spack::n] = PF::calculate_theta_from_T(T_mid(icol, klev / Spack::n)[klev % Spack::n],p_mid(icol, klev / Spack::n)[klev % Spack::n]);
+        pk(icol, klev / Pack::n)[klev % Pack::n]    = PF::exner_function(p_mid(icol, klev / Pack::n)[klev % Pack::n]);
+        theta(icol, klev / Pack::n)[klev % Pack::n] = PF::calculate_theta_from_T(T_mid(icol, klev / Pack::n)[klev % Pack::n],p_mid(icol, klev / Pack::n)[klev % Pack::n]);
 
         // Vertical layer thickness
-        dz(icol, klev / Spack::n)[klev % Spack::n]  = PF::calculate_dz(pseudo_density(icol, klev / Spack::n)[klev % Spack::n], p_mid(icol, klev / Spack::n)[klev % Spack::n], T_mid(icol, klev / Spack::n)[klev % Spack::n], qv(icol, klev / Spack::n)[klev % Spack::n]);
-        rho(icol, klev / Spack::n)[klev % Spack::n] = inv_ggr*( pseudo_density(icol, klev / Spack::n)[klev % Spack::n]/dz(icol, klev / Spack::n)[klev % Spack::n] );
+        dz(icol, klev / Pack::n)[klev % Pack::n]  = PF::calculate_dz(pseudo_density(icol, klev / Pack::n)[klev % Pack::n], p_mid(icol, klev / Pack::n)[klev % Pack::n], T_mid(icol, klev / Pack::n)[klev % Pack::n], qv(icol, klev / Pack::n)[klev % Pack::n]);
+        rho(icol, klev / Pack::n)[klev % Pack::n] = inv_ggr*( pseudo_density(icol, klev / Pack::n)[klev % Pack::n]/dz(icol, klev / Pack::n)[klev % Pack::n] );
       }
     );
 
@@ -267,10 +268,8 @@ void KesslerMicrophysics::run_impl (const double dt )
   // Compute z_mid and z_int into params_in (needed by kessler_run for heights)
   // calculate_z_int() contains a team-level parallel_scan, which requires a special policy
   using TPF = ekat::TeamPolicyFactory<KT::ExeSpace>;
-  const int nlev_packs   = ekat::npack<Spack>(m_num_levs);
+  const int nlev_packs   = ekat::npack<Pack>(m_num_levs);
   const auto scan_policy = TPF::get_thread_range_parallel_scan_team_policy(m_num_cols, nlev_packs);
-
-  printf("nlevs: %d \n", nlevs);
 
   Kokkos::parallel_for(scan_policy, KOKKOS_CLASS_LAMBDA (const KT::MemberType& team) {
     const int i = team.league_rank();
@@ -386,8 +385,8 @@ void KesslerMicrophysics::finalize_impl()
 
 size_t KesslerMicrophysics::requested_buffer_size_in_bytes() const
 {
-  const int nlevm_packs    = ekat::npack<Spack>(m_num_levs);
-  const int nlev_int_packs = ekat::npack<Spack>(m_num_levs+1);
+  const int nlevm_packs    = ekat::npack<Pack>(m_num_levs);
+  const int nlev_int_packs = ekat::npack<Pack>(m_num_levs+1);
 
   constexpr auto num_1d_intgr   = KMF::params_helpers::num_1d_intgr   + KMF::params_computed::num_1d_intgr;
   constexpr auto num_1d_scalr   = KMF::params_helpers::num_1d_scalr   + KMF::params_computed::num_1d_scalr;
@@ -400,8 +399,8 @@ size_t KesslerMicrophysics::requested_buffer_size_in_bytes() const
   buffer_size+= num_1d_intgr   * sizeof(Int)    * m_num_cols;                  // should be 0
   buffer_size+= num_1d_scalr   * sizeof(Scalar) * m_num_cols;                  // should be 2, C++ holders
   buffer_size+= num_1d_scalr   * sizeof(Real)   * m_num_cols;                  // should be 2, for fortran holders
-  buffer_size+= num_2d_midlv_c * sizeof(Spack)  * m_num_cols * nlevm_packs;    // should be 13, C++ holders
-  buffer_size+= num_2d_intlv_c * sizeof(Spack)  * m_num_cols * nlev_int_packs; // should be 1, C++ holders
+  buffer_size+= num_2d_midlv_c * sizeof(Pack)  * m_num_cols * nlevm_packs;    // should be 13, C++ holders
+  buffer_size+= num_2d_intlv_c * sizeof(Pack)  * m_num_cols * nlev_int_packs; // should be 1, C++ holders
   buffer_size+= num_2d_midlv_f * sizeof(Real)   * m_num_cols * m_num_levs;     // should be 14, for fortran holders
 
   return buffer_size;
@@ -418,8 +417,8 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
   auto buffer_chk = ( buffer_manager.allocated_bytes() >= requested_buffer_size_in_bytes() );
   EKAT_REQUIRE_MSG(buffer_chk,"Error! Buffers size not sufficient.\n");
   
-  const int nlev_mid_packs = ekat::npack<Spack>(m_num_levs);
-  const int nlev_int_packs = ekat::npack<Spack>(m_num_levs+1);
+  const int nlev_mid_packs = ekat::npack<Pack>(m_num_levs);
+  const int nlev_int_packs = ekat::npack<Pack>(m_num_levs+1);
 
   constexpr auto num_1d_intgr   = KMF::params_helpers::num_1d_intgr   + KMF::params_computed::num_1d_intgr;
   constexpr auto num_1d_scalr   = KMF::params_helpers::num_1d_scalr   + KMF::params_computed::num_1d_scalr;
@@ -473,10 +472,10 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
     r_mem += midlv_f_ptrs[i]->size();
   }
   //----------------------------------------------------------------------------
-  Spack* spk_mem = reinterpret_cast<Spack*>(r_mem);
+  Pack* spk_mem = reinterpret_cast<Pack*>(r_mem);
   //----------------------------------------------------------------------------
   // 2D views 
-  KMF::view_2d<Spack>* midlv_c_ptrs[num_2d_midlv_c] = { &params_helpers.rho,
+  KMF::view_2d<Pack>* midlv_c_ptrs[num_2d_midlv_c] = { &params_helpers.rho,
                                                         &params_helpers.dz,
                                                         &params_helpers.pk,
                                                         &params_helpers.z_mid,
@@ -491,14 +490,14 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
                                                         &params_computed.st_energy
                                                       };
   for (int i=0; i<num_2d_midlv_c; ++i) {
-    *midlv_c_ptrs[i] = KMF::view_2d<Spack>(spk_mem, m_num_cols, nlev_mid_packs);
+    *midlv_c_ptrs[i] = KMF::view_2d<Pack>(spk_mem, m_num_cols, nlev_mid_packs);
     spk_mem += midlv_c_ptrs[i]->size();
   }
 
   // allocate z_int which is our only interface variable. 
-  KMF::view_2d<Spack>* intlv_c_ptrs[num_2d_intlv_c] = { &params_helpers.z_int };
+  KMF::view_2d<Pack>* intlv_c_ptrs[num_2d_intlv_c] = { &params_helpers.z_int };
   for (int i=0; i<num_2d_intlv_c; ++i) {
-     *intlv_c_ptrs[i] = KMF::view_2d<Spack>(spk_mem, m_num_cols, nlev_int_packs);
+     *intlv_c_ptrs[i] = KMF::view_2d<Pack>(spk_mem, m_num_cols, nlev_int_packs);
      spk_mem += intlv_c_ptrs[i]->size();
   }
 

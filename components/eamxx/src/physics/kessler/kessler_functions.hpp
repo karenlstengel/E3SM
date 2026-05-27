@@ -23,15 +23,10 @@ struct KesslerMicrophysicsFunctions
   using Scalar = ScalarT;
   using Device = DeviceT;
 
-  template <typename S>
-  using BigPack = ekat::Pack<S,SCREAM_PACK_SIZE>;
-  template <typename S>
-  using SmallPack = ekat::Pack<S,SCREAM_SMALL_PACK_SIZE>;
+  using Pack    = ekat::Pack<Scalar,SCREAM_PACK_SIZE>;
+  using IntPack = ekat::Pack<Int,SCREAM_PACK_SIZE>;
 
-  using Pack = BigPack<Scalar>;
-  using Spack = SmallPack<Scalar>;
-
-  using KT         = ekat::KokkosTypes<Device>;
+  using KT      = ekat::KokkosTypes<Device>;
   // using MemberType = typename KT::MemberType;
   using TeamPolicy = typename KokkosTypes<Device>::TeamPolicy;
 
@@ -67,11 +62,11 @@ struct params_helpers {
     // real(kind_phys),  intent(inout) :: phis(:)    ! Surface geopotential (m^2/s^2)
 
     // Needed for kessler_run
-    view_2d<Spack>  rho;
-    view_2d<Spack>  dz; // Helper, doesn't need a fortran view
-    view_2d<Spack>  pk;
-    view_2d<Spack>  z_mid;
-    view_2d<Spack>  z_int; // Helper, doesn't need a fortran view and is an interface variable. 
+    view_2d<Pack>  rho;
+    view_2d<Pack>  dz; // Helper, doesn't need a fortran view
+    view_2d<Pack>  pk;
+    view_2d<Pack>  z_mid;
+    view_2d<Pack>  z_int; // Helper, doesn't need a fortran view and is an interface variable. 
     // Needed for the kessler_update
     view_1d<Scalar>  phis;
 
@@ -106,8 +101,8 @@ struct params_helpers {
     void init(int ncol_in, int pver_in) { // TODO - Kokko-ize this
       using PC  = scream::physics::Constants<Real>;
 
-      const Real cpair  = PC::Cpair; // Specific heat of dry air at constant pressure
-      const Real Rair   = PC::Rair;  // Gas constant of dry air
+      const Real cpair  = PC::Cpair.value; // Specific heat of dry air at constant pressure
+      const Real Rair   = PC::Rair.value;  // Gas constant of dry air
 
       Real init_fill_value = 0;
 
@@ -131,7 +126,7 @@ struct params_helpers {
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     template <ekat::TransposeDirection::Enum D>
     void transpose(int ncol_in, int pver_in) { 
-      // auto pver_in_packs = ekat::npack<Spack>(pver_in);
+      // auto pver_in_packs = ekat::npack<Pack>(pver_in);
 
       if (D == ekat::TransposeDirection::c2f) {
 
@@ -142,9 +137,9 @@ struct params_helpers {
             const int klev            = i % pver_in;
             // Don't need to transpose cpair, rair
 
-            f_rho(icol, klev) = rho(icol, klev / Spack::n)[klev % Spack::n];
-            f_pk(icol, klev) = pk(icol, klev / Spack::n)[klev % Spack::n];
-            f_z_mid(icol, klev) = z_mid(icol, klev / Spack::n)[klev % Spack::n];
+            f_rho(icol, klev) = rho(icol, klev / Pack::n)[klev % Pack::n];
+            f_pk(icol, klev) = pk(icol, klev / Pack::n)[klev % Pack::n];
+            f_z_mid(icol, klev) = z_mid(icol, klev / Pack::n)[klev % Pack::n];
 
             f_phis(icol) = phis(icol);
           }
@@ -177,9 +172,9 @@ struct params_helpers {
               const int klev = i % pver_in;
               // Don't need to transpose cpair, rair
 
-              rho(icol, klev / Spack::n)[klev % Spack::n] = f_rho(icol, klev);
-              pk(icol, klev / Spack::n)[klev % Spack::n] = f_pk(icol, klev);
-              z_mid(icol, klev / Spack::n)[klev % Spack::n] = f_z_mid(icol, klev);
+              rho(icol, klev / Pack::n)[klev % Pack::n] = f_rho(icol, klev);
+              pk(icol, klev / Pack::n)[klev % Pack::n] = f_pk(icol, klev);
+              z_mid(icol, klev / Pack::n)[klev % Pack::n] = f_z_mid(icol, klev);
 
               phis(icol) = f_phis(icol); // could skip this
             }
@@ -205,17 +200,17 @@ struct params_computed {
     // real(kind_phys),  intent(inout) :: st_energy(:,:)  ! Surface energy (J/m^2)
 
     // kessler_run C++ view
-    view_2d<Spack>  theta;
-    view_2d<Spack>  qv;
-    view_2d<Spack>  qc;
-    view_2d<Spack>  qr;
+    view_2d<Pack>  theta;
+    view_2d<Pack>  qv;
+    view_2d<Pack>  qc;
+    view_2d<Pack>  qr;
     view_1d<Scalar> precl;
-    view_2d<Spack>  relhum;
+    view_2d<Pack>  relhum;
     // kessler_update C++ view
-    view_2d<Spack>   temp_prev;
-    view_2d<Spack>   temp;
-    view_2d<Spack>   temp_tend;
-    view_2d<Spack>   st_energy;
+    view_2d<Pack>   temp_prev;
+    view_2d<Pack>   temp;
+    view_2d<Pack>   temp_tend;
+    view_2d<Pack>   st_energy;
   
     // kessler_run fortran (left layout) versions
     fview_2dl<Real>  f_theta;
@@ -280,7 +275,7 @@ struct params_computed {
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     template <ekat::TransposeDirection::Enum D>
     void transpose(int ncol_in, int pver_in) { // TODO - Kokko-ize this
-      // auto pver_in_packs = ekat::npack<Spack>(pver_in);
+      // auto pver_in_packs = ekat::npack<Pack>(pver_in);
 
       if (D == ekat::TransposeDirection::c2f) {
 
@@ -289,17 +284,17 @@ struct params_computed {
           KOKKOS_CLASS_LAMBDA(const int i) {
             const int icol = i / pver_in;
             const int klev = i % pver_in;
-            f_theta(icol, klev) = theta(icol, klev / Spack::n)[klev % Spack::n];
-            f_qv(icol, klev) = qv(icol, klev / Spack::n)[klev % Spack::n];
-            f_qc(icol, klev) = qc(icol, klev / Spack::n)[klev % Spack::n];
-            f_qr(icol, klev) = qr(icol, klev / Spack::n)[klev % Spack::n];
-            f_relhum(icol, klev) = relhum(icol, klev / Spack::n)[klev % Spack::n];
+            f_theta(icol, klev) = theta(icol, klev / Pack::n)[klev % Pack::n];
+            f_qv(icol, klev) = qv(icol, klev / Pack::n)[klev % Pack::n];
+            f_qc(icol, klev) = qc(icol, klev / Pack::n)[klev % Pack::n];
+            f_qr(icol, klev) = qr(icol, klev / Pack::n)[klev % Pack::n];
+            f_relhum(icol, klev) = relhum(icol, klev / Pack::n)[klev % Pack::n];
             f_precl(icol) = precl(icol);
 
-            f_temp_prev(icol, klev) = temp_prev(icol, klev / Spack::n)[klev % Spack::n];
-            f_temp(icol, klev) = temp(icol, klev / Spack::n)[klev % Spack::n];
-            f_temp_tend(icol, klev) = temp_tend(icol, klev / Spack::n)[klev % Spack::n];
-            f_st_energy(icol, klev) = st_energy(icol, klev / Spack::n)[klev % Spack::n];
+            f_temp_prev(icol, klev) = temp_prev(icol, klev / Pack::n)[klev % Pack::n];
+            f_temp(icol, klev) = temp(icol, klev / Pack::n)[klev % Pack::n];
+            f_temp_tend(icol, klev) = temp_tend(icol, klev / Pack::n)[klev % Pack::n];
+            f_st_energy(icol, klev) = st_energy(icol, klev / Pack::n)[klev % Pack::n];
             
           }
         );
@@ -339,18 +334,18 @@ struct params_computed {
             KOKKOS_CLASS_LAMBDA(const int i) {
               const int icol = i / pver_in;
               const int klev  = i % pver_in;
-              theta(icol, klev / Spack::n)[klev % Spack::n] = f_theta(icol, klev);
-              qv(icol, klev / Spack::n)[klev % Spack::n] = f_qv(icol, klev);
-              qc(icol, klev / Spack::n)[klev % Spack::n] = f_qc(icol, klev);
-              qr(icol, klev / Spack::n)[klev % Spack::n] = f_qr(icol, klev);
-              relhum(icol, klev / Spack::n)[klev % Spack::n] = f_relhum(icol, klev);
+              theta(icol, klev / Pack::n)[klev % Pack::n] = f_theta(icol, klev);
+              qv(icol, klev / Pack::n)[klev % Pack::n] = f_qv(icol, klev);
+              qc(icol, klev / Pack::n)[klev % Pack::n] = f_qc(icol, klev);
+              qr(icol, klev / Pack::n)[klev % Pack::n] = f_qr(icol, klev);
+              relhum(icol, klev / Pack::n)[klev % Pack::n] = f_relhum(icol, klev);
 
               precl(icol) = f_precl(icol);
 
-              temp_prev(icol, klev / Spack::n)[klev % Spack::n] = f_temp_prev(icol, klev);
-              temp(icol, klev / Spack::n)[klev % Spack::n] = f_temp(icol, klev);
-              temp_tend(icol, klev / Spack::n)[klev % Spack::n] = f_temp_tend(icol, klev);
-              st_energy(icol, klev / Spack::n)[klev % Spack::n] = f_st_energy(icol, klev);
+              temp_prev(icol, klev / Pack::n)[klev % Pack::n] = f_temp_prev(icol, klev);
+              temp(icol, klev / Pack::n)[klev % Pack::n] = f_temp(icol, klev);
+              temp_tend(icol, klev / Pack::n)[klev % Pack::n] = f_temp_tend(icol, klev);
+              st_energy(icol, klev / Pack::n)[klev % Pack::n] = f_st_energy(icol, klev);
             }
           );
       }

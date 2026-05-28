@@ -4036,7 +4036,7 @@
         <command name="load">cray-libsci/24.03.0</command>
       </modules>
       <modules compiler="gnugpu">
-        <command name="load">cuda/12.3.2</command>
+        <command name="load">cuda/12.9.0</command>
         <command name="load">kokkos</command>
       </modules>
       <modules compiler="nvidia.*">

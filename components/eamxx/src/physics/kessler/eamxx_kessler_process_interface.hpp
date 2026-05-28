@@ -47,9 +47,9 @@ public:
   Kessler (const ekat::Comm& comm, const ekat::ParameterList& params);
 
   AtmosphereProcessType type () const { return AtmosphereProcessType::Physics; }
-  std::string name () const { return "kessler"; }
+  std::string name () const override { return "kessler"; }
 
-  void create_requests ();
+  void create_requests () override;
 
   // Buffer for intermediate / scratch Pack views
   struct Buffer {
@@ -66,12 +66,12 @@ public:
 protected:
 #endif
 
-  void run_impl (const double dt);
+  void run_impl (const double dt) override;
 
 protected:
 
-  void initialize_impl (const RunType run_type);
-  void finalize_impl   ();
+  void initialize_impl (const RunType run_type) override;
+  void finalize_impl   () override;
 
   size_t requested_buffer_size_in_bytes () const;
   void   init_buffers (const ATMBufferManager& buffer_manager);

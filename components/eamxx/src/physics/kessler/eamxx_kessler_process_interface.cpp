@@ -1,8 +1,12 @@
 #include "eamxx_kessler_process_interface.hpp"
-
 #include "physics/kessler/kessler_functions.hpp"
-#include "share/physics/eamxx_common_physics_functions.hpp"
+
+#include "share/property_checks/field_within_interval_check.hpp"
+#include "share/property_checks/field_lower_bound_check.hpp"
+#include "share/field/field_utils.hpp"
+
 #include "share/physics/physics_constants.hpp"
+#include "share/physics/eamxx_common_physics_functions.hpp"
 
 #include <ekat_team_policy_utils.hpp>
 #include <ekat_assert.hpp>
@@ -12,7 +16,7 @@
 
 namespace scream
 {
-
+  using namespace kessler;
 // =============================================================================
 Kessler::Kessler (const ekat::Comm& comm, const ekat::ParameterList& params)
   : AtmosphereProcess(comm, params)

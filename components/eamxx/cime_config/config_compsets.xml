@@ -69,6 +69,12 @@
       <support_level>Experimental, under development</support_level>
   </compset>
 
+    <compset>
+      <alias>F2000-SCREAMv1-KESSLER</alias> <!-- atm Kessler compset (using SCREAMv1), 2000 initial conditions, turn off Aerosol forcing -->
+      <lname>2000_SCREAM%KESSLER-noAero_SLND_SICE_SOCN_SROF_SGLC_SWAV</lname>
+      <support_level>Experimental, under development</support_level>
+  </compset>
+
   <compset>
       <alias>F20TR-SCREAMv1</alias> <!-- SCREAMv1 AMIP -->
       <lname>20TR_SCREAM_ELM%SPBC_CICE%PRES_DOCN%DOM_MOSART_SGLC_SWAV</lname>

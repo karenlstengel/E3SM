@@ -109,15 +109,20 @@ struct params_helpers {
       // using MDPolicy = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
       // MDPolicy mdp({0,0}, {ncol_in, pver_in});
 
-      Kokkos::parallel_for(Kokkos::MDRangePolicy<typename KT::ExeSpace, Kokkos::Rank<2>>({0, 0}, {ncol_in, pver_in}),
-        KOKKOS_CLASS_LAMBDA(const int i, const int j) {
-          f_cpair(i,j) = cpair;
-          f_rair(i,j) = Rair;
-          f_rho(i,j) = init_fill_value;
-          f_pk(i,j) = init_fill_value;
-          f_z_mid(i,j) = init_fill_value;
+      // Kokkos::parallel_for(Kokkos::MDRangePolicy<typename KT::ExeSpace, Kokkos::Rank<2>>({0, 0}, {ncol_in, pver_in}),
+      //   KOKKOS_CLASS_LAMBDA(const int i, const int j) {
+      Kokkos::parallel_for(
+        "init params_computed", KT::RangePolicy(0, ncol_in * pver_in),
+        KOKKOS_CLASS_LAMBDA(const int i) {
+          const int icol = i / pver_in;
+          const int klev = i % pver_in;
+          f_cpair(icol, klev) = cpair;
+          f_rair(icol, klev) = Rair;
+          f_rho(icol, klev) = init_fill_value;
+          f_pk(icol, klev) = init_fill_value;
+          f_z_mid(icol, klev) = init_fill_value;
 
-          f_phis(i) = init_fill_value;
+          f_phis(icol) = init_fill_value;
           }
         );
 
@@ -254,20 +259,25 @@ struct params_computed {
       // using MDPolicy = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
       // MDPolicy mdp({0,0}, {ncol_in, pver_in});
       
-      Kokkos::parallel_for(Kokkos::MDRangePolicy<typename KT::ExeSpace, Kokkos::Rank<2>>({0, 0}, {ncol_in, pver_in}),
-        KOKKOS_CLASS_LAMBDA(const int i, const int j) {
-          f_theta(i,j) = init_fill_value;
-          f_qv(i,j) = init_fill_value;
-          f_qc(i,j) = init_fill_value;
-          f_qr(i,j) = init_fill_value;
-          f_relhum(i,j) = init_fill_value;
+      // Kokkos::parallel_for(Kokkos::MDRangePolicy<typename KT::ExeSpace, Kokkos::Rank<2>>({0, 0}, {ncol_in, pver_in}),
+      //   KOKKOS_CLASS_LAMBDA(const int i, const int j) {
+      Kokkos::parallel_for(
+        "init params_computed", KT::RangePolicy(0, ncol_in * pver_in),
+        KOKKOS_CLASS_LAMBDA(const int i) {
+          const int icol = i / pver_in;
+          const int klev = i % pver_in;
+          f_theta(icol, klev) = init_fill_value;
+          f_qv(icol, klev) = init_fill_value;
+          f_qc(icol, klev) = init_fill_value;
+          f_qr(icol, klev) = init_fill_value;
+          f_relhum(icol, klev) = init_fill_value;
 
-          f_precl(i) = init_fill_value;
+          f_precl(icol) = init_fill_value;
 
-          f_temp_prev(i,j) = init_fill_value;
-          f_temp(i,j) = init_fill_value;
-          f_temp_tend(i,j) = init_fill_value;
-          f_st_energy(i,j) = init_fill_value;
+          f_temp_prev(icol, klev) = init_fill_value;
+          f_temp(icol, klev) = init_fill_value;
+          f_temp_tend(icol, klev) = init_fill_value;
+          f_st_energy(icol, klev) = init_fill_value;
           }
         );
     }; // End init

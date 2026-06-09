@@ -20,7 +20,7 @@ QUEUE_NAME=develop
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
 CASE_NAME="ne30np4_1day_gpu"
-CASE_ROOT="$scratch/e3sm_test/kessler_perf/${CASE_NAME}"
+CASE_ROOT="$scratch/e3sm_test/kessler_perf2/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
 CASE_RUN_DIR=${CASE_ROOT}/run
@@ -74,7 +74,7 @@ cd $CASE_SCRIPTS_DIR
 ./atmchange save_field_manager_content=true
 # ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control_IC.yml
 ./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/FKESSLER_NE30NP4.cam.i.moist_baroclinic_wave_dcmip2016.nc
-./atmchange enable_fine_grain_timers=true
+./atmchange enable_fine_grain_timers=false
 
 # use below to match to stormspeed
 ./atmchange ctl_nl::dt_tracer_factor=6

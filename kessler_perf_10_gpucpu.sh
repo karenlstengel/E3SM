@@ -16,11 +16,11 @@ RESOLUTION=ne30_ne30 #ne30pg2_ne30pg2,ne4pg2_ne4pg2
 DYCORE=theta-l_kokkos
 MACH=derecho
 MYCOMPILER=nvidiagpu
-QUEUE_NAME=develop
+QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
 CASE_NAME="ne30np4_10day_gpucpu"
-CASE_ROOT="$scratch/e3sm_test/kessler_perf/${CASE_NAME}"
+CASE_ROOT="$scratch/e3sm_test/kessler_perf2/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
 CASE_RUN_DIR=${CASE_ROOT}/run
@@ -74,7 +74,7 @@ cd $CASE_SCRIPTS_DIR
 ./atmchange save_field_manager_content=true
 # ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control_IC.yml
 ./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/FKESSLER_NE30NP4.cam.i.moist_baroclinic_wave_dcmip2016.nc
-./atmchange enable_fine_grain_timers=true
+./atmchange enable_fine_grain_timers=false
 
 # use below to match to stormspeed
 ./atmchange ctl_nl::dt_tracer_factor=6
@@ -105,7 +105,7 @@ fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
 ./xmlchange STOP_N='10',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
-./xmlchange JOB_WALLCLOCK_TIME='05:00:00'
+./xmlchange JOB_WALLCLOCK_TIME='07:00:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE
 

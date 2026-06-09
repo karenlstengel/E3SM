@@ -3306,6 +3306,15 @@
     <desc>True=>compile the GPU code with OpenACC GPU flags </desc>
   </entry>
 
+  <entry id="USE_OPENACC_BACKEND">
+    <type>logical</type>
+    <valid_values>TRUE,FALSE</valid_values>
+    <default_value>FALSE</default_value>
+    <group>build_def</group>
+    <file>env_build.xml</file>
+    <desc>True=>have Kokkos use the OpenACC backend </desc>
+  </entry>
+
   <entry id="OPENMP_GPU_OFFLOAD">
     <type>logical</type>
     <valid_values>TRUE,FALSE</valid_values>

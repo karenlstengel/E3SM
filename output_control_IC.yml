@@ -1,6 +1,6 @@
 %YAML 1.1
 ---
-filename_prefix: SSIC_ne30np4_eamxx_kessler_nvidia_cpu_nsteps.scream.phys.h
+filename_prefix: SSIC_ne30np4_eamxx_kessler_nvidia_cpu_claude.scream.phys.h
 Averaging Type: Instant
 Max Snapshots Per File: 97
 averaging_type: instant
@@ -13,16 +13,16 @@ fields:
     - horiz_winds
     - tracers
     - T_mid
-    - T_mid_tend
-    - T_mid_prev
+    # - T_mid_tend
+    # - T_mid_prev
     - p_int
     - qv 
     - qc
     - qr
     - phis
-    - st_energy
-    - pk
-    - theta
+    # - st_energy
+    # - pk
+    # - theta
     - relhum 
     - precl
     - ps
@@ -31,11 +31,7 @@ fields:
     # - DryStaticEnergy
     # - PotentialTemperature
 
-  # dynamics:
-  #   field_names:
-  #     - dp3d_dyn
-  #     - omega_dyn
 output_control:
   frequency: 1
-  frequency_units: nsteps
+  frequency_units: ndays
   save_grid_data: true

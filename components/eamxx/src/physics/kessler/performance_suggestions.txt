@@ -1,0 +1,53 @@
+Kessler Kokkos Performance Suggestions
+=======================================
+
+1. SCRATCH VIEW PRE-ALLOCATION (high impact on GPU)
+   Ten views (r, rhalf, velqr, sed, pc, f5, dt0, mask, time_counter, precl_acc)
+   are allocated and freed on every call to kessler_run. GPU memory allocation
+   (cudaMalloc) is expensive and serializing. These should be pre-allocated and
+   passed in or held in a persistent workspace struct.
+
+2. HOST-DEVICE SYNC EVERY SUB-CYCLE ITERATION (high impact)
+   The convergence check in Step 8 (parallel_reduce -> n_active) forces a
+   device-to-host sync every sub-cycle. For 128 columns this can mean dozens
+   of forced syncs per kessler_run call. Options:
+     a) Keep a device-side View<int> flag updated atomically and only pull it
+        to host every N iterations.
+     b) Precompute a worst-case sub-cycle count from the initial CFL constraint
+        and run that many iterations unconditionally, with the mask suppressing
+        inactive columns (already partially done with the mask pattern).
+
+3. MEMORY ACCESS PATTERN WRONG FOR GPU (high impact on GPU)
+   With Kokkos default LayoutLeft on GPU, view(col, k) is stride-1 in col.
+   The current flattening:
+     col = idx / nk;       -- same col for nk consecutive threads
+     k   = kmin + idx % nk -- k varies -> stride ncols -> UNCOALESCED
+   Should be transposed for GPU:
+     col = idx % ncols;        -- col varies -> stride 1 -> COALESCED
+     k   = kmin + idx / ncols;
+   This is opposite to what is optimal on CPU (LayoutRight), so a
+   compile-time switch or architecture-dependent macro is needed.
+
+4. KERNEL FUSION IN THE SUB-CYCLE LOOP (medium impact)
+   Each sub-cycle iteration launches 7-8 separate kernels. Candidates to fuse:
+     a) Steps 1+2+3 (precl_accum + sed_inner + sed_toa): all deal with
+        sedimentation and can be combined into one ncols*nz kernel with a
+        branch on k == lyr_toa.
+     b) Steps 5+6 (update_time + velqr_update): the 1D time/mask update is
+        independent of k, so a single ncols*nk kernel can do the time update
+        once per column (guarded by k == kmin) and velqr for all k.
+   Reduces kernel launch overhead and scheduler cost per sub-cycle.
+
+5. REPEATED std::pow CALLS WITH SAME BASE IN SUB-CYCLE (medium impact)
+   velqr is recomputed every sub-cycle via pow(qr * r, 0.1364), which
+   internally calls exp(log(...)). The evaporation term also has:
+     pow(rqr, 0.2046) and pow(rqr, 0.525)
+   Note: 0.525 / 0.2046 ~ 2.568, so these share the same base. The second
+   can be computed as pow(rqr_0_2046, 2.568), eliminating one log evaluation.
+   Using exp/log explicitly may also allow fast-math compiler optimizations.
+
+6. TeamPolicy FOR dt0 RECOMPUTE PER SUB-CYCLE (lower impact)
+   kessler_recompute_dt0 uses TeamPolicy(ncols, AUTO) to reduce over 55 levels
+   per column. For small nk_sed on CPU this has team-formation overhead. After
+   the velqr_update kernel, this could be folded into a fused kernel using
+   Kokkos::atomic_min or by doing the reduction inline per column.

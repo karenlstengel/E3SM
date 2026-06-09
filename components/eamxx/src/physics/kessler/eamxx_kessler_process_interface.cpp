@@ -30,6 +30,9 @@ void Kessler::create_requests ()
   using namespace ekat::units;
   using namespace ShortFieldTagsNames;
 
+  constexpr auto nondim = ekat::units::Units::nondimensional();
+  static constexpr auto m2 = (m*m).rename("m2");
+
   m_grid = m_grids_manager->get_grid("physics");
   const auto& grid_name = m_grid->name();
 
@@ -51,22 +54,48 @@ void Kessler::create_requests ()
   add_tracer<Updated>("qv", m_grid, kg/kg, ps);
   add_tracer<Updated>("qc", m_grid, kg/kg, ps);
   add_tracer<Updated>("qr", m_grid, kg/kg, ps);
+  add_tracer<Updated>("qi", m_grid, kg/kg, ps);
 
   // Computed outputs
   add_field<Computed>("precl",  scalar2d,     m/s,    grid_name);
-  add_field<Computed>("relhum", scalar3d_mid, percent, grid_name, ps);
+  add_field<Computed>("relhum", scalar3d_mid, nondim, grid_name, ps);
 
   // Initialise Kessler constants from physics constants
   using C = physics::Constants<Real>;
   m_kd.lv    = C::LatVap.value;
   m_kd.pref  = C::P0.value / Real(100);  // convert Pa reference pressure to hPa
   m_kd.rhoqr = Real(1000);               // density of fresh liquid water, kg m-3
+
+  // Pulled from SHOC
+  // Boundary flux fields for energy and mass conservation checks
+  if (has_energy_fixer()) {
+    add_field<Computed>("vapor_flux", scalar2d, kg/(m2*s), grid_name);
+    add_field<Computed>("water_flux", scalar2d, m/s,       grid_name);
+    add_field<Computed>("ice_flux",   scalar2d, m/s,       grid_name);
+    add_field<Computed>("heat_flux",  scalar2d, W/m2,      grid_name);
+  }
 }
 
 // =============================================================================
 void Kessler::initialize_impl (const RunType /* run_type */)
 {
   // Nothing to do beyond buffer initialisation (handled by init_buffers)
+
+  // Set up energy fixer fields. 
+  if (has_energy_fixer()) {
+    // Set the boundary fluxes to 0.0 at the start of the run
+    auto vapor_flux = get_field_out("vapor_flux").get_view<Real*>();
+    auto water_flux = get_field_out("water_flux").get_view<Real*>();
+    auto ice_flux   = get_field_out("ice_flux").get_view<Real*>();
+    auto heat_flux  = get_field_out("heat_flux").get_view<Real*>();
+
+    Kokkos::parallel_for("init_boundary_fluxes", m_ncols, KOKKOS_CLASS_LAMBDA(const int i) {
+      vapor_flux(i) = 0.0;
+      water_flux(i) = 0.0;
+      ice_flux(i)   = 0.0;
+      heat_flux(i)  = 0.0;
+    });
+  }
 }
 
 // =============================================================================
@@ -197,6 +226,24 @@ void Kessler::run_impl (const double dt)
     });
 
   Kokkos::fence();
+
+  // KF:: update?
+
+  if (has_energy_fixer()) {
+    // Set the boundary fluxes to 0.0 at the start of the run
+    auto vapor_flux = get_field_out("vapor_flux").get_view<Real*>();
+    auto water_flux = get_field_out("water_flux").get_view<Real*>();
+    auto ice_flux   = get_field_out("ice_flux").get_view<Real*>();
+    auto heat_flux  = get_field_out("heat_flux").get_view<Real*>();
+
+    Kokkos::parallel_for("init_boundary_fluxes", m_ncols, KOKKOS_CLASS_LAMBDA(const int i) {
+      vapor_flux(i) = 0.0;
+      water_flux(i) = 0.0;
+      ice_flux(i)   = 0.0;
+      heat_flux(i)  = 0.0;
+    });
+  }
+
 }
 
 // =============================================================================

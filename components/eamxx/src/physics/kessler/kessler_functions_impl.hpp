@@ -62,6 +62,7 @@ void KesslerFunctions<S,D>::kessler_run(
   // Level ranges (0-based inclusive)
   const int kmin = (lyr_step > 0) ? lyr_surf : lyr_toa;
   const int kmax = (lyr_step > 0) ? lyr_toa  : lyr_surf;
+  const int nk   = kmax - kmin + 1; // nz
 
   // Range for the sedimentation inner loop: all levels except lyr_toa
   const int kmin_sed = (lyr_step > 0) ? lyr_surf       : lyr_toa + 1;
@@ -86,9 +87,10 @@ void KesslerFunctions<S,D>::kessler_run(
   // Kernel 1: initialise derived constants and terminal fall speed
   // ---------------------------------------------------------------
   Kokkos::parallel_for("kessler_init_fields",
-    Kokkos::MDRangePolicy<typename KT::ExeSpace, Kokkos::Rank<2>>(
-      {0, kmin}, {ncols, kmax + 1}),
-    KOKKOS_LAMBDA(const int col, const int k) {
+    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nk),
+    KOKKOS_LAMBDA(const int idx) {
+      const int col = idx / nk;
+      const int k   = kmin + (idx % nk);
       const Scalar xk = cpair(col, k) / rair(col, k);      // cp/R
       f5(col, k)    = Scalar(4093) * lv / cpair(col, k);
       r(col, k)     = Scalar(0.001) * rho(col, k);          // g/cm^3
@@ -156,9 +158,10 @@ void KesslerFunctions<S,D>::kessler_run(
 
     // -- Step 2: sedimentation for all levels except lyr_toa --
     Kokkos::parallel_for("kessler_sed_inner",
-      Kokkos::MDRangePolicy<typename KT::ExeSpace, Kokkos::Rank<2>>(
-        {0, kmin_sed}, {ncols, kmax_sed + 1}),
-      KOKKOS_LAMBDA(const int col, const int k) {
+      Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nk_sed),
+      KOKKOS_LAMBDA(const int idx) {
+        const int col = idx / nk_sed;
+        const int k   = kmin_sed + (idx % nk_sed);
         const int kup = k + lyr_step;
         sed(col, k) = dt0(col) *
           ((r(col, kup) * qr(col, kup) * velqr(col, kup)) -
@@ -179,9 +182,10 @@ void KesslerFunctions<S,D>::kessler_run(
     // -- Step 4: microphysics adjustments (autoconversion, collection,
     //            evaporation, saturation adjustment) --
     Kokkos::parallel_for("kessler_micro",
-      Kokkos::MDRangePolicy<typename KT::ExeSpace, Kokkos::Rank<2>>(
-        {0, kmin}, {ncols, kmax + 1}),
-      KOKKOS_LAMBDA(const int col, const int k) {
+      Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nk),
+      KOKKOS_LAMBDA(const int idx) {
+        const int col = idx / nk;
+        const int k   = kmin + (idx % nk);
         const Scalar msk  = mask(col);
         const Scalar dt0c = dt0(col);
 
@@ -244,9 +248,10 @@ void KesslerFunctions<S,D>::kessler_run(
 
     // -- Step 6: recompute terminal fall speed with updated qr --
     Kokkos::parallel_for("kessler_velqr_update",
-      Kokkos::MDRangePolicy<typename KT::ExeSpace, Kokkos::Rank<2>>(
-        {0, kmin}, {ncols, kmax + 1}),
-      KOKKOS_LAMBDA(const int col, const int k) {
+      Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nk),
+      KOKKOS_LAMBDA(const int idx) {
+        const int col = idx / nk;
+        const int k   = kmin + (idx % nk);
         velqr(col, k) = Scalar(36.34) * rhalf(col, k) *
                         std::pow(qr(col, k) * r(col, k), Scalar(0.1364));
       });
@@ -296,9 +301,10 @@ void KesslerFunctions<S,D>::kessler_run(
   // Diagnostic: relative humidity
   // ---------------------------------------------------------------
   Kokkos::parallel_for("kessler_relhum",
-    Kokkos::MDRangePolicy<typename KT::ExeSpace, Kokkos::Rank<2>>(
-      {0, kmin}, {ncols, kmax + 1}),
-    KOKKOS_LAMBDA(const int col, const int k) {
+    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nk),
+    KOKKOS_LAMBDA(const int idx) {
+      const int col = idx / nk;
+      const int k   = kmin + (idx % nk);
       const Scalar T_pi = pk(col, k) * theta(col, k);
       const Scalar qvs  = pc(col, k) *
         std::exp(f2x * (T_pi - Scalar(273)) / (T_pi - Scalar(36)));
@@ -319,9 +325,10 @@ void KesslerFunctions<S,D>::kessler_update_timestep_init(
   const view_2d<Scalar>& ttend_t)
 {
   Kokkos::parallel_for("kessler_ts_init",
-    Kokkos::MDRangePolicy<typename KT::ExeSpace, Kokkos::Rank<2>>(
-      {0, 0}, {ncols, nz}),
-    KOKKOS_LAMBDA(const int col, const int k) {
+    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nz),
+    KOKKOS_LAMBDA(const int idx) {
+      const int col = idx / nz;
+      const int k   = idx % nz;
       temp_prev(col, k) = temp(col, k);
       ttend_t(col, k)   = Scalar(0);
     });
@@ -341,9 +348,10 @@ void KesslerFunctions<S,D>::kessler_update_run(
   const view_2d<Scalar>& ttend_t)
 {
   Kokkos::parallel_for("kessler_update_run",
-    Kokkos::MDRangePolicy<typename KT::ExeSpace, Kokkos::Rank<2>>(
-      {0, 0}, {ncols, nz}),
-    KOKKOS_LAMBDA(const int col, const int k) {
+    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nz),
+    KOKKOS_LAMBDA(const int idx) {
+      const int col = idx / nz;
+      const int k   = idx % nz;
       ttend_t(col, k) += (theta(col, k) * exner(col, k) - temp_prev(col, k)) / dt;
     });
   Kokkos::fence();
@@ -363,9 +371,10 @@ void KesslerFunctions<S,D>::kessler_update_timestep_final(
   const view_2d<Scalar>& st_energy)
 {
   Kokkos::parallel_for("kessler_ts_final",
-    Kokkos::MDRangePolicy<typename KT::ExeSpace, Kokkos::Rank<2>>(
-      {0, 0}, {ncols, nz}),
-    KOKKOS_LAMBDA(const int col, const int k) {
+    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nz),
+    KOKKOS_LAMBDA(const int idx) {
+      const int col = idx / nz;
+      const int k   = idx % nz;
       st_energy(col, k) = cpair(col, k) * temp(col, k) +
                           gravit * zm(col, k) + phis(col);
     });

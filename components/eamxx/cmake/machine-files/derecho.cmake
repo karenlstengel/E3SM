@@ -30,3 +30,19 @@ if ("${PROJECT_NAME}" STREQUAL "E3SM")
 else()
   set(CMAKE_Fortran_FLAGS "-fallow-argument-mismatch"  CACHE STRING "" FORCE) # only works with gnu v10 and above
 endif()
+
+# Set Python info
+# check that this correctly finds conda install
+# need to have pybind11 and mpi4py installed and Python >= 3.9.2
+
+# if (PYTHON_USE_JAX)
+OPTION(EAMXX_ENABLE_PYTHON "" ON)
+# Sets Python_EXECUTABLE.
+if ("${CMAKE_VERSION}" VERSION_LESS "3.12.0")
+  find_package(PythonInterp)
+else()
+  find_package(Python COMPONENTS Interpreter Development REQUIRED)
+  set(Python_EXECUTABLE ${Python_EXECUTABLE})
+endif()
+# endif()
+message(STATUS "-- ${EAMXX_ENABLE_PYTHON} --")

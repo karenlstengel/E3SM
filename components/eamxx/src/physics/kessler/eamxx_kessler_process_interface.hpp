@@ -75,6 +75,7 @@ public:
     KMF::params_helpers params_helpers; // Helper variables 
     KMF::params_computed params_computed; // Variables computed in the run_impl function
 
+
 }; // class Kessler
 
 } // namespace scream

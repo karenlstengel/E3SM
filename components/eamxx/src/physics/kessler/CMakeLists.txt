@@ -66,14 +66,24 @@ set(KESSLER_HEADERS
   kessler_functions.hpp
 )
 
-# Adds the library to eamxx_physics 
+# this points to Iris's JAX translation
+set(KESSLER_JAX_DIR
+  /glade/derecho/scratch/kstengel/llm-fortran-modernization/fortran2jax-kessler/_officialJAX/kessler_jax
+)
+
 add_library(kessler ${KESSLER_F90_SRCS} ${KESSLER_SRCS})
+
+message(STATUS "-- ${EAMXX_ENABLE_PYTHON} --")
+# Add the library to eamxx_physics
+if (EAMXX_ENABLE_PYTHON)
+  message(STATUS "Using Python JAX version of Kessler")
+  find_package(Python COMPONENTS Interpreter Development REQUIRED)
+  target_include_directories(kessler SYSTEM PUBLIC ${PYTHON_INCLUDE_DIRS} ${KESSLER_JAX_DIR} )
+endif()
 
 set_target_properties(kessler PROPERTIES
   Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/modules
 )
-
-target_compile_definitions(kessler PUBLIC EAMXX_HAS_KESSLER)
 
 target_include_directories(kessler PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
@@ -85,9 +95,15 @@ target_include_directories(kessler PUBLIC
 )
 
 set_target_properties(kessler PROPERTIES LINKER_LANGUAGE Fortran)
-target_link_libraries(kessler Kokkos::kokkos)
 
-target_link_libraries(kessler eamxx_physics_share scream_share)
+target_compile_definitions(kessler PUBLIC EAMXX_HAS_KESSLER)
+
+target_link_libraries(kessler Kokkos::kokkos)
+if (EAMXX_ENABLE_PYTHON)
+  target_link_libraries(kessler eamxx_physics_share scream_share Python::Python) # pybind11::pybind11 
+else()
+  target_link_libraries(kessler eamxx_physics_share scream_share)
+endif()
 target_compile_options(kessler PUBLIC)
 
 if (TARGET eamxx_physics)

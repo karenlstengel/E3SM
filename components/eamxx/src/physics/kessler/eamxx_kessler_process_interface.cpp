@@ -11,6 +11,10 @@
 #include <ekat_assert.hpp>
 #include <ekat_units.hpp>
 
+#ifdef EAMXX_HAS_PYTHON
+#include "share/atm_process/atmosphere_process_pyhelpers.hpp"
+#endif
+
 #include <array>
 
 namespace scream
@@ -112,6 +116,11 @@ void KesslerMicrophysics::create_requests () //set_grids(const std::shared_ptr<c
     add_field<Computed>("ice_flux",   scalar2d_layout, m/s,       grid_name);
     add_field<Computed>("heat_flux",  scalar2d_layout, W/m2,      grid_name);
   }
+
+  #ifdef EAMXX_HAS_PYTHON
+    add_field<Computed>("cpair", scalar3d_layout_mid, J/kg/K, grid_name);
+    add_field<Computed>("rair",  scalar3d_layout_mid, J/kg/K, grid_name);
+  #endif
 }
 
 // =========================================================================================
@@ -135,13 +144,6 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
   add_postcondition_check<FieldWithinIntervalCheck>(get_field_out("qr"),m_grid,0.0,0.1,true);
   add_postcondition_check<FieldWithinIntervalCheck>(get_field_out("qi"),m_grid,0.0,0.1,true);
   add_postcondition_check<FieldLowerBoundCheck>(get_field_out("precl"),m_grid,0.0,true);
-
-  const Real P0     = PC::P0.value;     // Reference pressure; pref_in
-  const Real latvap = PC::LatVap.value; // Latent heat of vaporization; lv_in
-  const Real rhoqr  = PC::RHOW.value;   // rhoqr_in
-  const Real gravit = PC::gravit.value; // gravitational acceleration
-
-  kessler::kessler_eamxx_bridge_init(m_num_cols, m_num_levs, latvap, P0, rhoqr, gravit);
 
   #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
     // Allocate host mirror views for GPU -> CPU Fortran bridge
@@ -179,6 +181,36 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
       heat_flux(i)  = 0.0;
     });
   }
+
+  const Real P0     = PC::P0.value;     // Reference pressure; pref_in
+  const Real latvap = PC::LatVap.value; // Latent heat of vaporization; lv_in
+  const Real rhoqr  = PC::RHOW.value;   // rhoqr_in
+  const Real gravit = PC::gravit.value; // gravitational acceleration
+
+  // The JAX code currently keeps Cpair and Rair as 2D arrays so we need to set them here. 
+  #ifdef EAMXX_HAS_PYTHON
+    const Real Cpair  = PC::Cpair.value; // Specific heat of dry air at constant pressure
+    const Real Rair   = PC::Rair.value;  // Gas constant of dry air
+    int nlevs = m_num_levs; // local var, to avoid accessing *this.
+
+    if (has_py_module()) {
+      py_module_call("init", latvap, P0, rhoqr, gravit);
+    }
+
+    auto cpair = get_field_out("cpair").get_view<Real**>();
+    auto rair  = get_field_out("rair").get_view<Real**>();
+
+    Kokkos::parallel_for("py_air_const",KT::RangePolicy(0, m_num_cols * nlevs), KOKKOS_CLASS_LAMBDA (const int idx) { 
+    const int icol = idx/nlevs;
+    const int klev = idx%nlevs;
+
+    cpair(icol,klev)        = Cpair;
+    rair(icol,klev)         = Rair;
+    }
+  );
+  #endif
+
+  kessler::kessler_eamxx_bridge_init(m_num_cols, m_num_levs, latvap, P0, rhoqr, gravit);
 }
 
 // =========================================================================================
@@ -285,23 +317,6 @@ void KesslerMicrophysics::run_impl (const double dt )
     team.team_barrier();
   });
 
-  // Initialize fortran data holders in structs 
-  params_helpers.init(m_num_cols, nlevs);
-  params_computed.init(m_num_cols, nlevs);
-
-  double dt_timestep = dt;
-
-  // This calls both kessler_rn and kessler_update now
-  kessler_eamxx_bridge_run(m_num_cols, nlevs, dt_timestep, lyr_surf, lyr_toa, params_helpers, params_computed);
-
-  // <scheme>qneg</scheme> // this is taken care of by the postcondition checks we have in place for qc, qr, and qi (these checks will set any negative values to 0.0)
-  // <scheme>geopotential_temp</scheme> // -> done above when calculating z_mid
-
-  // <scheme>sima_state_diagnostics</scheme> // -> just writes fields to file (taken care of by EAMxx & set in the output_fields.yml file)
-  // <>scheme>kessler_diagnostics</scheme> // -> only writes out precl field to file (taken care of by EAMxx & set in the output_fields.yml file)
-
-  // <scheme>thermo_water_update</scheme> // computes enthalpy using cpair (I think computed by the energy fixer provided by homme)
-
   // <!-- MPAS and SE specific scaling of temperature for enforcing energy consistency:
   //       First, calculate the scaling based off cp_or_cv_dycore (from cam_thermo_water_update)
   //       Then, perform the temperature and temperature tendency scaling,
@@ -325,6 +340,93 @@ void KesslerMicrophysics::run_impl (const double dt )
       heat_flux(i)  = 0.0;
     });
   }
+
+  double dt_timestep = dt;
+  #ifdef EAMXX_HAS_PYTHON
+    auto cpair = get_field_out("cpair").get_view<Real**>();
+    auto rair = get_field_out("rair").get_view<Real**>();
+
+    if (has_py_module()) {
+      pybind11::array py_qv, py_qc, py_qr,
+                      py_cpair, py_rair, py_rho,py_dz, py_pk,
+                      py_theta, py_precl, py_relhum;
+
+      if (m_params.get<std::string>("py_backend")=="device") {
+        py_qv                = get_py_field_dev("qv");
+        py_qc                = get_py_field_dev("qc");
+        py_qr                = get_py_field_dev("qr");
+        py_cpair             = get_py_field_dev("cpair");
+        py_rair              = get_py_field_dev("rair");
+        py_rho               = get_py_field_dev("rho");
+        py_dz                = get_py_field_dev("dz");
+        py_pk                = get_py_field_dev("pk");
+        py_theta             = get_py_field_dev("theta");
+        py_precl             = get_py_field_dev("precl");
+        py_relhum            = get_py_field_dev("relhum");
+
+      } else {
+        qv.sync_to_host();
+        qc.sync_to_host();
+        qr.sync_to_host();
+        cpair.sync_to_host();
+        rair.sync_to_host();
+
+        py_qv                = get_py_field_host("qv");
+        py_qc                = get_py_field_host("qc");
+        py_qr                = get_py_field_host("qr");
+        py_cpair             = get_py_field_host("cpair"); 
+        py_rair              = get_py_field_host("rair"); 
+        py_rho               = get_py_field_host("rho");
+        py_dz                = get_py_field_host("dz");
+        py_pk                = get_py_field_host("pk");
+        py_theta             = get_py_field_host("theta");
+        py_precl             = get_py_field_host("precl");
+        py_relhum            = get_py_field_host("relhum");
+      }
+
+      py_module_call("run", m_num_cols, nlevs, dt_timestep, lyr_surf, lyr_toa,
+                    py_cpair,
+                    py_rair,
+                    py_rho,
+                    py_dz,
+                    py_pk,
+                    py_theta,
+                    py_qv,
+                    py_qc,
+                    py_qr,
+                    py_precl,
+                    py_relhum);
+
+      if (m_params.get<std::string>("py_backend")=="host") {
+        qv.sync_to_dev();
+        qr.sync_to_dev();
+        qc.sync_to_dev();
+        cpair.sync_to_dev();
+        rair.sync_to_dev();
+        dz.sync_to_dev();
+        pk.sync_to_dev();
+        theta.sync_to_dev();
+        precl.sync_to_dev();
+        relhum.sync_to_dev();
+      }
+      return;
+    }
+  #endif
+
+  // Initialize fortran data holders in structs 
+  params_helpers.init(m_num_cols, nlevs);
+  params_computed.init(m_num_cols, nlevs);
+
+  // This calls both kessler_run and kessler_update now
+  kessler_eamxx_bridge_run(m_num_cols, nlevs, dt_timestep, lyr_surf, lyr_toa, params_helpers, params_computed);
+
+  // <scheme>qneg</scheme> // this is taken care of by the postcondition checks we have in place for qc, qr, and qi (these checks will set any negative values to 0.0)
+  // <scheme>geopotential_temp</scheme> // -> done above when calculating z_mid
+
+  // <scheme>sima_state_diagnostics</scheme> // -> just writes fields to file (taken care of by EAMxx & set in the output_fields.yml file)
+  // <>scheme>kessler_diagnostics</scheme> // -> only writes out precl field to file (taken care of by EAMxx & set in the output_fields.yml file)
+
+  // <scheme>thermo_water_update</scheme> // computes enthalpy using cpair (I think computed by the energy fixer provided by homme)
 
   // pretty sure eamxx does this with the energy fixer
   // <scheme>dycore_energy_consistency_adjust</scheme> // TODO ? -> does energy scaling for temperature; 

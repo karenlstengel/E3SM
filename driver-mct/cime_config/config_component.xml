@@ -3381,6 +3381,15 @@
     <file>env_mach_pes.xml</file>
     <desc>maximum number of GPUs allowed per node </desc>
   </entry>
+
+  <entry id="PYTHON_USE_JAX">
+    <type>logical</type>
+    <valid_values>TRUE,FALSE</valid_values>
+    <default_value>FALSE</default_value>
+    <group>build_def</group>
+    <file>env_build.xml</file>
+    <desc>True=>use the Python JAX version of physics packages. </desc>
+  </entry>
   
  <help>
     =========================================

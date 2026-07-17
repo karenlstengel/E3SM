@@ -3476,6 +3476,15 @@
       <desc>gx1v6 is displaced Greenland pole v6 1-deg grid:</desc>
     </domain>
 
+    <!-- From StormSPEED -->
+    <domain name="gx1v7">
+      <nx>320</nx>  
+      <ny>384</ny>
+      <mesh>/glade/campaign/cesm/cesmdata/inputdata/share/meshes/gx1v7_151008_ESMFmesh.nc</mesh>
+      <desc>gx1v7 is displaced Greenland pole 1-deg grid with Caspian as a land feature:</desc>
+    </domain>
+    <!--  -->
+
     <domain name="gx3v7">
       <nx>100</nx>
       <ny>116</ny>

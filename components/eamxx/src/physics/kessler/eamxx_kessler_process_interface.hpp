@@ -61,10 +61,10 @@ public:
     void finalize_impl() override;
 
     // Computes bytes needed in buffers
-    size_t requested_buffer_size_in_bytes() const;
+    // size_t requested_buffer_size_in_bytes() const;
 
     // Set the variables using memory provided by the ATMBufferManager. Needed for Fortran?
-    void init_buffers(const ATMBufferManager &buffer_manager);
+    // void init_buffers(const ATMBufferManager &buffer_manager);
 
     // Keep track of field dimensions
     std::shared_ptr<const AbstractGrid> m_grid;
@@ -72,8 +72,8 @@ public:
     int m_num_levs;
 
     // Parameters structs to pass through fortran bridge
-    KMF::params_helpers params_helpers; // Helper variables 
-    KMF::params_computed params_computed; // Variables computed in the run_impl function
+    // KMF::params_helpers params_helpers; // Helper variables 
+    // KMF::params_computed params_computed; // Variables computed in the run_impl function
 
 
 }; // class Kessler

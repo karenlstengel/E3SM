@@ -3,11 +3,16 @@ os.environ["JAX_ENABLE_X64"] = "1"     # MUST precede any jax import
 import jax
 jax.config.update("jax_enable_x64", True)
 # recommended: persistent compilation cache (the driver sets this too)
-jax.config.update("jax_compilation_cache_dir", "JAX_cache/")
+_cache_dir = os.environ.get(
+    "JAX_COMPILATION_CACHE_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),".jax_cache"),
+)
+jax.config.update("jax_compilation_cache_dir", _cache_dir)
 jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
 
 import sys
-sys.path.insert(0, "/path/to/_officialJAX")   # exposes kessler_jax/ and bridge/
+sys.path.insert(0, "/glade/derecho/scratch/kstengel/llm-fortran-modernization/fortran2jax-kessler/_officialJAX/kessler_jax")   # exposes kessler_jax/ 
 from kessler_jax.kessler_init import kessler_init
 from kessler_jax.kessler_run import kessler_run
 
@@ -33,6 +38,7 @@ def init(lv_in, pref_in, rhoqr_in, gravit_in):
 # these arrays should be automatically updated back in EAMxx if everything is setup correctly.
 def run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk, theta, qv, qc, qr, precl, relhum):
 
+    print("Calling kessler_run from kessler_JAX_bridge.py")
     global latvap, pref, rhoqr
     global errmsg, errflg, scheme_name
 

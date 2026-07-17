@@ -6,8 +6,6 @@ module load conda
 conda init
 conda activate jax-kessler # ADDED TO TEST JAX TRANSLATION
 
-export JAX_COMPILATION_CACHE_DIR="/glade/derecho/scratch/kstengel/E3SM/E3SM/components/eamxx/src/physics/kessler/.JAX_cache_cpu"
-
 user=kstengel
 scratch=/glade/derecho/scratch/$user/E3SM
 
@@ -24,7 +22,7 @@ MYCOMPILER=nvidia
 QUEUE_NAME=develop
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="JAX_ne30np4_1day_cpu"
+CASE_NAME="JAX_ne30np4_10day_gpu"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -55,9 +53,16 @@ cd $CASE_SCRIPTS_DIR
 
 ./xmlchange DEBUG=FALSE
 
-./xmlchange NTASKS=128
+./xmlchange NTASKS=4
 ./xmlchange NTHRDS=1
+./xmlchange NGPUS_PER_NODE=4
+./xmlchange GPU_TYPE=a100 # NVIDIA A100 GPUs in Derecho
+./xmlchange OPENACC_GPU_OFFLOAD=FALSE # TRUE for with OpenACC 
+./xmlchange OPENMP_GPU_OFFLOAD=FALSE
+./xmlchange KOKKOS_GPU_OFFLOAD=TRUE
+./xmlchange OVERSUBSCRIBE_GPU=FALSE
 ./xmlchange ROOTPE='0'
+./xmlchange DOUT_S=false
 
 ./xmlchange PYTHON_USE_JAX=TRUE # ADDED TO TEST JAX TRANSLATION (doesn't currently do anything)
 
@@ -105,8 +110,8 @@ else
 fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
-./xmlchange STOP_N='1',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
-./xmlchange JOB_WALLCLOCK_TIME='00:30:00'
+./xmlchange STOP_N='10',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
+./xmlchange JOB_WALLCLOCK_TIME='05:00:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE
 

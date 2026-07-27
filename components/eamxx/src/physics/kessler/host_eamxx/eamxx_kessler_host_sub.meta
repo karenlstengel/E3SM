@@ -1,0 +1,36 @@
+[ccpp-table-properties]
+  name = eamxx_kessler_host_sub
+  type = host
+  language = c++
+[ccpp-arg-table]
+  name = eamxx_kessler_host_sub
+  type = host
+
+# horizontal_loop_begin/end tell the framework which columns to run over.
+# EAMxx always processes all columns, so the C++ caller passes col_start=1
+# and col_end=ncol.  The framework derives horizontal_loop_extent from these
+# (= col_end - col_start + 1) and uses horizontal_dimension from the module.
+[ col_start ]
+  standard_name = horizontal_loop_begin
+  long_name = start column index for horizontal loop
+  units = count
+  dimensions = ()
+  type = integer
+[ col_end ]
+  standard_name = horizontal_loop_end
+  long_name = end column index for horizontal loop
+  units = count
+  dimensions = ()
+  type = integer
+[ errmsg ]
+  standard_name = ccpp_error_message
+  long_name = error message for error handling in CCPP
+  units = none
+  dimensions = ()
+  type = character | kind = len=512
+[ errflg ]
+  standard_name = ccpp_error_code
+  long_name = error code for error handling in CCPP
+  units = 1
+  dimensions = ()
+  type = integer

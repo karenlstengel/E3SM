@@ -1,0 +1,202 @@
+[ccpp-table-properties]
+  name = eamxx_kessler_host_mod
+  type = module
+  language = c++
+[ccpp-arg-table]
+  name = eamxx_kessler_host_mod
+  type = module
+
+# -----------------------------------------------------------------------
+# Dimensions
+# -----------------------------------------------------------------------
+[ ncol ]
+  standard_name = horizontal_dimension
+  long_name = total number of columns
+  units = count
+  dimensions = ()
+  type = integer
+[ nz ]
+  standard_name = vertical_layer_dimension
+  long_name = number of vertical layers
+  units = count
+  dimensions = ()
+  type = integer
+
+# -----------------------------------------------------------------------
+# Time stepping
+# -----------------------------------------------------------------------
+[ dt ]
+  standard_name = timestep_for_physics
+  long_name = physics time step
+  units = s
+  dimensions = ()
+  type = real | kind = kind_phys
+
+# -----------------------------------------------------------------------
+# Vertical indexing convention
+# (EAMxx: lyr_surf=1 at surface, lyr_toa=nz at model top)
+# -----------------------------------------------------------------------
+[ lyr_surf ]
+  standard_name = vertical_index_at_surface_adjacent_layer
+  long_name = vertical index of layer adjacent to surface
+  units = index
+  dimensions = ()
+  type = integer
+[ lyr_toa ]
+  standard_name = vertical_index_at_top_adjacent_layer
+  long_name = vertical index of layer adjacent to model top
+  units = index
+  dimensions = ()
+  type = integer
+
+# -----------------------------------------------------------------------
+# kessler_init constants
+# -----------------------------------------------------------------------
+[ lv ]
+  standard_name = latent_heat_of_vaporization_of_water_at_0c
+  long_name = latent heat of vaporization of water at 0C
+  units = J kg-1
+  dimensions = ()
+  type = real | kind = kind_phys
+[ pref ]
+  standard_name = surface_reference_pressure
+  long_name = reference pressure used in definition of Exner function
+  units = Pa
+  dimensions = ()
+  type = real | kind = kind_phys
+[ rhoqr ]
+  standard_name = fresh_liquid_water_density_at_0c
+  long_name = density of fresh liquid water at 0C
+  units = kg m-3
+  dimensions = ()
+  type = real | kind = kind_phys
+
+# -----------------------------------------------------------------------
+# kessler_update_init constants
+# -----------------------------------------------------------------------
+[ gravit ]
+  standard_name = standard_gravitational_acceleration
+  long_name = standard gravitational acceleration
+  units = m s-2
+  dimensions = ()
+  type = real | kind = kind_phys
+
+# -----------------------------------------------------------------------
+# Scheme output bookkeeping
+# -----------------------------------------------------------------------
+[ scheme_name ]
+  standard_name = scheme_name
+  long_name = name of the microphysics scheme
+  units = none
+  dimensions = ()
+  type = character | kind = len=64
+
+# -----------------------------------------------------------------------
+# kessler_run intent(in) fields
+# (cpair and rair are pre-filled from physics constants in EAMxx;
+#  they are exposed here so the generated cap receives them as arguments)
+# -----------------------------------------------------------------------
+[ cpair ]
+  standard_name = composition_dependent_specific_heat_of_dry_air_at_constant_pressure
+  long_name = specific heat of dry air at constant pressure
+  units = J kg-1 K-1
+  type = real | kind = kind_phys
+  dimensions = (horizontal_dimension, vertical_layer_dimension)
+[ rair ]
+  standard_name = composition_dependent_gas_constant_of_dry_air
+  long_name = gas constant of dry air
+  units = J kg-1 K-1
+  type = real | kind = kind_phys
+  dimensions = (horizontal_dimension, vertical_layer_dimension)
+[ rho ]
+  standard_name = dry_air_density
+  long_name = density of dry air
+  units = kg m-3
+  type = real | kind = kind_phys
+  dimensions = (horizontal_dimension, vertical_layer_dimension)
+[ z_mid ]
+  standard_name = geopotential_height_wrt_surface
+  long_name = geopotential height w.r.t. local surface
+  units = m
+  type = real | kind = kind_phys
+  dimensions = (horizontal_dimension, vertical_layer_dimension)
+[ exner ]
+  standard_name = dimensionless_exner_function
+  long_name = dimensionless Exner function
+  units = 1
+  type = real | kind = kind_phys
+  dimensions = (horizontal_dimension, vertical_layer_dimension)
+
+# -----------------------------------------------------------------------
+# kessler_run intent(inout/out) fields
+# -----------------------------------------------------------------------
+[ theta ]
+  standard_name = air_potential_temperature
+  long_name = air potential temperature
+  units = K
+  type = real | kind = kind_phys
+  dimensions = (horizontal_dimension, vertical_layer_dimension)
+[ qv ]
+  standard_name = water_vapor_mixing_ratio_wrt_dry_air
+  long_name = mass mixing ratio of water vapor / dry air
+  units = kg kg-1
+  type = real | kind = kind_phys
+  dimensions = (horizontal_dimension, vertical_layer_dimension)
+[ qc ]
+  standard_name = cloud_liquid_water_mixing_ratio_wrt_dry_air
+  long_name = mass mixing ratio of cloud liquid water / dry air
+  units = kg kg-1
+  type = real | kind = kind_phys
+  dimensions = (horizontal_dimension, vertical_layer_dimension)
+[ qr ]
+  standard_name = rain_mixing_ratio_wrt_dry_air
+  long_name = mass mixing ratio of rain / dry air
+  units = kg kg-1
+  type = real | kind = kind_phys
+  dimensions = (horizontal_dimension, vertical_layer_dimension)
+[ precl ]
+  standard_name = total_precipitation_rate_at_surface
+  long_name = total precipitation rate at surface
+  units = m s-1
+  type = real | kind = kind_phys
+  dimensions = (horizontal_dimension)
+[ relhum ]
+  standard_name = relative_humidity
+  long_name = relative humidity
+  units = percent
+  type = real | kind = kind_phys
+  dimensions = (horizontal_dimension, vertical_layer_dimension)
+
+# -----------------------------------------------------------------------
+# kessler_update fields
+# -----------------------------------------------------------------------
+[ temp ]
+  standard_name = air_temperature
+  long_name = air temperature
+  units = K
+  type = real | kind = kind_phys
+  dimensions = (horizontal_dimension, vertical_layer_dimension)
+[ temp_prev ]
+  standard_name = air_temperature_on_previous_timestep
+  long_name = air temperature on previous timestep
+  units = K
+  type = real | kind = kind_phys
+  dimensions = (horizontal_dimension, vertical_layer_dimension)
+[ temp_tend ]
+  standard_name = tendency_of_air_temperature_due_to_model_physics
+  long_name = tendency of air temperature due to model physics
+  units = K s-1
+  type = real | kind = kind_phys
+  dimensions = (horizontal_dimension, vertical_layer_dimension)
+[ phis ]
+  standard_name = surface_geopotential
+  long_name = surface geopotential
+  units = m2 s-2
+  type = real | kind = kind_phys
+  dimensions = (horizontal_dimension)
+[ st_energy ]
+  standard_name = dry_static_energy
+  long_name = dry static energy
+  units = J kg-1
+  type = real | kind = kind_phys
+  dimensions = (horizontal_dimension, vertical_layer_dimension)

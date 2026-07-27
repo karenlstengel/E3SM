@@ -42,12 +42,14 @@ def init(lv_in, pref_in, rhoqr_in, gravit_in):
 # these arrays should be automatically updated back in EAMxx if everything is setup correctly.
 def run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk, theta, qv, qc, qr, precl, relhum):
 
-    print("Calling kessler_run from kessler_JAX_bridge.py")
+    print("Calling kessler_run from kessler_JAX_T")
     global latvap, pref, rhoqr
     global errmsg, errflg, scheme_name
 
     # Compute — {proc_name}_core is @jax.jit decorated; JIT fires on first call
-    theta_out, qv_out, qc_out, qr_out, precl_out, relhum_out, scheme_name, errmsg, errflg, latvap, pref, rhoqr = kessler_run_bridge(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg, latvap, pref, rhoqr)
+    # theta_out, qv_out, qc_out, qr_out, precl_out, relhum_out, scheme_name, errmsg, errflg, latvap, pref, rhoqr = kessler_run_bridge(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg, latvap, pref, rhoqr)
+
+    theta_out, qv_out, qc_out, qr_out, precl_out, relhum_out, scheme_name, errmsg, errflg, latvap, pref, rhoqr = kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg, latvap, pref, rhoqr)
 
     # theta/qv/qc/qr/precl/relhum are zero-copy views into EAMxx's field
     # buffers (created in create_py_field()); the C++ caller (py_module_call)
@@ -60,7 +62,7 @@ def run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk, theta, qv, qc,
     precl[...]  = precl_out
     relhum[...] = relhum_out
 
-    print("after kessler_run_bridge")
+    print("after kessler_run_T")
     print(f"precl max: {np.max(precl)}")
     # Run with no transposes below:
     # theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg, _, _, _ = kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg, latvap, pref, rhoqr)

@@ -271,6 +271,9 @@ be lost if SCREAM_HACK_XML is not enabled.
 
     <!-- Kessler Microphysics -->
     <kessler inherit="atm_proc_base">
+      <py_module_name type="string" doc="Name of the Python module for Kessler microphysics">kessler</py_module_name>
+      <py_module_path type="string" doc="Path to the Python module for Kessler microphysics">/glade/derecho/scratch/kstengel/E3SM/E3SM/components/eamxx/src/physics/kessler/</py_module_path>
+      <py_backend type="string" doc="Python backend for Kessler microphysics">device</py_backend>
     </kessler>
 
     <!-- ZM deep convection -->

@@ -166,6 +166,14 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
   const Real rhoqr  = PC::RHOW.value;   // rhoqr_in
   const Real gravit = PC::gravit.value; // gravitational acceleration
 
+  m_params.set<std::string>("py_module_name","kessler_jax");
+  const auto& py_module_name = m_params.get<std::string>("py_module_name");
+  const auto& py_module_path = m_params.get<std::string>("py_module_path","./");
+  
+  m_atm_logger->info("[EAMxx] kessler py_module_name: "+ py_module_name);
+  m_atm_logger->info("[EAMxx] kessler py_module_path: "+ py_module_path);
+
+
   // The JAX code currently keeps Cpair and Rair as 2D arrays so we need to set them here. 
   #ifdef EAMXX_HAS_PYTHON
     const Real Cpair  = PC::Cpair.value; // Specific heat of dry air at constant pressure
@@ -174,6 +182,7 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
 
     if (has_py_module()) {
       py_module_call("init", latvap, P0, rhoqr, gravit);
+      m_atm_logger->info("[EAMxx] kessler called python init");
     }
 
     auto cpair = get_field_out("cpair").get_view<Real**>();
@@ -323,14 +332,14 @@ void KesslerMicrophysics::run_impl (const double dt )
     });
   }
 
-  // For python bindings we can't use the field views. Kokkos loops require using views so they are left above. 
+  // For python bindings we can't use the field views. Kokkos loops require using views so they are left above.
   auto qv     = get_field_out("qv");
   auto qc     = get_field_out("qc");
   auto qr     = get_field_out("qr");
   auto cpair  = get_field_out("cpair");
   auto rair   = get_field_out("rair");
   auto rho    = get_field_out("rho");
-  auto dz     = get_field_out("dz");
+  auto z_mid  = get_field_out("z_mid");
   auto pk     = get_field_out("pk");
   auto theta  = get_field_out("theta");
   auto precl  = get_field_out("precl");
@@ -341,7 +350,7 @@ void KesslerMicrophysics::run_impl (const double dt )
 
     if (has_py_module()) {
       pybind11::array py_qv, py_qc, py_qr,
-                      py_cpair, py_rair, py_rho,py_dz, py_pk,
+                      py_cpair, py_rair, py_rho, py_z_mid, py_pk,
                       py_theta, py_precl, py_relhum;
 
       if (m_params.get<std::string>("py_backend")=="device") {
@@ -351,7 +360,7 @@ void KesslerMicrophysics::run_impl (const double dt )
         py_cpair             = get_py_field_dev("cpair");
         py_rair              = get_py_field_dev("rair");
         py_rho               = get_py_field_dev("rho");
-        py_dz                = get_py_field_dev("dz");
+        py_z_mid             = get_py_field_dev("z_mid");
         py_pk                = get_py_field_dev("pk");
         py_theta             = get_py_field_dev("theta");
         py_precl             = get_py_field_dev("precl");
@@ -363,25 +372,33 @@ void KesslerMicrophysics::run_impl (const double dt )
         qr.sync_to_host();
         cpair.sync_to_host();
         rair.sync_to_host();
+        rho.sync_to_host();
+        z_mid.sync_to_host();
+        pk.sync_to_host();
+        theta.sync_to_host();
+        precl.sync_to_host();
+        relhum.sync_to_host();
 
         py_qv                = get_py_field_host("qv");
         py_qc                = get_py_field_host("qc");
         py_qr                = get_py_field_host("qr");
-        py_cpair             = get_py_field_host("cpair"); 
-        py_rair              = get_py_field_host("rair"); 
+        py_cpair             = get_py_field_host("cpair");
+        py_rair              = get_py_field_host("rair");
         py_rho               = get_py_field_host("rho");
-        py_dz                = get_py_field_host("dz");
+        py_z_mid             = get_py_field_host("z_mid");
         py_pk                = get_py_field_host("pk");
         py_theta             = get_py_field_host("theta");
         py_precl             = get_py_field_host("precl");
         py_relhum            = get_py_field_host("relhum");
       }
 
+      // NOTE: kessler_run's "z" argument expects heights (z_mid), not layer
+      // thickness (dz) 
       py_module_call("run", m_num_cols, nlevs, dt_timestep, lyr_surf, lyr_toa,
                     py_cpair,
                     py_rair,
                     py_rho,
-                    py_dz,
+                    py_z_mid,
                     py_pk,
                     py_theta,
                     py_qv,
@@ -389,6 +406,12 @@ void KesslerMicrophysics::run_impl (const double dt )
                     py_qr,
                     py_precl,
                     py_relhum);
+      auto py_max = pybind11::module::import("numpy").attr("max");
+
+      m_atm_logger->info("[EAMxx] kessler run_impl - py_precl max: "+std::to_string(py_max(py_precl).cast<double>()));
+
+      auto f_max = field_max(precl).as<Real>();
+      m_atm_logger->info("[EAMxx] kessler run_impl - precl max: "+std::to_string(f_max));
 
       if (m_params.get<std::string>("py_backend")=="host") {
         qv.sync_to_dev();
@@ -396,17 +419,37 @@ void KesslerMicrophysics::run_impl (const double dt )
         qc.sync_to_dev();
         cpair.sync_to_dev();
         rair.sync_to_dev();
-        dz.sync_to_dev();
         pk.sync_to_dev();
         theta.sync_to_dev();
         precl.sync_to_dev();
         relhum.sync_to_dev();
       }
+
+      // theta was updated by the python kessler_run call above, but T_mid
+      // (the field the rest of EAMxx reads) is not itself touched by that
+      // call, so it must be converted back from the new theta here or the
+      // temperature seen by the rest of the model never advances.
+      // NOTE: this is a minimal T_mid update only. The full kessler_update
+      // scheme (T_mid_prev, T_mid_tend, st_energy energy-consistency scaling
+      // — see kessler_update_run/kessler_update_timestep_final in the
+      // Fortran source and the TODOs in README.md) is not yet ported to
+      // JAX/Python and still needs to be implemented.
+      Kokkos::parallel_for(
+          "Kessler_postprocess", KT::RangePolicy(0, m_num_cols * nlevs),
+          KOKKOS_CLASS_LAMBDA(const int i) {
+            const int icol = i / nlevs;
+            const int klev = i % nlevs;
+            T_mid_v(icol, klev / Pack::n)[klev % Pack::n] =
+                PF::calculate_T_from_theta(theta_v(icol, klev / Pack::n)[klev % Pack::n],
+                                            p_mid_v(icol, klev / Pack::n)[klev % Pack::n]);
+          }
+        );
+
+      m_atm_logger->info("[EAMxx] kessler run_impl - end ");
       return;
     }
   #endif
 
-  m_atm_logger->info("[EAMxx] kessler run_impl - end ");
 }
 
 // =========================================================================================

@@ -1,0 +1,40 @@
+%YAML 1.1
+---
+filename_prefix: SSIC_JAX_kessler.scream.phys.h
+Averaging Type: Average
+Max Snapshots Per File: 20
+averaging_type: average
+floating_point_precision: double
+fields:
+  physics_gll:
+    field_names:
+    - p_mid
+    - pseudo_density
+    - horiz_winds
+    - tracers
+    - T_mid
+    - T_mid_tend
+    - T_mid_prev
+    - p_int
+    - qv 
+    - qc
+    - qr
+    - phis
+    - st_energy
+    - pk
+    - theta
+    - relhum 
+    - precl
+    # - RelativeHumidity
+    # - Exner
+    # - DryStaticEnergy
+    # - PotentialTemperature
+
+  # dynamics:
+  #   field_names:
+  #     - dp3d_dyn
+  #     - omega_dyn
+output_control:
+  frequency: 1
+  frequency_units: ndays
+  save_grid_data: true

@@ -6,6 +6,8 @@ module load conda
 conda init
 conda activate jax-kessler # ADDED TO TEST JAX TRANSLATION
 
+export JAX_COMPILATION_CACHE_DIR="/glade/derecho/scratch/kstengel/E3SM/E3SM/components/eamxx/src/physics/kessler/.JAX_cache_cpu"
+
 user=kstengel
 scratch=/glade/derecho/scratch/$user/E3SM
 
@@ -57,6 +59,7 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange NTHRDS=1
 ./xmlchange ROOTPE='0'
 
+./xmlchange --append SCREAM_CMAKE_OPTIONS='EAMXX_ENABLE_PYTHON ON'
 ./xmlchange PYTHON_USE_JAX=TRUE # ADDED TO TEST JAX TRANSLATION (doesn't currently do anything)
 
 ./case.setup
@@ -70,9 +73,10 @@ cd $CASE_SCRIPTS_DIR
 # ./atmchange physics::atm_procs_list=mac_aero_mic # this removes the rrtmgp physics
 # ./atmchange mac_aero_mic::atm_procs_list=kessler #kessler
 ./atmchange save_field_manager_content=true
-# ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control_IC.yml
+./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control_JAX.yml
 ./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/FKESSLER_NE30NP4.cam.i.moist_baroclinic_wave_dcmip2016.nc
 ./atmchange enable_fine_grain_timers=false
+./atmchange mac_aero_mic::kessler::py_backend=host
 
 # use below to match to stormspeed
 ./atmchange ctl_nl::dt_tracer_factor=6

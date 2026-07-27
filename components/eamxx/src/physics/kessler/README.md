@@ -1,157 +1,341 @@
-# EAMxx Kessler Bridge 
+# EAMxx Kessler Bridge
 
-## Background: 
+This directory contains the EAMxx C++ atmosphere process interface for the Kessler
+microphysics scheme.  The Fortran bridge code that connects EAMxx to the Kessler
+Fortran scheme is **automatically generated** by the
+[xdsl-cpp](https://github.com/xdsl-project/xdsl-cpp) framework (CCPP dialect) rather
+than written by hand.  This document describes the full generation process so it can
+be reproduced or updated.
 
-See `components/eam/src/physics/crm/pam/external/physics/micro/kessler/Microphysics.h` for background information on EAM implementation. 
+## Repository layout
 
-Non-CAM Fortran version of code (with C bindings) found in: `components/eam/src/physics/crm/pam/external/physics/micro/kessler/kessler.f90`
-
-CAM Fortran routines are in: [this repo](https://github.com/ESCOMP/atmospheric_physics)
-
-We are using the Kessler provided in: [atmospheric_physics](git@github.com:ESCOMP/atmospheric_physics.git). 
-
-Note that additional initial conditions files might need to be downloaded from https://web.lcrc.anl.gov/public/e3sm/inputdata/atm/scream/init/. 
-
-## Design & Code Layout
-
-The Kessler suite is in `atmospheric_physics/schemes/kessler`. 
-
-List of parameters: 
-
-Kessler.F90:
-kessler_init(real lv_in, real pref_in, real rhoqr_in, char* errmsg, int errflg) {r,r,r,w,w}  
-kessler_run(int ncol, int nz, real dt, int lyr_surf, int lyr_toa, real cpair, real rair, real rho, real z, &
-        real pk, real theta, real qv, real qc, real qr, real precl, real relhum, char* scheme_name, char* errmsg, int errflg) {r,r,r,r,r,r,r,r,r,r,u,u,u,u,w,w,w,w,w}  
-
-Kessler_update.F90:
-
-kessler_update_init(real gravit_in, char* errmsg, int errflg) {r, w, w}  
-kessler_update_timestep_init(real temp, real temp_prev, real ttend_t, char* errmsg, int errflg) {r,w,w,w,w}  
-kessler_update_run(int nz, int ncol, real dt, real theta, real exner, real temp_prev, real ttend_t, char* errmsg, int errflg) {r,r,r,r,r,r,u,w,w}  
-kessler_update_timestep_final(int nz, real cpair, real temp, real zm, real phis, real st_energy, char* errmsg, int errflg) {r,r,r,r,r,w,w,w}  
-
-
-## GPU stuff
-
-### Implementation Notes
-
-1. For the Fortran link to work, you must add both the C++ side and Fortran side field variables to the `ATMBufferManager` with `Packagename::init_buffers(const ATMBufferManager &buffer_manager)` and `Packagename::requested_buffer_size_in_bytes()` (see the main interface C++ file).
-2. It seems like a good idea to create structs for passing input fields, output fields, and (if needed) parameters/etc. Note that this requires each member of the struct that is a field to be defined for both the C++ side (usually with `Pack` and Kokkos views) and the Fortran side (_unmanaged_ view of type `Real` in the same dimensions as the C++ version UNLESS WE ARE USING OPENACC THEN WE USE MANAGED VIEWS WITH `Real`???). 
-3. You should create a transpose function for converting between the Fortran and C++ fields. See `transpose()` in the `packagename_functions.hpp` file. 
-4. I _think_ you can only pass to Fortran the `get_field_out("fieldname").get_view<Pack**>().data()` object into the C to Fortran binding. 
-
-### GPU vs. CPU performance 
-
-## Misc notes
-
-Example OpenACC Fortran loop. Recall that it is more efficient to loop over `k` first in fortran 
-
-```fortran
-    !$acc parallel deviceptr(p_mid) 
-    !$acc loop gang vector collapse(2) reduction(max:p_mid_max)
-    do k = 1,pver
-        do i = 1,ncol
-            p_mid(i,k) = p_mid(i,k) * 2.0
-        end do
-    end do
-    p_mid_max = MAXVAL(p_mid)
-    !$acc end parallel
+```
+kessler/
+  eamxx_kessler_process_interface.hpp   C++ class declaration (AtmosphereProcess)
+  eamxx_kessler_process_interface.cpp   C++ class implementation (calls generated bridge)
+  kessler_functions.hpp                 Kokkos/GPU helper structs (params_helpers, params_computed)
+  generated_bridge/                     xdsl-cpp generated files (checked in, do not edit by hand)
+    Kessler_ccpp_chost_cap.F90          Fortran BIND(C) entry points
+    Kessler_ccpp_cap.F90                Internal CCPP orchestration cap (has OpenACC directives)
+    kessler_suite_cap.F90               Suite-level cap (calls scheme subroutines in order)
+    ccpp_kinds.F90                      Fortran kind definitions
+    Kessler_ccpp_chost_cap.h            C extern "C" declarations (included by .cpp)
+    Kessler_chost.hpp                   C++ ergonomics wrapper (struct-based, optional)
+    ccpp_kinds.h                        C++ kind/type mappings
+  CMakeLists.txt
+  README.md                             This file
 ```
 
+The handwritten bridge files previously in `fortran_bridge/` have been superseded by
+the generated files in `generated_bridge/`.  The `fortran_bridge/` directory is kept
+for reference but its files are **not compiled**.
 
-# Analytic conditions & test setup
+The Kessler Fortran scheme and xdsl-cpp metadata live outside this tree:
 
-StormSPEED uses https://github.com/ESCOMP/CAM/blob/cam_development/src/dynamics/tests/initial_conditions/ic_baroclinic.F90 c/o Jesse N. This sets: 
+```
+<repo-root>/
+  atmospheric_physics/schemes/kessler/
+    kessler.F90
+    kessler_update.F90
+  xdsl-cpp/
+    examples/kessler/
+      scheme/
+        kessler.meta               CCPP metadata for kessler_init / kessler_run
+        kessler_update.meta        CCPP metadata for kessler_update_* entry points
+        kessler_suite.xml          Suite definition (kessler -> kessler_update)
+      host_eamxx/                  EAMxx host metadata (created as part of this work)
+        eamxx_kessler_host_mod.meta
+        eamxx_kessler_host_sub.meta
+      bindc_eamxx_acc/             Raw generator output (copied into generated_bridge/)
+```
 
-requires: vcoord,latvals, lonvals, z_int, 
-- U: wind at all levels, u
-- V: wind at all levels, v
-- T: temperature at all levels (T_mid?)
-- PS: surface pressure
-- PHIS: phis (surface geopotential)
-- Q: [qv, qr, qc, qi] need to check on order here
-- can use to save z_mid and p_mid too I think
+---
 
-The other option is: https://github.com/ESCOMP/CAM/tree/cam_development/src/dynamics/tests c/o Jesse N.
+## How the bridge code was generated
 
-Need to implement the baroclinic conditions in EAMxx. Question - what do we do about the aquaplanet? Do we use aquaplanet in StormSPEED? 
-Below I added how to change to 58 levels to match StormSPEED but we should be able to swap the vertical levels files for 72 or 58 between the two models directly. 
+### Step 1 — understand the scheme metadata
 
-## TO DO
+The Kessler Fortran entry points are described in two `.meta` files that live alongside
+the Fortran source in the xdsl-cpp examples directory:
 
-1. In the namelists.xml we need to add something like `initial_conditions_analytic` to use instead of `initial_conditions_filename`. should contain a string to specify name of analytical function we are using ex:
-    ```xml
-        <initial_conditions>
-            <analytic type="array(string)">UNSET</analytic>
-            <analytic>"ic_baroclinic"</analytic>
-        </initial_conditions>
-    ```
-For Kessler, we probably want to make a COMPSET with `nlev=58`. Also need to set the vertical coordinates to match StormSPEED with: 
-    ```xml
-    <!-- Grids manager specs -->
-    <grids_manager>
-        <type>homme</type>
-        <physics_grid_type>gll</physics_grid_type>
-        <physics_grid_type hgrid=".*pg2">pg2</physics_grid_type>
-        <physics_grid_rebalance>none</physics_grid_rebalance>
-        <dynamics_namelist_file_name>./data/namelist.nl</dynamics_namelist_file_name>
-        <vertical_coordinate_filename type="file">UNSET</vertical_coordinate_filename>
-        <vertical_coordinate_filename nlev="58">/glade/campaign/cesm/cesmdata/inputdata/atm/cam/inic/cam_vcoords_L58_c250227.nc</vertical_coordinate_filename>
-        ...
-    </grids_manager>
-    ```
-and in case script we probably want to have `./create_newcase --case ${CASE_NAME} .... --user-mods-dir ${CCSMROOT}/components/eamxx//cime_config/testdefs/testmods_dirs/eamxx/output/preset/2 ${CCSMROOT}/components/eamxx//cime_config/testdefs/testmods_dirs/eamxx/L58`
+- `xdsl-cpp/examples/kessler/scheme/kessler.meta` — `kessler_init`, `kessler_run`
+- `xdsl-cpp/examples/kessler/scheme/kessler_update.meta` — `kessler_update_init`,
+  `kessler_update_timestep_init`, `kessler_update_run`, `kessler_update_timestep_final`
 
-where `${CCSMROOT}/components/eamxx//cime_config/testdefs/testmods_dirs/eamxx/L58/shell_comands` contains 
-```./xmlchange SCREAM_CMAKE_OPTIONS="`./xmlquery -value SCREAM_CMAKE_OPTIONS | sed 's/SCREAM_NUM_VERTICAL_LEV [0-9][0-9]*/SCREAM_NUM_VERTICAL_LEV 72/'`"```
+Each argument in those files carries a `standard_name`, `units`, `dimensions`, `type`,
+`intent`, and (for GPU fields) `memory_space = device`.  These standard names are the
+vocabulary the framework uses to match scheme arguments to host-provided variables.
 
-2. in `/glade/derecho/scratch/kstengel/E3SM/E3SM/components/eamxx/src/control/atmosphere_driver.cpp::create_grids()` line 281 add something like:
-    ```cpp
-    else if (ic_pl.isParameter("analytic")) {
-        // Initial run, if ICs are an analytic function, pass the name.
-        auto ic_analytic = ic_pl.get<std::string>("analytic");
-        gm_params.set("ic_analytic", ic_analytic);
-        m_atm_params.sublist("provenance").set("initial_conditions_analytic",ic_analytic);
-    }
-    ```
-    and line 1255 something like:
-    ```cpp
-    // If analytic is specified, compute initial conditions on all grids
-    if (ic_pl.isParameter("analytic")) {
-        // Now loop over all grids, and load from file the needed fields on each grid (if any).
-        const auto& ic_analytic = ic_pl.get<std::string>("analytic");
-        m_atm_logger->info("    [EAMxx] IC analytic type: " + ic_analytic);
+### Step 2 — create the EAMxx host metadata files
 
-        for (const auto& it : m_grids_manager->get_repo()) {
-        const auto& grid = it.second;
-        const auto& grid_name = grid->name();
+The xdsl-cpp framework requires two metadata files describing the *host model* side:
 
-        if (ic_fields_names[grid_name].size()==0) continue;
+| File | Purpose |
+|------|---------|
+| `eamxx_kessler_host_mod.meta` | Declares all host module variables (scalars and arrays) with their standard names |
+| `eamxx_kessler_host_sub.meta` | Declares the host subroutine entry point and loop-control variables |
 
-        std::vector<Field> ic_fields;
-        for (const auto& fn : ic_fields_names[grid_name]) {
-            ic_fields.push_back(m_field_mgr->get_field(fn,grid_name));
-        }
-        
-        // Call the analytic function. I think this should go to a switch statement to call the correct analytic function but should check with EAMxx team about how they would want this setup
-        set_fields_analytic(ic_fields,grid,ic_analytic);
+These files were written from scratch for EAMxx and are stored at:
 
-        // I don't think we need to worry about IOP enabled options since we should just do the computation at the lat/lon column in the grid
-        
-        for (auto& f : ic_fields) {
-            f.get_header().get_tracking().update_time_stamp(m_current_ts);
-        }
-        }
-    }
-    ```
+```
+xdsl-cpp/examples/kessler/host_eamxx/eamxx_kessler_host_mod.meta
+xdsl-cpp/examples/kessler/host_eamxx/eamxx_kessler_host_sub.meta
+```
 
-3. compute the analytical initial conditions. see `/glade/derecho/scratch/kstengel/E3SM/E3SM/components/eamxx/src/share/io/scorpio_input.cpp`. 
+#### `eamxx_kessler_host_mod.meta` — key decisions
 
-## Field perturbation
+The file declares every variable that the Kessler schemes need, using:
+- `language = c++` so the generator emits C-compatible `extern "C"` bridge code
+- C++ variable names that match EAMxx conventions where they differ from the toy
+  host example (e.g. `z_mid` not `z`, `temp_tend` not `ttend_t`, `exner` not `pk`)
+- `standard_name` values taken verbatim from the scheme `.meta` files so the
+  `generate-host-match` pass can resolve every argument
 
-### StormSPEED: 
-???
+The full variable set and their standard names:
 
-### EAMxx:
+| C++ name | Standard name | Used by |
+|----------|---------------|---------|
+| `ncol` | `horizontal_dimension` | all |
+| `nz` | `vertical_layer_dimension` | all |
+| `dt` | `timestep_for_physics` | kessler_run, kessler_update_run |
+| `lyr_surf` | `vertical_index_at_surface_adjacent_layer` | kessler_run |
+| `lyr_toa` | `vertical_index_at_top_adjacent_layer` | kessler_run |
+| `lv` | `latent_heat_of_vaporization_of_water_at_0c` | kessler_init |
+| `pref` | `surface_reference_pressure` | kessler_init |
+| `rhoqr` | `fresh_liquid_water_density_at_0c` | kessler_init |
+| `gravit` | `standard_gravitational_acceleration` | kessler_update_init |
+| `scheme_name` | `scheme_name` | kessler_run (output) |
+| `cpair` | `composition_dependent_specific_heat_of_dry_air_at_constant_pressure` | kessler_run, kessler_update_timestep_final |
+| `rair` | `composition_dependent_gas_constant_of_dry_air` | kessler_run |
+| `rho` | `dry_air_density` | kessler_run |
+| `z_mid` | `geopotential_height_wrt_surface` | kessler_run, kessler_update_timestep_final |
+| `exner` | `dimensionless_exner_function` | kessler_run, kessler_update_run |
+| `theta` | `air_potential_temperature` | kessler_run, kessler_update_run |
+| `qv` | `water_vapor_mixing_ratio_wrt_dry_air` | kessler_run |
+| `qc` | `cloud_liquid_water_mixing_ratio_wrt_dry_air` | kessler_run |
+| `qr` | `rain_mixing_ratio_wrt_dry_air` | kessler_run |
+| `precl` | `total_precipitation_rate_at_surface` | kessler_run |
+| `relhum` | `relative_humidity` | kessler_run |
+| `temp` | `air_temperature` | kessler_update_timestep_init/final |
+| `temp_prev` | `air_temperature_on_previous_timestep` | kessler_update_* |
+| `temp_tend` | `tendency_of_air_temperature_due_to_model_physics` | kessler_update_* |
+| `phis` | `surface_geopotential` | kessler_update_timestep_final |
+| `st_energy` | `dry_static_energy` | kessler_update_timestep_final |
 
-Should be able to do automatically with the `perturbed_fields` and corresponding fields in the namelists.xml options. 
+Note on `horizontal_dimension` vs `horizontal_loop_extent`: the schemes use both
+tokens.  `horizontal_dimension` comes from `ncol` in the host mod.
+`horizontal_loop_extent` is derived by the framework as `col_end - col_start + 1`
+from the host sub variables, and equals `ncol` in EAMxx since all columns are always
+processed.
+
+#### `eamxx_kessler_host_sub.meta` — key decisions
+
+```ini
+[ccpp-table-properties]
+  name = eamxx_kessler_host_sub
+  type = host
+  language = c++
+[ccpp-arg-table]
+  name = eamxx_kessler_host_sub
+  type = host
+[ col_start ]
+  standard_name = horizontal_loop_begin
+  ...
+[ col_end ]
+  standard_name = horizontal_loop_end
+  ...
+[ errmsg ]
+  standard_name = ccpp_error_message
+  ...
+[ errflg ]
+  standard_name = ccpp_error_code
+  ...
+```
+
+`col_start` and `col_end` are passed as `1` and `ncol` by the EAMxx C++ caller since
+EAMxx always processes all columns in a single call.
+
+### Step 3 — run the generator
+
+The `ccpp_xdsl` command is installed as part of the xdsl-cpp Python package.  Run it
+from the `xdsl-cpp/` directory:
+
+```bash
+cd <repo-root>/xdsl-cpp
+
+ccpp_xdsl \
+    --suites       examples/kessler/scheme/kessler_suite.xml \
+    --scheme-files examples/kessler/scheme/kessler.meta,examples/kessler/scheme/kessler_update.meta \
+    --host-files   examples/kessler/host_eamxx/eamxx_kessler_host_mod.meta,examples/kessler/host_eamxx/eamxx_kessler_host_sub.meta \
+    --bind-c \
+    --directive acc \
+    -o examples/kessler/bindc_eamxx_acc
+```
+
+Flag summary:
+
+| Flag | Effect |
+|------|--------|
+| `--suites` | Suite XML defining which schemes run and in what order |
+| `--scheme-files` | Comma-separated list of scheme `.meta` files |
+| `--host-files` | Comma-separated list of host `.meta` files |
+| `--bind-c` | Emit Fortran `BIND(C)` caps and matching C `extern "C"` headers |
+| `--directive acc` | Emit `!$acc` OpenACC data movement directives guarded by `#ifdef USE_GPU` |
+| `-o` | Output directory |
+
+Omitting `--directive acc` generates the same BIND(C) interface but without any
+OpenACC directives (useful for CPU-only builds).
+
+### Step 4 — generated files and what they do
+
+The generator writes eight files:
+
+| File | Description |
+|------|-------------|
+| `Kessler_ccpp_chost_cap.F90` | **Primary bridge.** Fortran module with six `BIND(C)` subroutines called directly from EAMxx C++: `register`, `initialize`, `finalize`, `timestep_initial`, `timestep_final`, `run` |
+| `Kessler_ccpp_chost_cap.h` | Matching C `extern "C"` declarations; included by `eamxx_kessler_process_interface.cpp` |
+| `Kessler_chost.hpp` | Optional C++ ergonomics wrapper (struct-based, not used by EAMxx directly) |
+| `Kessler_ccpp_cap.F90` | Internal CCPP cap with OpenACC data movement directives; called by the chost cap |
+| `kessler_suite_cap.F90` | Suite-level cap that calls `kessler_init/run` and `kessler_update_*` in the correct order |
+| `ccpp_kinds.F90` | Fortran kind definitions (`kind_phys`) |
+| `ccpp_kinds.h` | C++ kind/type mappings (e.g. `kind_phys` -> `double`) |
+
+The generated BIND(C) entry points and their correspondence to the handwritten bridge:
+
+| Generated entry point | Replaces handwritten call |
+|-----------------------|--------------------------|
+| `Kessler_chost_physics_register` | (new — no handwritten equivalent) |
+| `Kessler_chost_physics_initialize(lv, pref, rhoqr, gravit, ...)` | `kessler_eamxx_bridge_init_c` + `kessler_eamxx_bridge_update_init_c` |
+| `Kessler_chost_physics_timestep_initial(ncol, nz, temp, temp_prev, temp_tend, ...)` | First call inside `kessler_eamxx_bridge_update_c` |
+| `Kessler_chost_physics_run(ncol, nz, col_start, col_end, dt, ...)` | `kessler_eamxx_bridge_run_c` + `kessler_update_run` call inside `kessler_eamxx_bridge_update_c` |
+| `Kessler_chost_physics_timestep_final(ncol, nz, cpair, temp, z_mid, phis, st_energy, ...)` | Final call inside `kessler_eamxx_bridge_update_c` |
+| `Kessler_chost_physics_finalize` | (new — no handwritten equivalent) |
+
+After generation, the output directory was copied into this source tree:
+
+```bash
+cp -r xdsl-cpp/examples/kessler/bindc_eamxx_acc \
+      E3SM/components/eamxx/src/physics/kessler/generated_bridge
+```
+
+---
+
+## Changes made to EAMxx source files
+
+### `CMakeLists.txt`
+
+- Added `set(XDSL_GENERATED_PATH ${CMAKE_CURRENT_SOURCE_DIR}/generated_bridge)`
+- Replaced the three handwritten bridge sources in `KESSLER_F90_SRCS`:
+  ```
+  fortran_bridge/kessler_eamxx_bridge.cpp        (removed)
+  fortran_bridge/kessler_eamxx_bridge_main.F90   (removed)
+  fortran_bridge/kessler_eamxx_bridge_update.F90 (removed)
+  ```
+  with the four generated Fortran files:
+  ```
+  ${XDSL_GENERATED_PATH}/Kessler_ccpp_chost_cap.F90
+  ${XDSL_GENERATED_PATH}/kessler_suite_cap.F90
+  ${XDSL_GENERATED_PATH}/Kessler_ccpp_cap.F90
+  ${XDSL_GENERATED_PATH}/ccpp_kinds.F90
+  ```
+- Replaced `${PATH_TO_LEGACY_CAM_SIMA}/test/include/ccpp_kinds.F90` with the
+  generated `${XDSL_GENERATED_PATH}/ccpp_kinds.F90`
+- Replaced the `fortran_bridge/` include directory with `${XDSL_GENERATED_PATH}` in
+  `target_include_directories`
+
+### `eamxx_kessler_process_interface.cpp`
+
+**Include:** `kessler_eamxx_bridge.hpp` replaced with `Kessler_ccpp_chost_cap.h`.
+
+**`initialize_impl`:** single `kessler_eamxx_bridge_init` call replaced with:
+```cpp
+Kessler_chost_physics_register(errmsg, &errflg);
+Kessler_chost_physics_initialize(latvap, P0, rhoqr, gravit, errmsg, &errflg);
+```
+
+**`run_impl`:** single `kessler_eamxx_bridge_run` call (which previously encapsulated
+both the transpose logic and the Fortran calls inside `kessler_eamxx_bridge.cpp`)
+replaced with the transpose sandwich and three generated cap calls:
+```cpp
+params_helpers.transpose<c2f>(m_num_cols, nlevs);
+params_computed.transpose<c2f>(m_num_cols, nlevs);
+Kokkos::fence();
+
+// #if GPU && !OpenACC  ->  use h_* host mirror views
+// #else                ->  use f_* Fortran-layout device views
+Kessler_chost_physics_timestep_initial(ncol, nz, f_temp, f_temp_prev, f_temp_tend, ...);
+Kessler_chost_physics_run(ncol, nz, 1, ncol, dt, lyr_surf, lyr_toa,
+    f_cpair, f_rair, f_rho, f_z_mid,
+    f_pk,          // pk (Exner function) is passed as the "exner" argument
+    f_theta, f_qv, f_qc, f_qr, f_precl, f_relhum,
+    f_temp_prev, f_temp_tend, ...);
+Kessler_chost_physics_timestep_final(ncol, nz, f_cpair, f_temp, f_z_mid, f_phis, f_st_energy, ...);
+
+params_helpers.transpose<f2c>(m_num_cols, nlevs);
+params_computed.transpose<f2c>(m_num_cols, nlevs);
+```
+
+The `params_helpers` and `params_computed` structs in `kessler_functions.hpp`, the
+`requested_buffer_size_in_bytes()` function, and `init_buffers()` are unchanged.
+
+**`finalize_impl`:** added `Kessler_chost_physics_finalize` call (was previously a
+no-op).
+
+---
+
+## Regenerating the bridge code
+
+If the Kessler Fortran scheme or the EAMxx host variables change, regenerate with:
+
+```bash
+cd <repo-root>/xdsl-cpp
+
+ccpp_xdsl \
+    --suites       examples/kessler/scheme/kessler_suite.xml \
+    --scheme-files examples/kessler/scheme/kessler.meta,examples/kessler/scheme/kessler_update.meta \
+    --host-files   examples/kessler/host_eamxx/eamxx_kessler_host_mod.meta,examples/kessler/host_eamxx/eamxx_kessler_host_sub.meta \
+    --bind-c \
+    --directive acc \
+    -o examples/kessler/bindc_eamxx_acc
+
+cp -r examples/kessler/bindc_eamxx_acc/* \
+      <repo-root>/E3SM/components/eamxx/src/physics/kessler/generated_bridge/
+```
+
+Then verify that the signatures in the regenerated `Kessler_ccpp_chost_cap.h` still
+match the calls in `eamxx_kessler_process_interface.cpp`.
+
+---
+
+## Background and design notes
+
+### Kessler scheme sources
+
+- CAM-SIMA Fortran scheme: `atmospheric_physics/schemes/kessler/`
+- Non-CAM Fortran version with C bindings: `components/eam/src/physics/crm/pam/external/physics/micro/kessler/kessler.f90`
+- EAM implementation background: `components/eam/src/physics/crm/pam/external/physics/micro/kessler/Microphysics.h`
+
+Additional initial condition files may need to be downloaded from
+`https://web.lcrc.anl.gov/public/e3sm/inputdata/atm/scream/init/`.
+
+### GPU data movement
+
+EAMxx uses Kokkos Pack views (C row-major) internally.  The generated Fortran cap
+expects column-major Fortran arrays.  The `params_helpers::transpose` and
+`params_computed::transpose` methods in `kessler_functions.hpp` handle this
+conversion before and after each Fortran call.
+
+On GPU builds without OpenACC (`EAMXX_ENABLE_GPU && !EAMXX_ENABLE_OPENACC`), Fortran
+runs on CPU and the bridge uses host mirror views (`h_*`).  On CPU or GPU+OpenACC
+builds it uses Fortran-layout device views (`f_*`) directly.
+
+The `Kessler_ccpp_cap.F90` generated with `--directive acc` contains
+`!$acc enter/exit data` and `!$acc data` regions guarded by `#ifdef USE_GPU` that
+manage GPU memory for the OpenACC path.
+
+### ATMBufferManager
+
+The Fortran-layout (`f_*`) and C++ Pack (`view_2d<Pack>`) scratch arrays are
+allocated through EAMxx's `ATMBufferManager` in `requested_buffer_size_in_bytes()`
+and `init_buffers()`.  The buffer layout counts are tracked as `static constexpr int`
+members of `params_helpers` and `params_computed` in `kessler_functions.hpp`.

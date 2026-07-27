@@ -21,21 +21,22 @@ set(PATH_TO_LEGACY_KESSLER ${PATH_TO_LEGACY_CAM_SIMA}/schemes/kessler)
 set(CCPP_SRC_PATH ${PATH_TO_LEGACY_CAM_SIMA}/test/lib/ccpp-framework/src)
 set(CCPP_FORTRAN_TOOLS_PATH ${PATH_TO_LEGACY_CAM_SIMA}/test/lib/ccpp-framework/scripts/fortran_tools)
 
+# xdsl-cpp generated CCPP cap files (replaces handwritten fortran_bridge files)
+set(XDSL_GENERATED_PATH ${CMAKE_CURRENT_SOURCE_DIR}/generated_bridge)
+
 set(KESSLER_F90_SRCS
   # ----------------------------------------------------------------------------
-  # EAMxx side C++ bridge methods
-  ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge/kessler_eamxx_bridge.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge/kessler_eamxx_bridge_main.F90
-  ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge/kessler_eamxx_bridge_update.F90
-  # ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge/ccpp_kinds.F90
-  # list others as needed
+  # xdsl-cpp generated EAMxx-Kessler bridge caps
+  ${XDSL_GENERATED_PATH}/Kessler_ccpp_chost_cap.F90
+  ${XDSL_GENERATED_PATH}/kessler_suite_cap.F90
+  ${XDSL_GENERATED_PATH}/Kessler_ccpp_cap.F90
+  ${XDSL_GENERATED_PATH}/ccpp_kinds.F90
 
   # ----------------------------------------------------------------------------
   # Fortran KESSLER code - legacy from CAM-SIMA
   ${PATH_TO_LEGACY_KESSLER}/kessler.F90
   ${PATH_TO_LEGACY_KESSLER}/kessler_update.F90
   ${PATH_TO_LEGACY_CAM_SIMA}/schemes/utilities/geopotential_temp.F90
-  ${PATH_TO_LEGACY_CAM_SIMA}/test/include/ccpp_kinds.F90
   ${CCPP_SRC_PATH}/ccpp_constituent_prop_mod.F90
   ${CCPP_SRC_PATH}/ccpp_hash_table.F90
   ${CCPP_SRC_PATH}/ccpp_hashable.F90
@@ -77,7 +78,7 @@ target_compile_definitions(kessler PUBLIC EAMXX_HAS_KESSLER)
 
 target_include_directories(kessler PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge
+  ${XDSL_GENERATED_PATH}
   ${CMAKE_CURRENT_BINARY_DIR}/modules
   ${PATH_TO_LEGACY_EAM}
   ${CCPP_SRC_PATH}

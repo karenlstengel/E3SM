@@ -1,5 +1,5 @@
 #include "eamxx_kessler_process_interface.hpp"
-#include "kessler_eamxx_bridge.hpp"
+#include "Kessler_ccpp_chost_cap.h"
 #include "share/property_checks/field_within_interval_check.hpp"
 #include "share/property_checks/field_lower_bound_check.hpp"
 #include "share/field/field_utils.hpp"
@@ -141,7 +141,12 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
   const Real rhoqr  = PC::RHOW.value;   // rhoqr_in
   const Real gravit = PC::gravit.value; // gravitational acceleration
 
-  kessler::kessler_eamxx_bridge_init(m_num_cols, m_num_levs, latvap, P0, rhoqr, gravit);
+  char errmsg_init[513] = {};
+  int  errflg_init      = 0;
+  Kessler_chost_physics_register(errmsg_init, &errflg_init);
+  EKAT_REQUIRE_MSG(errflg_init == 0, "[EAMxx] Kessler register failed: " + std::string(errmsg_init));
+  Kessler_chost_physics_initialize(latvap, P0, rhoqr, gravit, errmsg_init, &errflg_init);
+  EKAT_REQUIRE_MSG(errflg_init == 0, "[EAMxx] Kessler initialize failed: " + std::string(errmsg_init));
 
   #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
     // Allocate host mirror views for GPU -> CPU Fortran bridge
@@ -291,8 +296,64 @@ void KesslerMicrophysics::run_impl (const double dt )
 
   double dt_timestep = dt;
 
-  // This calls both kessler_rn and kessler_update now
-  kessler_eamxx_bridge_run(m_num_cols, nlevs, dt_timestep, lyr_surf, lyr_toa, params_helpers, params_computed);
+  // Transpose Kokkos Pack views into Fortran column-major layout
+  params_helpers.transpose<ekat::TransposeDirection::c2f>(m_num_cols, nlevs);
+  params_computed.transpose<ekat::TransposeDirection::c2f>(m_num_cols, nlevs);
+  Kokkos::fence();
+
+  char errmsg_run[513] = {};
+  char scheme_name[65] = {};
+  int  errflg_run      = 0;
+
+  #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
+  // GPU without OpenACC: Fortran runs on CPU, use host mirror views
+  Kessler_chost_physics_timestep_initial(
+      m_num_cols, nlevs,
+      params_computed.h_temp.data(), params_computed.h_temp_prev.data(),
+      params_computed.h_temp_tend.data(), errmsg_run, &errflg_run);
+  Kessler_chost_physics_run(
+      m_num_cols, nlevs, 1, m_num_cols, dt_timestep, lyr_surf, lyr_toa,
+      params_helpers.h_cpair.data(), params_helpers.h_rair.data(),
+      params_helpers.h_rho.data(),   params_helpers.h_z_mid.data(),
+      params_helpers.h_pk.data(),
+      params_computed.h_theta.data(), params_computed.h_qv.data(),
+      params_computed.h_qc.data(),    params_computed.h_qr.data(),
+      params_computed.h_precl.data(), params_computed.h_relhum.data(),
+      params_computed.h_temp_prev.data(), params_computed.h_temp_tend.data(),
+      scheme_name, errmsg_run, &errflg_run);
+  Kessler_chost_physics_timestep_final(
+      m_num_cols, nlevs,
+      params_helpers.h_cpair.data(), params_computed.h_temp.data(),
+      params_helpers.h_z_mid.data(), params_helpers.h_phis.data(),
+      params_computed.h_st_energy.data(), errmsg_run, &errflg_run);
+  #else
+  // CPU or GPU with OpenACC: use Fortran-layout device views directly
+  Kessler_chost_physics_timestep_initial(
+      m_num_cols, nlevs,
+      params_computed.f_temp.data(), params_computed.f_temp_prev.data(),
+      params_computed.f_temp_tend.data(), errmsg_run, &errflg_run);
+  Kessler_chost_physics_run(
+      m_num_cols, nlevs, 1, m_num_cols, dt_timestep, lyr_surf, lyr_toa,
+      params_helpers.f_cpair.data(), params_helpers.f_rair.data(),
+      params_helpers.f_rho.data(),   params_helpers.f_z_mid.data(),
+      params_helpers.f_pk.data(),
+      params_computed.f_theta.data(), params_computed.f_qv.data(),
+      params_computed.f_qc.data(),    params_computed.f_qr.data(),
+      params_computed.f_precl.data(), params_computed.f_relhum.data(),
+      params_computed.f_temp_prev.data(), params_computed.f_temp_tend.data(),
+      scheme_name, errmsg_run, &errflg_run);
+  Kessler_chost_physics_timestep_final(
+      m_num_cols, nlevs,
+      params_helpers.f_cpair.data(), params_computed.f_temp.data(),
+      params_helpers.f_z_mid.data(), params_helpers.f_phis.data(),
+      params_computed.f_st_energy.data(), errmsg_run, &errflg_run);
+  #endif
+
+  EKAT_REQUIRE_MSG(errflg_run == 0, "[EAMxx] Kessler run failed: " + std::string(errmsg_run));
+
+  // Transpose back from Fortran column-major to Kokkos Pack layout
+  params_helpers.transpose<ekat::TransposeDirection::f2c>(m_num_cols, nlevs);
+  params_computed.transpose<ekat::TransposeDirection::f2c>(m_num_cols, nlevs);
 
   // <scheme>qneg</scheme> // this is taken care of by the postcondition checks we have in place for qc, qr, and qi (these checks will set any negative values to 0.0)
   // <scheme>geopotential_temp</scheme> // -> done above when calculating z_mid
@@ -374,7 +435,10 @@ void KesslerMicrophysics::run_impl (const double dt )
 
 void KesslerMicrophysics::finalize_impl()
 {
-  // Do nothing
+  char errmsg_fin[513] = {};
+  int  errflg_fin      = 0;
+  Kessler_chost_physics_finalize(errmsg_fin, &errflg_fin);
+  EKAT_REQUIRE_MSG(errflg_fin == 0, "[EAMxx] Kessler finalize failed: " + std::string(errmsg_fin));
   m_atm_logger->info("[EAMxx] Kessler processes clean up.");
 }
 // =========================================================================================

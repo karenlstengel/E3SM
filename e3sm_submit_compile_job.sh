@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N IC_eamxx
+#PBS -N pg2_test
 #PBS -A NTDD0004
 #PBS -j oe
 #PBS -k eod

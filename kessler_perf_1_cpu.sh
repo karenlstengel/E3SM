@@ -80,34 +80,37 @@ cd $CASE_SCRIPTS_DIR
 
 # -------------------------------------------
 ./atmquery --listall
-./case.build 
+./preview_run
+# ./case.build 
 
-# ####################################################################
-# Run E3SM
-# ####################################################################
-cd $CASE_SCRIPTS_DIR
+# # ####################################################################
+# # Run E3SM
+# # ####################################################################
+# cd $CASE_SCRIPTS_DIR
 
-./xmlchange RUN_TYPE="startup"
-if [[ $COMPSET == *"F20TR"* ]]; then
-   ./xmlchange RUN_STARTDATE='1850-01-01'
-elif [[ $COMPSET == "FMTHIST" || $COMPSET == "FLTHIST" ]]; then
-   ./xmlchange RUN_STARTDATE='2001-01-01'
-else
-   ./xmlchange RUN_STARTDATE='0001-01-01'
-fi
-./xmlchange RESUBMIT='0'
-./xmlchange CONTINUE_RUN='FALSE'
-./xmlchange STOP_N='1',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
-./xmlchange JOB_WALLCLOCK_TIME='00:30:00'
-./xmlchange JOB_QUEUE=$QUEUE_NAME
-./xmlchange BUDGETS=TRUE
+# ./xmlchange RUN_TYPE="startup"
+# if [[ $COMPSET == *"F20TR"* ]]; then
+#    ./xmlchange RUN_STARTDATE='1850-01-01'
+# elif [[ $COMPSET == "FMTHIST" || $COMPSET == "FLTHIST" ]]; then
+#    ./xmlchange RUN_STARTDATE='2001-01-01'
+# else
+#    ./xmlchange RUN_STARTDATE='0001-01-01'
+# fi
+# ./xmlchange RESUBMIT='0'
+# ./xmlchange CONTINUE_RUN='FALSE'
+# ./xmlchange STOP_N='1',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
+# ./xmlchange JOB_WALLCLOCK_TIME='00:30:00'
+# ./xmlchange JOB_QUEUE=$QUEUE_NAME
+# ./xmlchange BUDGETS=TRUE
 
-if [[ $DYCORE == "theta-l_kokkos" ]]; then
-cat << EOF >> user_nl_elm
-   check_finidat_year_consistency = .false.
-   check_dynpft_consistency = .false.
-   create_crop_landunit = .false.
-EOF
-fi
+# ./xmlchange MPI_RUN_COMMAND='mpiexec -np 16 --some-flag'
 
-./case.submit
+# if [[ $DYCORE == "theta-l_kokkos" ]]; then
+# cat << EOF >> user_nl_elm
+#    check_finidat_year_consistency = .false.
+#    check_dynpft_consistency = .false.
+#    create_crop_landunit = .false.
+# EOF
+# fi
+
+# ./case.submit

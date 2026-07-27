@@ -12,6 +12,7 @@ scratch=/glade/derecho/scratch/$user/E3SM
 CCSMROOT=$scratch/E3SM
 # CCSMROOT=/glade/derecho/scratch/$user/E3SM/E3SM
 COMPSET=F2000-SCREAMv1-AQP1
+# RESOLUTION=ne4pg2_ne4pg2 #ne30_ne30
 RESOLUTION=ne4_ne4 #ne30_ne30
 DYCORE=theta-l_kokkos
 MACH=derecho
@@ -19,7 +20,7 @@ MYCOMPILER=nvidia
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="AQP1_ne4_eamxx_kessler_${MYCOMPILER}_cpu"
+CASE_NAME="AQP1_ne4_eamxx_kessler_TEST_cpu"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -64,8 +65,8 @@ cd $CASE_SCRIPTS_DIR
 ./atmchange mac_aero_mic::atm_procs_list=kessler #kessler
 ./atmchange save_field_manager_content=true
 ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control.yml
-# ./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/screami_aquaplanet_ne4np4L72_20220823.nc
-# ./atmchange grids_manager::vertical_coordinate_filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/vertical_coordinates_L72_20220927.nc
+./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/screami_aquaplanet_ne4np4L72_20220823.nc
+./atmchange grids_manager::vertical_coordinate_filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/vertical_coordinates_L72_20220927.nc
 
 ./case.build 
 

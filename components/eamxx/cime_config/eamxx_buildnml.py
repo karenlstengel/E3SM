@@ -308,9 +308,13 @@ def evaluate_selectors(element, case, ez_selectors):
     """
     Evaluate and remove selectors from the unprocessed XML nml file in the repo.
 
-    Elements with selectors are removed. If the selector evaulates to True, then
-    the corresponding element text becomes the new text value of the original
-    (no-selectors, AKA default) element.
+    Elements without selectors (the default element) are kept. If a selector
+    evaluates to True, the matching element becomes the new selected element
+    and the previously selected element is removed. Non-selector metadata
+    attributes (e.g. type, constraints, doc) are copied from the previously
+    selected element to the newly selected one, so that metadata defined on
+    the default element is automatically inherited by all selector-specific
+    variants.
 
     The metadata attributes are kept, to allow checks during calls to atmchange
 
@@ -386,6 +390,21 @@ def evaluate_selectors(element, case, ez_selectors):
     >>> get_child(good,'var9').text=="negation_right"
     True
     >>> get_child(good,'var10').text=="negation_right"
+    True
+    >>> ############## METADATA INHERITANCE #####################
+    >>> xml_inherit = '''
+    ... <namelist_defaults>
+    ...   <ivar constraints="gt 0" doc="an integer">default</ivar>
+    ...   <ivar grid="ne4ne4">selected</ivar>
+    ... </namelist_defaults>
+    ... '''
+    >>> inherit = ET.fromstring(xml_inherit)
+    >>> evaluate_selectors(inherit,case,selectors_good)
+    >>> get_child(inherit,'ivar').text=="selected"
+    True
+    >>> get_child(inherit,'ivar').attrib.get('constraints')=='gt 0'
+    True
+    >>> get_child(inherit,'ivar').attrib.get('doc')=='an integer'
     True
     >>> ############## BAD SELECTOR DEFINITION #####################
     >>> xml_sel_bad1 = '''
@@ -501,22 +520,36 @@ def evaluate_selectors(element, case, ez_selectors):
                 if all_match:
                     if child_name in selected_child.keys():
                         orig_child = selected_child[child_name]
+                        # Compute new_text before modifying child's attributes below.
+                        # We replace orig_child with child (rather than updating orig_child
+                        # in-place) so that the surviving element retains the selector
+                        # attributes of the matching variant, e.g. for diagnostics.
                         if append=="base":
-                            orig_child.text = child_base_value[child_name] + "," + child.text
+                            expect(child_name in child_base_value,
+                                   f"'append=base' used for '{child_name}' but no default "
+                                   f"(base) element was defined. "
+                                   f"Selector element attributes: {dict(child.attrib)}")
+                            new_text = child_base_value[child_name] + "," + child.text
                         elif append=="last":
-                            orig_child.text = orig_child.text + "," + child.text
+                            new_text = orig_child.text + "," + child.text
                         else:
-                            orig_child.text = child.text
-                        children_to_remove.append(child)
+                            new_text = child.text
+                        # Copy non-selector metadata from the previously selected element
+                        # to the newly selected one (if not already set on the new element).
+                        # This allows metadata (e.g. constraints, doc) to be defined only
+                        # on the default element and inherited by all selector-specific variants.
+                        for attr in METADATA_ATTRIBS:
+                            if attr in orig_child.attrib and attr not in child.attrib:
+                                child.attrib[attr] = orig_child.attrib[attr]
+                        child.text = new_text
+                        children_to_remove.append(orig_child)
+                        selected_child[child_name] = child
 
                     else:
                         # If all selectors were the METADATA_ATTRIB ones, then this is the "base" value
                         if not had_case_selectors:
                             child_base_value[child_name] = child.text
                         selected_child[child_name] = child
-                        # Make a copy of selectors.keys(), since selectors=child.attrib,
-                        # and we might delete an entry, causing the error
-                        #    RuntimeError: dictionary changed size during iteration
 
             else:
                 expect(child_name not in selected_child,
@@ -1083,6 +1116,7 @@ def do_cime_vars_on_yaml_output_files(case, caseroot):
     # We will also change the 'output_yaml_files' entry in scream_input.yaml,
     # to point to the copied files in $rundir/data
     output_yaml_files = []
+    file_signatures = []
     scream_input_file = os.path.join(rundir,'data','scream_input.yaml')
     scream_input = yaml.load(open(scream_input_file,"r"),Loader=yaml.SafeLoader)
 
@@ -1138,6 +1172,26 @@ def do_cime_vars_on_yaml_output_files(case, caseroot):
                    f"   frequency_units: {units}\n"
                    f"   ATM_NCPL: {case.get_value('ATM_NCPL')}\n"
                    f" This yields dt_atm={dt_atm} > dt_output={dt_out}. Please, adjust 'frequency' and/or 'frequency_units'\n")
+        
+        # Check for duplicate output file signatures
+        prefix = content['filename_prefix']
+        avg_type = content['averaging_type'].upper()
+        freq = content['output_control']['frequency']
+        units = content['output_control']['frequency_units']
+        signature = (prefix, avg_type, freq, units)
+        for prev_fn, prev_sig in file_signatures:
+            expect(signature != prev_sig,
+                f"Duplicate output file configuration detected!\n"
+                f"  File 1: {prev_fn}\n"
+                f"  File 2: {fn}\n"
+                f"  Both would generate files with:\n"
+                f"    - averaging_type: {avg_type}\n"
+                f"    - frequency: {freq}\n"
+                f"    - frequency_units: {units}\n"
+                f"    - filename_prefix: {prefix}\n"
+                f"  This would cause both outputs to write to the same NetCDF file.\n"
+                f"  Please modify one of the YAML files to use a different prefix or output frequency.")            
+        file_signatures.append((fn, signature))
 
         ordered_dump(content, open(dst_yaml, "w"))
 

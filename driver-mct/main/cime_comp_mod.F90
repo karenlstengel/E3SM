@@ -70,7 +70,7 @@ module cime_comp_mod
   use seq_comm_mct, only: CPLATMID,CPLLNDID,CPLOCNID,CPLICEID,CPLGLCID,CPLROFID,CPLWAVID,CPLESPID
   use seq_comm_mct, only: IACID, ALLIACID, CPLALLIACID, CPLIACID
   use seq_comm_mct, only: num_inst_atm, num_inst_lnd, num_inst_rof
-  use seq_comm_mct, only: num_inst_ocn, num_inst_ice, num_inst_glc, num_inst_wav
+  use seq_comm_mct, only: num_inst_ocn, num_inst_ice, num_inst_glc
   use seq_comm_mct, only: num_inst_wav, num_inst_esp
   use seq_comm_mct, only: num_inst_iac
   use seq_comm_mct, only: num_inst_xao, num_inst_frc, num_inst_phys
@@ -418,6 +418,7 @@ module cime_comp_mod
 
   logical  :: atm_prognostic         ! .true.  => atm comp expects input
   logical  :: lnd_prognostic         ! .true.  => lnd comp expects input
+  logical  :: lndocn_prognostic      ! .ture.  => lnd comp expects ocean inputs
   logical  :: ice_prognostic         ! .true.  => ice comp expects input
   logical  :: iceberg_prognostic     ! .true.  => ice comp can handle iceberg input
   logical  :: ocn_prognostic         ! .true.  => ocn comp expects input
@@ -445,6 +446,7 @@ module cime_comp_mod
   logical  :: ocn_c2_glcshelf        ! .true.  => ocn to glc ice shelf coupling on
   logical  :: ocn_c2_wav             ! .true.  => ocn to wav coupling on
   logical  :: ocn_c2_rof             ! .true.  => ocn to rof coupling on
+  logical  :: ocn_c2_lnd             ! .true.  => ocn to lnd coupling on
   logical  :: ice_c2_atm             ! .true.  => ice to atm coupling on
   logical  :: ice_c2_ocn             ! .true.  => ice to ocn coupling on
   logical  :: ice_c2_wav             ! .true.  => ice to wav coupling on
@@ -457,6 +459,7 @@ module cime_comp_mod
   logical  :: glcshelf_c2_ocn        ! .true.  => glc ice shelf to ocn coupling on
   logical  :: glcshelf_c2_ice        ! .true.  => glc ice shelf to ice coupling on
   logical  :: wav_c2_ocn             ! .true.  => wav to ocn coupling on
+  logical  :: wav_c2_ice             ! .true.  => wav to ice coupling on
 
   logical  :: iac_c2_lnd             ! .true.  => iac to lnd coupling on
   logical  :: iac_c2_atm             ! .true.  => iac to atm coupling on
@@ -727,6 +730,9 @@ contains
 #if defined(MPINIT_WORKAROUND) && (MPINIT_WORKAROUND == 1)
     use atm_comp_mct, only: atm_init_hip_mct
 #endif
+#ifndef NO_MPIMOD
+    use mpi
+#endif
     !----------------------------------------------------------
     !| Initialize MCT and MPI communicators and IO
     !----------------------------------------------------------
@@ -746,13 +752,20 @@ contains
     integer(i8) :: beg_count          ! start time
     integer(i8) :: end_count          ! end time
     integer(i8) :: irtc_rate          ! factor to convert time to seconds
+
+    integer :: tmode ! Thread mode provided by the MPI library
     
     beg_count = shr_sys_irtc(irtc_rate)
     
 #if defined(MPINIT_WORKAROUND) && (MPINIT_WORKAROUND == 1)
     call atm_init_hip_mct()
 #endif
+#if defined(MPI_INIT_THREADED)
+    call mpi_init_thread(MPI_THREAD_MULTIPLE, tmode, ierr)
+#else
     call mpi_init(ierr)
+#endif
+
     call shr_mpi_chkerr(ierr,subname//' mpi_init')
 
     end_count = shr_sys_irtc(irtc_rate)
@@ -1690,6 +1703,7 @@ contains
          flood_present=flood_present,           &
          atm_prognostic=atm_prognostic,         &
          lnd_prognostic=lnd_prognostic,         &
+         lndocn_prognostic=lndocn_prognostic,   &
          ice_prognostic=ice_prognostic,         &
          iceberg_prognostic=iceberg_prognostic, &
          ocn_prognostic=ocn_prognostic,         &
@@ -1767,6 +1781,7 @@ contains
     ocn_c2_ice = .false.
     ocn_c2_wav = .false.
     ocn_c2_rof = .false.
+    ocn_c2_lnd = .false.
     ice_c2_atm = .false.
     ice_c2_ocn = .false.
     ice_c2_wav = .false.
@@ -1779,6 +1794,8 @@ contains
     glcshelf_c2_ocn = .false.
     glcshelf_c2_ice = .false.
     wav_c2_ocn = .false.
+    wav_c2_atm = .false.
+    wav_c2_ice = .false.
     iac_c2_atm = .false.
     iac_c2_lnd = .false.
     lnd_c2_iac = .false.
@@ -1805,7 +1822,7 @@ contains
        if (glc_prognostic .and. (glc_nzoc > 0)) ocn_c2_glctf = .true.
        if (wav_prognostic) ocn_c2_wav = .true.
        if (rofocn_prognostic) ocn_c2_rof = .true.
-
+       if (lndocn_prognostic) ocn_c2_lnd = .true.
     endif
     if (ice_present) then
        if (atm_prognostic) ice_c2_atm = .true.
@@ -1829,7 +1846,9 @@ contains
        if (glcice_present .and. iceberg_prognostic) glc_c2_ice = .true.
     endif
     if (wav_present) then
+       if (atm_prognostic) wav_c2_atm = .true.
        if (ocn_prognostic) wav_c2_ocn = .true.
+       if (ice_prognostic) wav_c2_ice = .true.
     endif
     if (iac_present) then
        if (lnd_prognostic) iac_c2_lnd = .true.
@@ -1882,6 +1901,7 @@ contains
        write(logunit,F0L)'atm model prognostic  = ',atm_prognostic
        write(logunit,F0L)'lnd model prognostic  = ',lnd_prognostic
        write(logunit,F0L)'ocn model prognostic  = ',ocn_prognostic
+       write(logunit,F0L)'lnd ocn   prognostic  = ',lndocn_prognostic
        write(logunit,F0L)'ice model prognostic  = ',ice_prognostic
        write(logunit,F0L)'iceberg   prognostic  = ',iceberg_prognostic
        write(logunit,F0L)'glc model prognostic  = ',glc_prognostic
@@ -1907,6 +1927,7 @@ contains
        write(logunit,F0L)'ocn_c2_ice            = ',ocn_c2_ice
        write(logunit,F0L)'ocn_c2_wav            = ',ocn_c2_wav
        write(logunit,F0L)'ocn_c2_rof            = ',ocn_c2_rof
+       write(logunit,F0L)'ocn_c2_lnd            = ',ocn_c2_lnd
        write(logunit,F0L)'ice_c2_atm            = ',ice_c2_atm
        write(logunit,F0L)'ice_c2_ocn            = ',ice_c2_ocn
        write(logunit,F0L)'ice_c2_wav            = ',ice_c2_wav
@@ -1919,6 +1940,8 @@ contains
        write(logunit,F0L)'glcshelf_c2_ocn       = ',glcshelf_c2_ocn
        write(logunit,F0L)'glcshelf_c2_ice       = ',glcshelf_c2_ice
        write(logunit,F0L)'wav_c2_ocn            = ',wav_c2_ocn
+       write(logunit,F0L)'wav_c2_atm            = ',wav_c2_atm
+       write(logunit,F0L)'wav_c2_ice            = ',wav_c2_ice
        write(logunit,F0L)'iac_c2_lnd            = ',iac_c2_lnd
        write(logunit,F0L)'iac_c2_atm            = ',iac_c2_atm
 
@@ -2008,6 +2031,12 @@ contains
           call shr_sys_flush(logunit)
        endif
     endif
+    if (lndocn_prognostic .and. .not.ocn_present) then
+       if (iamroot_CPLID) then
+          write(logunit,F00) 'WARNING: lndocn_prognostic is TRUE but ocn_present is FALSE'
+          call shr_sys_flush(logunit)
+       endif
+    endif
 
     !----------------------------------------------------------
     !| Samegrid checks
@@ -2049,13 +2078,13 @@ contains
        call t_adj_detailf(+2)
        if (drv_threading) call seq_comm_setnthreads(nthreads_CPLID)
 
-       call prep_atm_init(infodata, ocn_c2_atm, ice_c2_atm, lnd_c2_atm, iac_c2_lnd, wav_c2_atm)
+       call prep_atm_init(infodata, ocn_c2_atm, ice_c2_atm, lnd_c2_atm, iac_c2_atm, wav_c2_atm)
 
-       call prep_lnd_init(infodata, atm_c2_lnd, rof_c2_lnd, glc_c2_lnd, iac_c2_lnd)
+       call prep_lnd_init(infodata, atm_c2_lnd, rof_c2_lnd, glc_c2_lnd, iac_c2_lnd, ocn_c2_lnd)
 
        call prep_ocn_init(infodata, atm_c2_ocn, atm_c2_ice, ice_c2_ocn, rof_c2_ocn, wav_c2_ocn, glc_c2_ocn, glcshelf_c2_ocn)
 
-       call prep_ice_init(infodata, ocn_c2_ice, glc_c2_ice, glcshelf_c2_ice, rof_c2_ice )
+       call prep_ice_init(infodata, ocn_c2_ice, glc_c2_ice, glcshelf_c2_ice, rof_c2_ice, wav_c2_ice)
 
        call prep_rof_init(infodata, lnd_c2_rof, atm_c2_rof, ocn_c2_rof)
 
@@ -2583,7 +2612,7 @@ contains
     logical               :: prep_glc_accum_avg_called ! Whether prep_glc_accum_avg has been called this timestep
     integer               :: i, nodeId
     character(len=15)     :: c_ymdtod
-    character(len=18)     :: c_mprof_file
+    character(len=28)     :: c_mprof_file
 
 101 format( A, i10.8, i8, 12A, A, F8.2, A, F8.2 )
 102 format( A, i10.8, i8, A, 8L3 )
@@ -2673,8 +2702,13 @@ contains
        ! write to standalone file
        if ( iamroot_CPLID) then
           mlog = shr_file_getUnit()
-          ! log-name: memory.{0,1,2,3,4}.$nsecs.log
-          write(c_mprof_file,'(a7,i1,a1,i0,a4)') 'memory.',info_mprof,'.',info_mprof_dt,'.log'
+          ! log-name: memory.{0,1,2,3,4}.$nsecs.log (single instance)
+          !       or: memory_$ninst_driver.{0,1,2,3,4}.$nsecs.log (multiple instances)
+          if (num_inst_driver > 1) then
+             write(c_mprof_file,'(a7,i4.4,a1,i1,a1,i0,a4)') 'memory_',driver_id,'.',info_mprof,'.',info_mprof_dt,'.log'
+          else
+             write(c_mprof_file,'(a7,i1,a1,i0,a4)') 'memory.',info_mprof,'.',info_mprof_dt,'.log'
+          endif
           inquire(file=trim(c_mprof_file),exist=exists)
           if (exists) then
              open(mlog, file=trim(c_mprof_file), status='old', position='append')
@@ -4111,6 +4145,8 @@ contains
 
        if (ocn_c2_rof) call prep_rof_accum_ocn(timer='CPL:ocnpost_acco2r')
 
+       if (ocn_c2_lnd) call prep_lnd_accum_ocn(timer='CPL:ocnpost_acco2l')
+
        call cime_run_ocnglc_coupling()
 
        if (drv_threading) call seq_comm_setnthreads(nthreads_GLOID)
@@ -4324,6 +4360,11 @@ contains
        ! IAC export onto lnd grid
        if (iac_c2_lnd) then
           call prep_lnd_calc_z2x_lx(timer='CPL:lndprep_iac2lnd')
+       endif
+
+       if (ocn_c2_lnd) then 
+          call prep_lnd_accum_avg(timer='CPL:lndprep_o2xavg')
+          call prep_lnd_calc_o2x_lx(timer='CPL:lndprep_ocn2lnd')
        endif
 
        if (lnd_prognostic) then
@@ -4619,6 +4660,8 @@ contains
           a2x_ox => prep_ocn_get_a2x_ox() ! array
           call prep_ice_calc_a2x_ix(a2x_ox, timer='CPL:iceprep_atm2ice')
        endif
+
+       if (wav_c2_ice) call prep_ice_calc_w2x_ix(timer='CPL:iceprep_wav2ice')
 
        call prep_ice_mrg(infodata, timer_mrg='CPL:iceprep_mrgx2i')
 

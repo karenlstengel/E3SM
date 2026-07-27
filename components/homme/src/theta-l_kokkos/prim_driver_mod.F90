@@ -91,7 +91,8 @@ contains
                               dcmip16_mu, theta_advect_form, test_case,                &
                               MAX_STRING_LEN, dt_remap_factor, dt_tracer_factor,       &
                               pgrad_correction, dp3d_thresh, vtheta_thresh,            &
-                              internal_diagnostics_level
+                              internal_diagnostics_level, do_3d_turbulence,            &
+                              tom_sponge_start
     !
     ! Input(s)
     !
@@ -105,7 +106,7 @@ contains
     type (c_ptr) :: hybrid_am_ptr, hybrid_ai_ptr, hybrid_bm_ptr, hybrid_bi_ptr
     character(len=MAX_STRING_LEN), target :: test_name
 
-    integer :: disable_diagnostics_int, theta_hydrostatic_mode_int, use_moisture_int
+    integer :: disable_diagnostics_int, theta_hydrostatic_mode_int, use_moisture_int, do_3d_turbulence_int
 
     ! Initialize the C++ reference element structure (i.e., pseudo-spectral deriv matrix and ref element mass matrix)
     dvv = deriv1%dvv
@@ -121,6 +122,8 @@ contains
     if (use_moisture) use_moisture_int = 1
     theta_hydrostatic_mode_int = 0
     if (theta_hydrostatic_mode) theta_hydrostatic_mode_int = 1
+    do_3d_turbulence_int = 0
+    if (do_3d_turbulence) do_3d_turbulence_int = 1
 
     call init_simulation_params_c (vert_remap_q_alg, limiter_option, rsplit, qsplit, tstep_type,  &
                                    qsize, statefreq, nu, nu_p, nu_q, nu_s, nu_div, nu_top,        &
@@ -138,7 +141,9 @@ contains
                                    scale_factor, laplacian_rigid_factor,                          &
                                    nsplit,                                                        &
                                    pgrad_correction,                                              &
-                                   dp3d_thresh, vtheta_thresh, internal_diagnostics_level)
+                                   dp3d_thresh, vtheta_thresh, internal_diagnostics_level,        &
+                                   do_3d_turbulence_int,                                          &
+                                   tom_sponge_start)
 
     ! Initialize time level structure in C++
     call init_time_level_c(tl%nm1, tl%n0, tl%np1, tl%nstep, tl%nstep0)
@@ -293,7 +298,7 @@ contains
   subroutine prim_init_ref_states_views (elem)
     use iso_c_binding, only : c_ptr, c_loc
     use element_mod,   only : element_t
-    use element_state, onlY : elem_theta_ref, elem_dp_ref, elem_phi_ref
+    use element_state, onlY : elem_theta_ref, elem_dp_ref, elem_phi_ref, nu_scale_top
     use theta_f2c_mod, only : init_reference_states_c
     !
     ! Input(s)
@@ -303,11 +308,14 @@ contains
     ! Local(s)
     !
     type (c_ptr) :: elem_theta_ref_ptr, elem_dp_ref_ptr, elem_phi_ref_ptr
+    type (c_ptr) :: nu_scale_top_ptr
 
     elem_theta_ref_ptr = c_loc(elem_theta_ref)
     elem_dp_ref_ptr    = c_loc(elem_dp_ref)
     elem_phi_ref_ptr   = c_loc(elem_phi_ref)
-    call init_reference_states_c (elem_theta_ref_ptr, elem_dp_ref_ptr, elem_phi_ref_ptr)
+    nu_scale_top_ptr   = c_loc(nu_scale_top)
+    call init_reference_states_c (elem_theta_ref_ptr, elem_dp_ref_ptr, &
+                                  elem_phi_ref_ptr, nu_scale_top_ptr)
   end subroutine prim_init_ref_states_views
 
   subroutine prim_init_diags_views (elem)
@@ -356,7 +364,7 @@ contains
 
     ! Initialize the 3d states views in C++
     call prim_init_state_views (elem)
-
+    
     ! Initialize the reference states in C++
     call prim_init_ref_states_views (elem)
 

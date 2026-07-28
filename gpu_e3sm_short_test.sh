@@ -9,11 +9,11 @@ scratch=/glade/derecho/scratch/$user/E3SM
 # Machine, compset, etc.
 ####################################################################
 CCSMROOT=$scratch/E3SM
-COMPSET=F20TR-SCREAMv1
-RESOLUTION=ne30pg2_ne30pg2
+COMPSET=F2000-SCREAMv1-AQP1
+RESOLUTION=ne4_ne4
 DYCORE=theta-l_kokkos
 MACH=derecho
-MYCOMPILER=gnugpu
+MYCOMPILER=nvidiagpu
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"

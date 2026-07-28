@@ -9,15 +9,15 @@ scratch=/glade/derecho/scratch/$user/E3SM
 # Machine, compset, etc.
 ####################################################################
 CCSMROOT=$scratch/E3SM
-COMPSET=F20TR-SCREAMv1
-RESOLUTION=ne30pg2_ne30pg2
+COMPSET=F2000-SCREAMv1-AQP1
+RESOLUTION=ne4_ne4
 DYCORE=theta-l_kokkos
 MACH=derecho
-MYCOMPILER=intel
+MYCOMPILER=nvidia
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="test_10_eamxx_cpu"
+CASE_NAME="eamxx_cpu_build_test"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -43,7 +43,7 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange EXEROOT=${CASE_BUILD_DIR}
 ./xmlchange RUNDIR=${CASE_RUN_DIR}
 
-./xmlchange NTASKS=128
+./xmlchange NTASKS=64
 ./xmlchange NTHRDS=1
 ./xmlchange ROOTPE='0'
 ./xmlchange DOUT_S=false

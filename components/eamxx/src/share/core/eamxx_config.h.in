@@ -19,6 +19,9 @@
 // Whether Fortran physics has an OpenACC build
 #cmakedefine EAMXX_ENABLE_OPENACC
 
+// Switch to OpenACC backend
+#cmakedefine EAMXX_USE_OPENACC_BACKEND
+
 // Whether scream uses leap years or not
 #cmakedefine SCREAM_HAS_LEAP_YEAR
 

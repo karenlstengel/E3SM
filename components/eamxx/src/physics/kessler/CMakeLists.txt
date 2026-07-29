@@ -22,7 +22,7 @@ set(CCPP_SRC_PATH ${PATH_TO_LEGACY_CAM_SIMA}/test/lib/ccpp-framework/src)
 set(CCPP_FORTRAN_TOOLS_PATH ${PATH_TO_LEGACY_CAM_SIMA}/test/lib/ccpp-framework/scripts/fortran_tools)
 
 # xdsl-cpp generated CCPP cap files (replaces handwritten fortran_bridge files)
-set(XDSL_GENERATED_PATH ${CMAKE_CURRENT_SOURCE_DIR}/generated_bridge)
+set(XDSL_GENERATED_PATH ${CMAKE_CURRENT_SOURCE_DIR}/generated_bridge) # update this for non-OpenACC version of Kessler if needed
 
 set(KESSLER_F90_SRCS
   # ----------------------------------------------------------------------------

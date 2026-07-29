@@ -68,3 +68,8 @@ components/eamxx/src/python/dist
 components/emulators/build
 **/Testing/**
 **/.cache/**
+
+# Misc JAX related files
+**/.JAX_*cache*
+**/.jax_cache*
+**/__pycache__/

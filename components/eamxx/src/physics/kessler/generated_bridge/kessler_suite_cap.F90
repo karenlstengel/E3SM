@@ -113,8 +113,8 @@ CONTAINS
       errflg = 1      
     end if
     if (errflg .eq. 0) then
-      call kessler_update_timestep_final(nz, ncol, cpair, temp, zm, phis, st_energy, errmsg,      &
-        errflg)
+      call kessler_update_timestep_final(nz, ncol, cpair, temp, zm, phis, st_energy, errflg,      &
+        errmsg)
     end if
     ccpp_suite_state = const_initialized
   end subroutine kessler_suite_suite_timestep_final 

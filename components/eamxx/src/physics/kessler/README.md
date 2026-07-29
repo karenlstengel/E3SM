@@ -7,6 +7,181 @@ Fortran scheme is **automatically generated** by the
 than written by hand.  This document describes the full generation process so it can
 be reproduced or updated.
 
+## Updated list of bugs from xdsl-ccpp bridge generation
+
+1. the cap function calls have `kessler_suite_suite_` names instead of just `kessler_suite_`
+2. didn't add in checks to switch between the OpenACC function calls and CPU function calls 
+3. xdsl-ccpp missed that `kessler_update_timestep_final` expects the `errflg` before `errmsg` but all of the other kessler & kessler_update calls expect `errmsg` before `errflg`. All of the functions in the kessler & kessler_update have argument orders that match the corresponding meta file entry.
+
+### TODO: fix bug #2 — OpenACC/CPU signature branch missing in `kessler_suite_cap.F90`
+
+Investigated 2026-07-29. Not yet implemented.
+
+**Diagnosis:**
+
+- `kessler/CMakeLists.txt` links `GPU_ports/atmospheric_physics/schemes/kessler/kessler_update.F90`
+  when `EAMXX_ENABLE_OPENACC` is ON, and the plain
+  `atmospheric_physics/schemes/kessler/kessler_update.F90` otherwise. The two versions have
+  **different argument lists** for two subroutines:
+
+  | Subroutine | CPU version | GPU_ports version |
+  |---|---|---|
+  | `kessler_update_timestep_init` | `(temp, temp_prev, ttend_t, errmsg, errflg)` | `(ncol, nz, temp, temp_prev, ttend_t, errmsg, errflg)` |
+  | `kessler_update_timestep_final` | `(nz, cpair, temp, zm, phis, st_energy, errflg, errmsg)` | `(nz, ncol, cpair, temp, zm, phis, st_energy, errflg, errmsg)` |
+
+  (`kessler_run`/`kessler_init` are identical in both trees — no branch needed there.)
+- The GPU_ports versions of these subroutines already contain the real `!$acc parallel loop
+  collapse(2) deviceptr(...)` directives, which assume the incoming arrays are already device
+  pointers (no host staging). Nothing needs to be added to the physics scheme itself.
+- `Kessler_ccpp_cap.F90`'s `!$acc enter data copyin(...)` / `USE_GPU` scaffolding is a **different,
+  unused architecture** (it assumes a host module `eamxx_kessler_host_mod` supplying host-resident
+  module variables; that module was never generated and doesn't exist in this tree). It is not the
+  pattern to follow here — do not port those directives.
+- `kessler_suite_cap.F90` currently hardcodes only the GPU_ports (`ncol`-included) signature for
+  both calls above, unconditionally. This compiles only when `EAMXX_ENABLE_OPENACC=TRUE`; a
+  pure-CPU build fails to compile `kessler_suite_cap.F90` because the linked CPU subroutines don't
+  take `ncol`.
+- The handwritten reference bridge (`fortran_bridge/kessler_eamxx_bridge_update.F90:83-91`, no
+  longer compiled but kept for reference) already solves this correctly with an
+  `#if defined(EAMXX_ENABLE_GPU) && defined(EAMXX_ENABLE_OPENACC)` / `#else` branch selecting the
+  right argument list per subroutine.
+- The C++ interface's existing `h_*`/`f_*` selection in `eamxx_kessler_process_interface.cpp`
+  (`#if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)` / `#else`) already correctly
+  implements all three cases (GPU+OpenACC -> `f_*` device pointers directly; GPU without OpenACC ->
+  `h_*` host mirrors; CPU-only -> `f_*` directly). No change needed there.
+
+**To-do list:**
+
+1. Expose `EAMXX_ENABLE_OPENACC` to Fortran compilation. In `kessler/CMakeLists.txt`, after
+   `add_library(kessler ...)`, add:
+   ```cmake
+   if (EAMXX_ENABLE_OPENACC)
+     target_compile_definitions(kessler PRIVATE $<$<COMPILE_LANGUAGE:Fortran>:EAMXX_ENABLE_OPENACC>)
+   endif()
+   ```
+   Key this off `EAMXX_ENABLE_OPENACC` alone (not combined with `EAMXX_ENABLE_GPU`) since that's the
+   exact condition `kessler/CMakeLists.txt:5` uses to choose which `kessler_update.F90` gets linked.
+2. Fix `generated_bridge/kessler_suite_cap.F90`:
+   - In `kessler_suite_suite_timestep_initial`, branch the call to `kessler_update_timestep_init`
+     on `#ifdef EAMXX_ENABLE_OPENACC` between the `(ncol, nz, ...)` and `(...)` (no `ncol`/`nz`)
+     argument lists.
+   - In `kessler_suite_suite_timestep_final`, branch the call to `kessler_update_timestep_final`
+     the same way (with/without `ncol`).
+3. Decide whether to apply the same edit to the raw-generator-output copy at
+   `xdsl-ccpp-generated/bindc_eamxx/kessler_suite_cap.F90`, or rely on this README section to
+   reapply the fix after future regeneration.
+4. Decide the fate of `Kessler_ccpp_cap.F90` / `Kessler_ccpp_cap.h`: it's listed in
+   `KESSLER_F90_SRCS` but `use`s `eamxx_kessler_host_mod`, which doesn't exist anywhere in the tree.
+   Confirm whether it currently compiles; if not, either stub the missing module or remove
+   `Kessler_ccpp_cap.F90`/`.h` from the build since nothing calls into it.
+5. Build and verify both configurations:
+   - `EAMXX_ENABLE_OPENACC=OFF`: confirm `kessler_suite_cap.F90` compiles against the plain
+     `atmospheric_physics/schemes/kessler/kessler_update.F90`.
+   - `EAMXX_ENABLE_OPENACC=ON` (derecho GPU): confirm it compiles against
+     `GPU_ports/atmospheric_physics/schemes/kessler/kessler_update.F90` and that `-Minfo=accel`
+     shows the existing `deviceptr` directives being picked up.
+   - Run the standalone eamxx kessler test in both configs and compare `T_mid`, `qv`/`qc`/`qr`,
+     `precl` output for correctness, not just successful compilation.
+
+## How xdsl-ccpp works for a C++ host, and where it broke for EAMxx
+
+Investigated 2026-07-29 by reading the `xdsl-ccpp` tool itself
+(`multilanguage_plan.md`, `multilanguage_limitations.md`, `xdsl_ccpp/transforms/suite_cap.py`)
+and diffing the `.meta`/`.F90` files actually used for generation against the two real Kessler
+scheme trees (`atmospheric_physics/` and `GPU_ports/atmospheric_physics/`). This is the first time
+xdsl-ccpp has generated a bridge for EAMxx as a C++ host model, so this section records what the
+tool assumes, what it documents as unsupported, and the specific root causes behind bugs #1-#3
+above. No code changes were made for this investigation.
+
+### The chost-cap mechanism is the tool's real, intended path for C++ hosts
+
+`language = c++` in a host `.meta` file's `[ccpp-table-properties]` block is a fully implemented,
+deliberate feature (`multilanguage_plan.md`, "Open Design Questions" -> "`language = c++` for C++
+host models [Implemented]"). Setting it auto-activates the chost-cap generation mode
+(`Kessler_ccpp_chost_cap.F90` / `Kessler_chost.hpp`) with no extra CLI flags. The tool ships its own
+toy reference example at `xdsl-cpp/examples/kessler/host_cpp/`, which `host_eamxx/` was modeled on.
+So the overall approach taken here is correct and sanctioned by the tool, not a misuse of it.
+
+### The tool's own docs already flag the GPU/OpenACC gap, and mark it unresolved
+
+`multilanguage_limitations.md` section 2, "GPU Memory Management," states:
+
+> The chost cap is a CPU BIND(C) wrapper. When physics schemes run on a GPU, the C++ host is
+> responsible for ensuring arrays are in the correct device memory space before calling the cap.
+> **The generated code provides no help with this.**
+>
+> Kokkos + Fortran OpenACC: Kokkos device allocations (`CudaSpace`) are invisible to the OpenACC
+> runtime. The host must either use CUDA Unified Memory (`CudaUVMSpace`) or call `acc_map_data` to
+> register already-placed device pointers with the OpenACC runtime before calling the cap.
+
+The doc's own priority table still marks this open ("Blocks real use? Yes, for GPU builds --
+Medium-High effort"). All of the tool's shipped examples are CPU-only demos, so the EAMxx Kessler
+bridge is the first real exercise of a C++ host driving a chost-cap-generated scheme on GPU with
+OpenACC. The GPU_ports `kessler_update.F90` avoids needing `acc_map_data`/UVM by using
+`!$acc parallel loop ... deviceptr(...)` clauses, which tell the compiler to trust the incoming
+pointer as an already-valid device address rather than going through OpenACC's present-table
+bookkeeping -- this works because Kokkos CUDA-space pointers and NVHPC's OpenACC codegen share the
+same GPU context, but it's a property of this specific scheme's directives, not something the
+xdsl-ccpp-generated cap itself provides or enforces.
+
+### Bug #1 root cause (`kessler_suite_suite_*` naming) -- self-inflicted via the suite XML
+
+`xdsl-cpp/examples/kessler/scheme/kessler_suite.xml` names the suite `kessler_suite`. The generator
+(`suite_cap.py`) builds function names as `<suite_name>_suite_<lifecycle>`, so `kessler_suite` +
+`_suite_register` -> `kessler_suite_suite_register`. Not a generator defect -- naming the suite
+`kessler` instead of `kessler_suite` and regenerating would produce clean `kessler_suite_register`
+names.
+
+### Bug #2 root cause (missing OpenACC/CPU signature switch) -- drifted metadata, not a generator defect
+
+Diffing the three copies of `kessler_update.meta` in play:
+
+- `xdsl-cpp/examples/kessler/scheme/kessler_update.meta` -- the copy that actually generated this
+  bridge
+- `atmospheric_physics/schemes/kessler/kessler_update.meta` -- the CPU scheme's own meta
+- `GPU_ports/atmospheric_physics/schemes/kessler/kessler_update.meta` -- the GPU_ports scheme's own
+  meta
+
+found:
+
+- The two "real" repo metas (CPU and GPU_ports) are **identical to each other** and both describe
+  the CPU-style signature: no `ncol`/`nz` arguments on `kessler_update_timestep_init` /
+  `kessler_update_timestep_final`, and no `memory_space = device` tags.
+- But `GPU_ports/atmospheric_physics/schemes/kessler/kessler_update.F90`'s actual Fortran already
+  has explicit `ncol`/`nz` arguments on those two subroutines (needed for its `!$acc deviceptr`
+  clauses) and real `!$acc parallel loop` directives. **Its own committed `.meta` file was never
+  updated to match its own Fortran source** -- a pre-existing drift bug in the GPU_ports fork,
+  independent of xdsl-ccpp and predating this integration effort.
+- The generation-source meta (the one that actually produced `kessler_suite_cap.F90`) is a third,
+  hand-customized variant that adds the missing `ncol`/`nz` entries and `memory_space = device`
+  annotations so generation would succeed against the GPU_ports signature.
+
+CCPP metadata has no mechanism to express "this scheme's argument list depends on a build flag" --
+one `.meta` file describes one signature. Feeding the generator a meta customized for the GPU_ports
+signature necessarily produces a suite cap that only compiles against GPU_ports. This is a
+consequence of the CPU/GPU_ports Fortran forks having genuinely different signatures with no
+metadata mechanism to express both, compounded by the pre-existing GPU_ports metadata drift above --
+not a generator bug.
+
+### Bug #3 root cause (errflg/errmsg order) -- same hand-patched meta, likely a copy-paste slip
+
+Across all four `kessler_update_*` subroutines, only `kessler_update_timestep_final` puts `errflg`
+before `errmsg` in the real Fortran argument list -- both the CPU and GPU_ports trees agree on this
+being the one exception. Both "real" `.meta` files correctly list `errflg` before `errmsg` for this
+entry. But the generation-source meta has `errmsg` before `errflg` for `timestep_final` specifically,
+while getting the other three subroutines' (already errmsg-first) order right. Consistent with
+whoever added the missing `ncol` entry to this meta file applying the common errmsg-first convention
+uniformly across all entries without checking that `timestep_final` is the outlier.
+
+### Bottom line
+
+The chost-cap mechanism itself works as designed and is the correct tool for an EAMxx-style C++
+host. The actual failure points were: (1) a genuinely unaddressed, tool-documented gap around
+GPU+OpenACC pointer interop that no prior use of this tool had exercised, worked around adequately
+here by the scheme's own `deviceptr` clauses; and (2) metadata drift/hand-editing around the CPU vs.
+GPU_ports argument-signature difference in `kessler_update_timestep_init`/`_final`, which produced a
+generation-source meta that could only ever describe one of the two variants.
+
 ## Repository layout
 
 ```

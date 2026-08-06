@@ -24,8 +24,9 @@ set(KESSLER_HEADERS
 
 # this points to Iris's JAX translation
 set(KESSLER_JAX_DIR
-  ${SCREAM_SOURCE_DIR}/src/physics/kessler/bridge # this has the transpose
   ${SCREAM_SOURCE_DIR}/src/physics/kessler/kessler_jax
+  # ${SCREAM_SOURCE_DIR}/src/physics/kessler/kessler_jax_T
+  # ${SCREAM_SOURCE_DIR}/src/physics/kessler/bridge
 )
 
 add_library(kessler ${KESSLER_SRCS})

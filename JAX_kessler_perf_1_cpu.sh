@@ -6,6 +6,8 @@ module load conda
 conda init
 conda activate jax-kessler # ADDED TO TEST JAX TRANSLATION
 
+export KESSLER_PERF_CSV="/glade/derecho/scratch/kstengel/E3SM/E3SM/components/eamxx/src/physics/kessler/JAX_perf_cpu.csv"
+
 export JAX_PLATFORMS="cpu"
 export JAX_COMPILATION_CACHE_DIR="/glade/derecho/scratch/kstengel/E3SM/E3SM/components/eamxx/src/physics/kessler/.JAX_cache_cpu"
 
@@ -25,7 +27,7 @@ MYCOMPILER=nvidia
 QUEUE_NAME=develop
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="JAX_ne30np4_1nsteps_cpu"
+CASE_NAME="JAX_inplace_ne30np4_1day_cpu"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -70,7 +72,7 @@ cd $CASE_SCRIPTS_DIR
 
 ./xmlchange ATM_NCPL=48 # 30 min time step, 48 time steps per day, daily output
 
-./atmchange atm_log_level=info #debug
+./atmchange atm_log_level=debug
 # ./atmchange physics::atm_procs_list=mac_aero_mic # this removes the rrtmgp physics
 # ./atmchange mac_aero_mic::atm_procs_list=kessler #kessler
 ./atmchange save_field_manager_content=true
@@ -108,7 +110,7 @@ else
 fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
-./xmlchange STOP_N='1',STOP_OPTION='nsteps' # note that we need to run this for 10 days to see anything interesting
+./xmlchange STOP_N='1',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
 ./xmlchange JOB_WALLCLOCK_TIME='00:30:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE

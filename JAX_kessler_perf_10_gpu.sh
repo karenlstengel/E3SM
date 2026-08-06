@@ -9,6 +9,9 @@ conda activate jax-kessler # ADDED TO TEST JAX TRANSLATION
 user=kstengel
 scratch=/glade/derecho/scratch/$user/E3SM
 
+export JAX_PLATFORMS="cuda"
+export JAX_COMPILATION_CACHE_DIR="/glade/derecho/scratch/kstengel/E3SM/E3SM/components/eamxx/src/physics/kessler/.JAX_T_cache_gpu"
+
 ####################################################################
 # Machine, compset, etc.
 ####################################################################
@@ -22,7 +25,7 @@ MYCOMPILER=nvidia
 QUEUE_NAME=develop
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="JAX_ne30np4_10day_gpu"
+CASE_NAME="JAX_T_ne30np4_10day_gpu"
 CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -80,6 +83,7 @@ cd $CASE_SCRIPTS_DIR
 # ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control_IC.yml
 ./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/FKESSLER_NE30NP4.cam.i.moist_baroclinic_wave_dcmip2016.nc
 ./atmchange enable_fine_grain_timers=false
+./atmchange mac_aero_mic::kessler::py_backend=device
 
 # use below to match to stormspeed
 ./atmchange ctl_nl::dt_tracer_factor=6
@@ -111,7 +115,7 @@ fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
 ./xmlchange STOP_N='10',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
-./xmlchange JOB_WALLCLOCK_TIME='05:00:00'
+./xmlchange JOB_WALLCLOCK_TIME='06:00:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE
 

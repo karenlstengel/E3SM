@@ -4,6 +4,7 @@ import os
 os.environ["JAX_ENABLE_X64"] = "1"
 
 import functools
+import time
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
@@ -12,6 +13,15 @@ from jax import lax
 """
 Python/JAX translation of the Kessler microphysics scheme (kessler_run).
 Transled by Gemini 3.1 PRO
+
+NATIVE-LAYOUT ADAPTER: kessler_run_core accepts and returns arrays in
+EAMxx's native (ncol, nz) layout. Internally it still vmaps over columns
+on a transposed (nz, ncol) layout (columns as the fast/contiguous axis,
+which is what makes the vmap batch dimension GPU-memory-coalesced) -- but
+that transpose now happens as a plain jnp op inside this jit-compiled
+function instead of as a NumPy copy at the Python/C++ boundary (which is
+what bridge/kessler_run_bridge.py used to do). See the transpose-in /
+transpose-out comments below.
 """
 
 # Add static indices that control iteration or shapes
@@ -19,7 +29,10 @@ Transled by Gemini 3.1 PRO
 def kessler_run_core(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk, theta, qv, qc, qr, precl, relhum, errflg, lv, pref, rhoqr):  # CHANGED: removed scheme_name, errmsg — strings not allowed in JIT core
     """
     JAX-safe pure compute core for kessler_run.
-    
+
+    Inputs/outputs are EAMxx's native (ncol, nz) layout -- see the
+    NATIVE-LAYOUT ADAPTER note in the module docstring above.
+
     MODULE VARIABLES (from kessler):
         lv: MODULE variable (INOUT)
         pref: MODULE variable (INOUT)
@@ -31,13 +44,31 @@ def kessler_run_core(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk, t
     lv_val = jnp.asarray(lv, dtype=jnp.float64)     # [JAX] # CHANGED:
     pref_val = jnp.asarray(pref, dtype=jnp.float64) # [JAX] # CHANGED:
     rhoqr_val = jnp.asarray(rhoqr, dtype=jnp.float64) # [JAX] # CHANGED:
-    
+
     # Convert static integers using plain Python to avoid tracer infection
     lyr_surf_idx = lyr_surf - 1  # [STATIC-INT]
     lyr_toa_idx = lyr_toa - 1    # [STATIC-INT]
-    
+
     # Calculate static loop direction using Python if/else
     lyr_step = -1 if lyr_surf > lyr_toa else 1  # [STATIC-INT]
+
+    # NATIVE-LAYOUT ADAPTER (input side): transpose once, on-device, inside
+    # this jit-compiled function. Everything below (vmap over columns,
+    # per-column physics) is unchanged from before and still assumes
+    # (nz, ncol) -- reassigning these names means compute_all_columns/
+    # bypass_computation/process_column, which close over them, pick up
+    # the transposed arrays automatically without needing any changes
+    # themselves. precl is already 1D (ncol,); no transpose needed.
+    cpair  = cpair.T   # [JAX] (ncol, nz) -> (nz, ncol)
+    rair   = rair.T    # [JAX]
+    rho    = rho.T     # [JAX]
+    z      = z.T       # [JAX]
+    pk     = pk.T      # [JAX]
+    theta  = theta.T   # [JAX]
+    qv     = qv.T      # [JAX]
+    qc     = qc.T      # [JAX]
+    qr     = qr.T      # [JAX]
+    relhum = relhum.T  # [JAX]
 
     def compute_all_columns(_):
         
@@ -46,6 +77,15 @@ def kessler_run_core(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk, t
             # CHANGED: Added inline JAX tags for all local array calculations
             f2x = jnp.asarray(17.27, dtype=jnp.float64)     # [JAX] # CHANGED:
             
+            # KNOWN BUG (left as-is): Fortran computes f5 inside the level loop
+            # but as a SCALAR, so only its final (TOA) value survives into the
+            # adjustment step's `prod` formula below. Here f5 is broadcast
+            # elementwise per level instead, which is only equivalent when
+            # cpair_c is level-independent. It currently is (see
+            # eamxx_kessler_process_interface.cpp, which fills cpair/rair with
+            # a single constant everywhere), so this is numerically inert
+            # today -- but it will silently diverge from the Fortran scheme if
+            # cpair/rair are ever made level- or moisture-dependent.
             f5 = 4093.0 * lv_val / cpair_c                  # [JAX-VEC] # CHANGED:
             xk = cpair_c / rair_c                           # [JAX-VEC] # CHANGED:
             r = 0.001 * rho_c                               # [JAX-VEC] # CHANGED:
@@ -150,7 +190,6 @@ def kessler_run_core(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk, t
             qvs_out = pc * jnp.exp(f2x * (pk_c * theta_c_out - 273.0) / (pk_c * theta_c_out - 36.0))       # [JAX-VEC] # CHANGED:
             relhum_c_out = qv_c_out / qvs_out * 100.0                                                      # [JAX-VEC] # CHANGED:
             
-            print("precl_c_out:", precl_c_out.shape)
             return theta_c_out, qv_c_out, qc_c_out, qr_c_out, precl_c_out, relhum_c_out, errflg_col_out
 
         # Vectorize over columns
@@ -183,7 +222,20 @@ def kessler_run_core(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk, t
         compute_all_columns,
         operand=None
     )
-    
+
+    # NATIVE-LAYOUT ADAPTER (output side): both lax.cond branches produce
+    # (nz, ncol)-shaped theta/qv/qc/qr/relhum -- bypass_computation passes
+    # the already-transposed inputs straight through, and compute_all_columns
+    # produces the same shape via its vmap. Transpose back to (ncol, nz)
+    # once here, uniformly, so callers see the same native layout they
+    # passed in. pr_out (precl) and errflg_out are already the right shape
+    # (1D / scalar), no transpose needed.
+    th_out = th_out.T   # [JAX] (nz, ncol) -> (ncol, nz)
+    qv_out = qv_out.T   # [JAX]
+    qc_out = qc_out.T   # [JAX]
+    qr_out = qr_out.T   # [JAX]
+    rh_out = rh_out.T   # [JAX]
+
     # CHANGED: removed scheme_dummy and errmsg_dummy — strings cannot be returned from JIT core
     return th_out, qv_out, qc_out, qr_out, pr_out, rh_out, errflg_out, lv_val, pref_val, rhoqr_val
 
@@ -198,10 +250,14 @@ def kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk, theta,
         rhoqr: MODULE variable (INOUT)
     """
     # CHANGED: removed scheme_name, errmsg from call; updated unpacking (no longer 12 values)
+    _t0 = time.perf_counter()
     th_out, qv_out, qc_out, qr_out, pr_out, rh_out, errflg_out, lv_out, pref_out, rhoqr_out = kessler_run_core(
         ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk, theta, qv, qc, qr, precl, relhum, errflg, lv, pref, rhoqr
     )
-    
+    # JAX dispatch is async -- block on an actual output array so the timer
+    # captures real device execution time, not just dispatch overhead.
+    th_out.block_until_ready()
+
     scheme_name_out = "KESSLER"
     errmsg_out = ""
     
@@ -211,5 +267,5 @@ def kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk, theta,
             errmsg_out = "KESSLER called with nonpositive dt"
         else:
             errmsg_out = "KESSLER: bad time splitting"
-    print("after kessler_run_core: precl max")
+
     return th_out, qv_out, qc_out, qr_out, pr_out, rh_out, scheme_name_out, errmsg_out, errflg_out, lv_out, pref_out, rhoqr_out

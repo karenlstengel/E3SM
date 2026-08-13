@@ -27,7 +27,7 @@ set(KESSLER_F90_SRCS
   ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge/kessler_eamxx_bridge.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge/kessler_eamxx_bridge_main.F90
   ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge/kessler_eamxx_bridge_update.F90
-  # ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge/ccpp_kinds.F90
+  ${CMAKE_CURRENT_SOURCE_DIR}/fortran_bridge/kessler_perf_log.F90 # for timing tracking
   # list others as needed
 
   # ----------------------------------------------------------------------------

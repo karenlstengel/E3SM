@@ -32,8 +32,7 @@ public:
   using PC  = scream::physics::Constants<Real>;
 
   using Scalar = KMF::Scalar;
-  using Spack = KMF::Spack;
-  using Pack  = ekat::Pack<Real,Spack::n>;
+  using Pack = KMF::Pack;
 
   // Constructors
   KesslerMicrophysics (const ekat::Comm& comm, const ekat::ParameterList& params);
@@ -44,8 +43,11 @@ public:
   // The name of the subcomponent
   std::string name () const override { return "kessler"; }
 
-  void set_grids(
-    const std::shared_ptr<const GridsManager> grids_manager) override;
+  // Create grid-dependent field requests
+  void create_requests() override;
+  // Old method 
+  // void set_grids(
+  //   const std::shared_ptr<const GridsManager> grids_manager) override;
   
   // Define the protected functions, usually at least initialize_impl, run_impl
   // and finalize_impl, but others could be included.  See
@@ -66,8 +68,8 @@ public:
 
     // Keep track of field dimensions
     std::shared_ptr<const AbstractGrid> m_grid;
-    Int m_num_cols;
-    Int m_num_levs;
+    int m_num_cols;
+    int m_num_levs;
 
     // Parameters structs to pass through fortran bridge
     KMF::params_helpers params_helpers; // Helper variables 

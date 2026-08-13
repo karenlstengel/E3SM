@@ -61,7 +61,6 @@ namespace scream {
                                                        params_helpers.h_phis.data(), 
                                                        params_computed.h_st_energy.data());
         #else
-            printf("Running kessler on GPU with OpenACC or without GPU support\n");
             kessler_eamxx_bridge_run_c(pcols, pver, dt, lyr_surf, lyr_toa, params_helpers.f_cpair.data(),
                                                                        params_helpers.f_rair.data(),
                                                                        params_helpers.f_rho.data(),

@@ -3564,7 +3564,13 @@ int GPTLpr_summary_file (int comm,
       temp = storage[k].count;
       fprintf(fp, "  %8d %8d %12.6e ",
               storage[k].processes, storage[k].threads, temp);
-      fprintf (fp, "  %12.6e %9.3f (%6d %6d) %9.3f (%6d %6d)",
+      /* wallmax/wallmin previously printed with %9.3f (3 decimal places),
+       * which silently rounds any sub-millisecond timer (e.g. a cheap
+       * once-per-run init call) down to "0.000" with no way to recover
+       * the real value from this report. Widened to %12.6f (micro-
+       * second resolution) to match the precision already used for
+       * walltotal above. */
+      fprintf (fp, "  %12.6e %12.6f (%6d %6d) %12.6f (%6d %6d)",
 	       storage[k].walltotal,
 	       storage[k].wallmax, storage[k].wallmax_p, storage[k].wallmax_t,
 	       storage[k].wallmin, storage[k].wallmin_p, storage[k].wallmin_t);

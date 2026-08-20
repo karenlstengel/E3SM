@@ -155,3 +155,101 @@ where `${CCSMROOT}/components/eamxx//cime_config/testdefs/testmods_dirs/eamxx/L5
 ### EAMxx:
 
 Should be able to do automatically with the `perturbed_fields` and corresponding fields in the namelists.xml options. 
+
+## Performance logging (kessler_perf_log)
+
+Call-level timings for `kessler_run`, logged as CSV so the JAX (Python) and
+Fortran (CPU + GPU/OpenACC) implementations can be compared directly.
+
+### Python side: `kessler_perf_log.py`
+
+Used by `kessler.py` (the `writeback` step) and `kessler_jax/kessler_run.py`
+(the `kessler_run` JAX call, including first-call JIT compilation time).
+Import is optional everywhere it's used (`try/except ImportError`), so
+removing/renaming this file never breaks the kessler run path -- it just
+stops logging.
+
+`log_call()` only ever touches in-process memory (a dict of running
+per-label totals, guarded by a `threading.Lock`) -- there's no file I/O per
+call. An earlier version opened the CSV and took a cross-process `flock()`
+on every call, which serialized every MPI rank against every other rank on
+every timestep and measurably slowed runs down.
+
+```python
+from kessler_perf_log import log_call
+log_call("kessler_run", ncol, nz, dt, elapsed_seconds)
+```
+
+The actual file write happens once per rank, in `flush_log()`, called from
+`kessler.py`'s `finalize()` -- wired to
+`KesslerMicrophysics::finalize_impl()` in the C++ process interface, so it
+runs once per rank at simulation end. Each rank's flush appends its
+per-label totals to a small raw/intermediate CSV
+(`KESSLER_PERF_LOG_PATH` with a `.raw` suffix) under one `flock()`, then
+recomputes the aggregate summary across every rank that has flushed so far
+and rewrites it to `KESSLER_PERF_LOG_PATH` -- so that path always holds the
+final GPTL-style summary directly, with no separate post-processing step:
+
+```
+label,count,walltotal_s,wallmax_s,wallmax_rank,wallmin_s,wallmin_rank,callmax_s,callmax_rank
+```
+
+- `label` -- caller-supplied tag for what was timed (e.g. `kessler_run`, `writeback`)
+- `count`, `walltotal_s` -- total calls and total wall time for that label, summed across all ranks
+- `wallmax_s` / `wallmax_rank` -- the rank with the highest cumulative time for that label, and its time
+- `wallmin_s` / `wallmin_rank` -- same, for the lowest cumulative time
+- `callmax_s` / `callmax_rank` -- the single largest individual call for that label, and which rank it ran on
+  (this is what surfaces first-call JIT compilation outliers, since individual calls are no longer logged as separate rows)
+
+Set `KESSLER_PERF_LOG_PATH` to choose the CSV path, e.g.:
+
+```bash
+export KESSLER_PERF_LOG_PATH=/glade/scratch/$USER/kessler_perf_log.csv
+```
+
+Falls back to `kessler_perf_log.csv` next to `kessler_perf_log.py` (i.e. in
+this source directory) if unset -- set it explicitly for any real run so
+timing data doesn't pile up in the checkout, and remove any leftover CSV
+(and its `.raw` sibling) from a prior run before starting a new one, since
+both are appended-to/aggregated-into rather than overwritten from scratch.
+
+If a rank crashes or is killed before `finalize_impl()` runs, that rank's
+timings are simply lost -- an accepted tradeoff for a dev/perf tool, not a
+science output.
+
+### Fortran side: `kessler_perf_log.F90`
+
+Same design and same `KESSLER_PERF_LOG_PATH` env var as the Python side, for
+the Fortran `kessler_run` in `atmospheric_physics/schemes/kessler/` and
+`GPU_ports/atmospheric_physics/schemes/kessler/`. **Not yet wired into
+either `kessler_run`** -- copy this file alongside those sources and add the
+timing/`call log_call(...)` calls, plus a `call flush_log()` at that
+scheme's finalize/timestep_final entry point (mirroring `kessler.py`'s
+`finalize()` -> `KesslerMicrophysics::finalize_impl()`), when working on
+that branch. Depends on `ccpp_kinds` (present in both of those repos, not in
+this EAMxx directory).
+
+```fortran
+use kessler_perf_log, only: log_call, flush_log
+...
+call log_call('kessler_run', ncol, nz, dt, elapsed_seconds)
+...
+call flush_log()  ! once per rank, at finalize
+```
+
+Like the Python side, `log_call()` only updates an in-memory per-label
+totals table -- no file I/O per call. `flush_log()` does the file I/O,
+meant to run once per rank at finalize: it appends this rank's totals to a
+raw intermediate CSV (`KESSLER_PERF_LOG_PATH` with a `.raw` suffix) using
+raw `open()`/`write()` via `ISO_C_BINDING` with `O_APPEND` for atomic
+appends (Fortran's own `OPEN(POSITION='APPEND')` isn't reliably
+kernel-atomic across ranks the way a real `O_APPEND` file descriptor is),
+plus `flock()` around that append and the read-back below. It then reads
+the raw CSV back with plain Fortran formatted I/O, recomputes the aggregate
+summary across every rank that has flushed so far, and rewrites
+`KESSLER_PERF_LOG_PATH` with that summary -- same schema as the Python
+side's summary CSV, so the two are directly comparable:
+
+```
+label,count,walltotal_s,wallmax_s,wallmax_rank,wallmin_s,wallmin_rank,callmax_s,callmax_rank
+```

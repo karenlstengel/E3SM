@@ -18,17 +18,31 @@ jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
 import sys
 sys.path.insert(0, "/glade/derecho/scratch/kstengel/E3SM/E3SM/components/eamxx/src/physics/kessler/kessler_jax") 
 
-# from kessler_jax_T.kessler_run import kessler_run_vec
-from kessler_jax.kessler_update_timestep_init import kessler_update_timestep_init
-from kessler_jax.kessler_update_run import kessler_update_run
-from kessler_jax.kessler_update_timestep_final import kessler_update_timestep_final
+# kessler_update is a low-arithmetic-intensity scheme: the host-facing
+# bridge (contract 1) is dominated by the PCIe transfer -- measured 0.33x
+# vs. serial Fortran, worse than not porting it at all. The device-resident
+# bridge (contract 2) chains all three per-step phases on the GPU with no
+# transfers between them and is the pattern this scheme strictly requires
+# (measured 181x for the full 3-phase step). See USING_THE_BRIDGE.md and
+# BRIDGE_CONTRACT2_notes.md in the laft-kessler-update project.
+from bridge.kessler_update_init_bridge import kessler_update_init_bridge
+from bridge.kessler_update_timestep_init_bridge import kessler_update_timestep_init_bridge_device
+from bridge.kessler_update_run_bridge import kessler_update_run_bridge_device, to_device
+from bridge.kessler_update_timestep_final_bridge import kessler_update_timestep_final_bridge_device
 
 # kessler_jax.kessler_run now does its own (ncol, nz) <-> (nz, ncol) transpose
 # on-device, inside its @jax.jit core (see the NATIVE-LAYOUT ADAPTER comments
 # in kessler_jax/kessler_run.py) -- so it can be called directly on EAMxx's
 # native-layout arrays, without going through bridge.kessler_run_bridge's
 # NumPy-level (host-side, non-jit) transpose.
-from kessler_jax.kessler_run import kessler_run
+from bridge.kessler_init_bridge import kessler_init
+from kessler_jax.kessler_run import kessler_run # change this to bridge version once updated from Iris
+
+try:
+    from kessler_perf_log import log_call as _log_perf_call, flush_log as _flush_perf_log
+except ImportError:
+    _log_perf_call = None
+    _flush_perf_log = None
 
 # Setup a few global variables that we set values for with init() and then use in run()
 latvap = None
@@ -42,14 +56,19 @@ scheme_name = "kessler"
 # latvap, P0, rhoqr, gravit
 def init(lv_in, pref_in, rhoqr_in, gravit_in):
     global latvap, pref, rhoqr, gravit
-    
-    latvap = lv_in
-    pref = pref_in
-    rhoqr = rhoqr_in
-    gravit = gravit_in
+    global errmsg, errflg
+
+    errmsg, errflg, latvap, pref, rhoqr = kessler_init_bridge(lv_in, pref_in, rhoqr_in, errmsg, errflg, latvap, pref, rhoqr)
+
+    # kessler_update carries its own MODULE variable `gravit` (INOUT,
+    # threaded from here through every kessler_update_timestep_final call
+    # in update() below) -- separate from kessler's own MODULE vars
+    # (latvap/pref/rhoqr) above.
+    errmsg, errflg, gravit = kessler_update_init_bridge(gravit_in, "", 0, gravit)
 
 # calls the kessler_run function from https://github.com/NCAR/llm-fortran-modernization/tree/main/fortran2jax-kessler/_officialJAX
 # these arrays should be automatically updated back in EAMxx if everything is setup correctly.
+
 def run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, zm, pk, theta, qv, qc, qr, precl, relhum):
 
     global latvap, pref, rhoqr
@@ -97,46 +116,69 @@ def run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, zm, pk, theta, qv, qc
     # return values (and kessler_run's unpacking) to un-stack before this
     # runs -- not just a change here.
 
+    _t0_writeback = time.perf_counter()
     theta[...]  = theta_out
     qv[...]     = qv_out
     qc[...]     = qc_out
     qr[...]     = qr_out
     precl[...]  = precl_out
     relhum[...] = relhum_out
+    if _log_perf_call is not None:
+        try:
+            _log_perf_call("writeback", ncol, nz, dt, time.perf_counter() - _t0_writeback)
+        except Exception:
+            pass
 
 def update(ncol, nz, dt, cpair, zm, pk, theta, phis, temp, temp_prev, temp_tend, st_energy):
     global gravit
-    global errmsg, errflg, scheme_name
+    global errmsg, errflg
 
+    # Contract 2 (device-resident): upload each array ONCE (to_device is a
+    # pure H2D copy -- no host-side permute; the bridge_device wrappers
+    # reverse axes inside their jitted region), chain timestep_init -> run ->
+    # timestep_final entirely on the GPU with no transfers between phases,
+    # then fetch ONCE at the end. Per-phase errflg is left on the device
+    # (contract 2's own convention) and fetched together with the arrays,
+    # not checked per call.
+    temp_d  = to_device(temp)
+    theta_d = to_device(theta)
+    exner_d = to_device(pk)
+    cpair_d = to_device(cpair)
+    zm_d    = to_device(zm)
+    phis_d  = to_device(phis)
+    zeros_d = jnp.zeros((ncol, nz), dtype=jnp.float64)
 
-    # jnp.transpose (not `.T`) so these dispatch through JAX, not NumPy --
-    # `.T` on a plain pybind11/NumPy array always resolves to NumPy's own
-    # implementation, regardless of what's imported here; jnp.transpose
-    # accepts the raw array-like directly and does the JAX conversion +
-    # transpose together. phis is 1D, so it's passed through untransposed
-    # below (a transpose would be a no-op there anyway).
-    temp_compute = jnp.transpose(temp)
-    temp_prev_compute = jnp.transpose(temp_prev)
-    temp_tend_compute = jnp.transpose(temp_tend)
-    theta_compute = jnp.transpose(theta)
-    pk_compute = jnp.transpose(pk)
-    cpair_compute = jnp.transpose(cpair)
-    zm_compute = jnp.transpose(zm)
-    st_energy_compute = jnp.transpose(st_energy)
+    temp_prev_d, ttend_t_d, e1 = kessler_update_timestep_init_bridge_device(
+        temp=temp_d, temp_prev=zeros_d, ttend_t=zeros_d, errflg=0)
 
-    # Call the kessler_update functions
+    ttend_t_d, e2 = kessler_update_run_bridge_device(
+        nz=nz, ncol=ncol, dt=dt, theta=theta_d, exner=exner_d,
+        temp_prev=temp_prev_d, ttend_t=ttend_t_d, errflg=0)
 
-    print("Calling kessler_update_* kessler_jax/kessler_update_*.py")
-    # Compute — {proc_name}_core is @jax.jit decorated; JIT fires on first call
-    temp_prev_out, temp_tend_out, errmsg, errflg = kessler_update_timestep_init(temp_compute, temp_prev_compute, temp_tend_compute, errmsg, errflg)
+    st_energy_d, e3, gravit = kessler_update_timestep_final_bridge_device(
+        nz=nz, cpair=cpair_d, temp=temp_d, zm=zm_d, phis=phis_d,
+        st_energy=zeros_d, errflg=0, gravit=gravit)
 
-    # Compute — {proc_name}_core is @jax.jit decorated; JIT fires on first call
-    temp_tend_out, errmsg, errflg = kessler_update_run(nz, ncol, dt, theta_compute, pk_compute, temp_prev_out, temp_tend_out, errmsg, errflg)
+    # ONE batched D2H fetch for all three phases' outputs and errflg scalars.
+    temp_prev_out, temp_tend_out, st_energy_out, e1, e2, e3 = jax.device_get(
+        (temp_prev_d, ttend_t_d, st_energy_d, e1, e2, e3))
 
-    # Compute — {proc_name}_core is @jax.jit decorated; JIT fires on first call
-    st_energy_out, errflg, errmsg, gravit = kessler_update_timestep_final(nz, cpair_compute, temp_compute, zm_compute, phis, st_energy_compute, errflg, errmsg, gravit)
+    errflg = max(int(e1), int(e2), int(e3))
+    errmsg = "" if errflg == 0 else "kessler_update: bad time splitting"
 
-    # These are already JAX arrays so we can just use .T to transpose them back to EAMxx's native layout (ncol, nz) and write them back in place.
-    temp_prev[...] = temp_prev_out.T
-    temp_tend[...] = temp_tend_out.T
-    st_energy[...] = st_energy_out.T
+    # temp_prev/temp_tend/st_energy are zero-copy views into EAMxx's field
+    # buffers (same as run()'s writeback) -- results must be written back
+    # in place for them to reach EAMxx.
+    temp_prev[...] = temp_prev_out
+    temp_tend[...] = temp_tend_out
+    st_energy[...] = st_energy_out
+
+# Called once per rank from KesslerMicrophysics::finalize_impl() -- flushes
+# this rank's in-memory perf totals (accumulated by log_call() in run()/
+# kessler_run() above) out to the perf-log CSV.
+def finalize():
+    if _flush_perf_log is not None:
+        try:
+            _flush_perf_log()
+        except Exception:
+            pass

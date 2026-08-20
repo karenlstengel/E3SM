@@ -1,9 +1,9 @@
 %YAML 1.1
 ---
-filename_prefix: SSIC_JAX_kessler.scream.phys.h
-Averaging Type: Average
-Max Snapshots Per File: 20
-averaging_type: average
+filename_prefix: Fortran_vs_JAX_kessler_perf_nsteps.scream.phys.h
+Averaging Type: Instant
+Max Snapshots Per File: 500
+averaging_type: instant
 floating_point_precision: double
 fields:
   physics_gll:
@@ -36,5 +36,5 @@ fields:
   #     - omega_dyn
 output_control:
   frequency: 1
-  frequency_units: ndays
+  frequency_units: nsteps
   save_grid_data: true

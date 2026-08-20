@@ -2,21 +2,6 @@
 # Translated by: Claude Fable 5 (claude-fable-5)
 # Pass: final
 # ---------------------------------------------------------------------------
-
-"""
-JAX translation of kessler_update_timestep_init (kessler_update.F90).
-
-Snapshots the pre-physics temperature and zeroes its tendency:
-    temp_prev = temp
-    ttend_t   = 0
-
-Bridge Mode layout: 2-D arrays arrive row-major (nz, ncol). Both Fortran loop
-bounds come from SIZE(temp) — the loops cover the whole arrays — so this is
-Level 1 of the VECTORIZATION PRIORITY LADDER: whole-array ops, no loops, no
-slices. There are no integer shape arguments, so the jit decorator needs no
-static_argnames.
-"""
-
 import os
 os.environ["JAX_ENABLE_X64"] = "1"
 
@@ -26,40 +11,38 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 from jax import lax
 
+"""
+JAX translation of the Fortran subroutine `kessler_update_timestep_init`.
+
+Start-of-step bookkeeping over the FULL array extent (n1 = SIZE(temp,1),
+n2 = SIZE(temp,2)): snapshot the pre-physics temperature and zero the
+tendency accumulator:
+    temp_prev(i,k) = temp(i,k);  ttend_t(i,k) = 0
+Arrays arrive in the core as (nz, ncol) float64; no static ints (the bounds
+are the whole arrays).
+"""
+
 
 @jax.jit
 def kessler_update_timestep_init_core(temp, temp_prev, ttend_t, errflg):
     """
-    Core computation for kessler_update_timestep_init. Pure JAX, jit-compiled.
-
-    Operates on row-major (nz, ncol) arrays; bridge handles layout.
-    Strings (errmsg) stay in the wrapper per the JIT boundary rules.
+    Pure JAX compute on (nz, ncol) float64 arrays; no static ints. The
+    intent(out) arguments temp_prev / ttend_t are fully overwritten over the
+    whole extent, so their incoming values are unused. Returns: temp_prev, ttend_t, errflg
     """
-    errflg = jnp.asarray(0, dtype=jnp.int32)             # [JAX]  Fortran: errflg = 0
-
-    # Fortran: temp_prev(i,k) = temp(i,k)  over the full SIZE(temp) extent
-    temp_prev = temp                                     # [JAX-VEC]
-    # Fortran: ttend_t(i,k) = 0._kind_phys  over the full extent
-    ttend_t = jnp.zeros_like(temp)                       # [JAX-VEC]  float64 via temp
-
+    temp_prev = temp.astype(jnp.float64)                                   # [JAX-VEC]
+    ttend_t = jnp.zeros_like(temp, dtype=jnp.float64)                      # [JAX-VEC]
+    errflg = jnp.asarray(0, dtype=jnp.int32)                               # [JAX]
     return temp_prev, ttend_t, errflg
 
 
 def kessler_update_timestep_init(temp, temp_prev, ttend_t, errmsg, errflg):
     """
-    Wrapper for kessler_update_timestep_init (Bridge Mode).
-
-    Handles the errmsg string (JAX cannot); passes everything else to the
-    jitted core.
-
-    Returns: temp_prev, ttend_t, errmsg, errflg
+    Host wrapper: calls the jitted core, owns `errmsg` (never enters the
+    core), converts errflg to a Python int. Returns: temp_prev, ttend_t, errmsg, errflg
     """
-    errmsg = ""                                          # [PY]  Fortran: errmsg = ''
     temp_prev, ttend_t, errflg = kessler_update_timestep_init_core(
-        temp, temp_prev, ttend_t, errflg)
+        temp, temp_prev, ttend_t, errflg)                                   # [PY]
+    errflg = int(errflg)                                                    # [PY]
+    errmsg = ""                                                             # [PY]
     return temp_prev, ttend_t, errmsg, errflg
-
-# Pass-4 self-check: dtype — errflg is explicit int32; zeros_like(temp)
-# inherits float64 from the bridge-supplied array under JAX_ENABLE_X64.
-# Annotation tags present. Signatures and return order match the bridge
-# contract exactly.

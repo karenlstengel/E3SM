@@ -1,4 +1,4 @@
-# LLM: Gemini 3.1 PRO via Gemini CLI code agent — generated translation (copied from translations_2sdExp_JDdata/gemini/, header added on promotion to _officialJAX)
+# LLM: Gemini 3.1 PRO via Gemini CLI code agent — generated translation (copied from _2sd_exp_JDdata/gemini/, header added on promotion to _officialJAX)
 """
 Bridge: kessler_init
 Strategy: ALWAYS transpose + contiguous; JIT handled by _core decorator

@@ -25,8 +25,8 @@ MYCOMPILER=nvidia
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="JAX_T_ne30np4_10ndays_cpu"
-CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
+CASE_NAME="JAX_ne30np4_5day_cpu_cache"
+CASE_ROOT="$scratch/e3sm_test/JAX_v_Fortran_perf/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
 CASE_RUN_DIR=${CASE_ROOT}/run
@@ -71,7 +71,7 @@ cd $CASE_SCRIPTS_DIR
 
 ./xmlchange ATM_NCPL=48 # 30 min time step, 48 time steps per day, daily output
 
-./atmchange atm_log_level=debug
+./atmchange atm_log_level=info
 # ./atmchange physics::atm_procs_list=mac_aero_mic # this removes the rrtmgp physics
 # ./atmchange mac_aero_mic::atm_procs_list=kessler #kessler
 # ./atmchange save_field_manager_content=true
@@ -109,7 +109,7 @@ else
 fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
-./xmlchange STOP_N='10',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
+./xmlchange STOP_N='5',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
 ./xmlchange JOB_WALLCLOCK_TIME='05:00:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE

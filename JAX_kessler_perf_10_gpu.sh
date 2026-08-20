@@ -10,7 +10,7 @@ user=kstengel
 scratch=/glade/derecho/scratch/$user/E3SM
 
 export JAX_PLATFORMS="cuda"
-export JAX_COMPILATION_CACHE_DIR="/glade/derecho/scratch/kstengel/E3SM/E3SM/components/eamxx/src/physics/kessler/.JAX_T_cache_gpu"
+export JAX_COMPILATION_CACHE_DIR="/glade/derecho/scratch/kstengel/E3SM/E3SM/components/eamxx/src/physics/kessler/.JAX_cache_gpu"
 
 ####################################################################
 # Machine, compset, etc.
@@ -22,7 +22,7 @@ RESOLUTION=ne30_ne30 #ne30pg2_ne30pg2,ne4pg2_ne4pg2
 DYCORE=theta-l_kokkos
 MACH=derecho
 MYCOMPILER=nvidia
-QUEUE_NAME=develop
+QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
 CASE_NAME="JAX_T_ne30np4_10day_gpu"
@@ -32,6 +32,7 @@ CASE_BUILD_DIR=${CASE_ROOT}/build
 CASE_RUN_DIR=${CASE_ROOT}/run
 CASE_ARCHIVE_DIR=${CASE_ROOT}/archive
 export NETCDF_PATH=$NETCDF
+export KESSLER_PERF_LOG_PATH=${CASE_SCRIPTS_DIR}/kessler_perf_log.csv 
 
 ####################################################################
 # Create a new case 
@@ -79,8 +80,8 @@ cd $CASE_SCRIPTS_DIR
 ./atmchange atm_log_level=info #debug
 # ./atmchange physics::atm_procs_list=mac_aero_mic # this removes the rrtmgp physics
 # ./atmchange mac_aero_mic::atm_procs_list=kessler #kessler
-./atmchange save_field_manager_content=true
-# ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control_IC.yml
+# ./atmchange save_field_manager_content=true
+./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control_JAX.yml
 ./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/FKESSLER_NE30NP4.cam.i.moist_baroclinic_wave_dcmip2016.nc
 ./atmchange enable_fine_grain_timers=false
 ./atmchange mac_aero_mic::kessler::py_backend=device
@@ -115,7 +116,7 @@ fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
 ./xmlchange STOP_N='10',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
-./xmlchange JOB_WALLCLOCK_TIME='06:00:00'
+./xmlchange JOB_WALLCLOCK_TIME='08:00:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE
 

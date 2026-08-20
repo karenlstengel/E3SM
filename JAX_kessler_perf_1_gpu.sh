@@ -6,7 +6,6 @@ module load conda
 conda init
 conda activate jax-kessler # ADDED TO TEST JAX TRANSLATION
 
-export KESSLER_PERF_CSV="/glade/derecho/scratch/kstengel/E3SM/E3SM/components/eamxx/src/physics/kessler/JAX__host_perf_gpu.csv"
 export JAX_PLATFORMS="cuda"
 export JAX_COMPILATION_CACHE_DIR="/glade/derecho/scratch/kstengel/E3SM/E3SM/components/eamxx/src/physics/kessler/.JAX_cache_gpu"
 
@@ -26,13 +25,14 @@ MYCOMPILER=nvidia
 QUEUE_NAME=develop
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="JAX_inplace_host_ne30np4_1day_gpu"
-CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
+CASE_NAME="JAX_ne30np4_1day_gpu_cache"
+CASE_ROOT="$scratch/e3sm_test/JAX_v_Fortran_perf/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
 CASE_RUN_DIR=${CASE_ROOT}/run
 CASE_ARCHIVE_DIR=${CASE_ROOT}/archive
 export NETCDF_PATH=$NETCDF
+export KESSLER_PERF_LOG_PATH=${CASE_SCRIPTS_DIR}/kessler_perf_log.csv 
 
 ####################################################################
 # Create a new case 
@@ -80,8 +80,8 @@ cd $CASE_SCRIPTS_DIR
 ./atmchange atm_log_level=info #debug
 # ./atmchange physics::atm_procs_list=mac_aero_mic # this removes the rrtmgp physics
 # ./atmchange mac_aero_mic::atm_procs_list=kessler #kessler
-./atmchange save_field_manager_content=true
-# ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control_IC.yml
+# ./atmchange save_field_manager_content=true
+# ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control_JAX.yml
 ./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/FKESSLER_NE30NP4.cam.i.moist_baroclinic_wave_dcmip2016.nc
 ./atmchange enable_fine_grain_timers=false
 ./atmchange mac_aero_mic::kessler::py_backend=device

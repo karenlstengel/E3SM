@@ -7,6 +7,7 @@
 #include "share/physics/physics_constants.hpp"
 #include "share/physics/eamxx_common_physics_functions.hpp"
 // #include "share/physics/eamxx_common_physics_functions_impls.hpp"
+#include "share/util/eamxx_timing.hpp"
 
 #include <ekat_assert.hpp>
 #include <ekat_units.hpp>
@@ -255,6 +256,7 @@ void KesslerMicrophysics::run_impl (const double dt )
 
   int nlevs = m_num_levs; // local var, to avoid accessing *this.
 
+  start_timer("EAMxx::kessler::run::preprocess");
   Kokkos::parallel_for(
       "Kessler_preprocess", KT::RangePolicy(0, m_num_cols * nlevs),
       KOKKOS_CLASS_LAMBDA(const int i) {
@@ -331,6 +333,7 @@ void KesslerMicrophysics::run_impl (const double dt )
       heat_flux(i)  = 0.0;
     });
   }
+  stop_timer("EAMxx::kessler::run::preprocess");
   m_atm_logger->info("[EAMxx] kessler run_impl: done with pre-processing");
   // For python bindings we can't use the field views. Kokkos loops require using views so they are left above.
   auto qv     = get_field_out("qv");
@@ -379,6 +382,7 @@ void KesslerMicrophysics::run_impl (const double dt )
         py_st_energy         = get_py_field_dev("st_energy");
 
       } else {
+        start_timer("EAMxx::kessler::run::sync_to_host");
         qv.sync_to_host();
         qc.sync_to_host();
         qr.sync_to_host();
@@ -412,10 +416,12 @@ void KesslerMicrophysics::run_impl (const double dt )
         py_temp_prev         = get_py_field_host("T_mid_prev");
         py_temp_tend         = get_py_field_host("T_mid_tend");
         py_st_energy         = get_py_field_host("st_energy");
+        stop_timer("EAMxx::kessler::run::sync_to_host");
       }
 
       // NOTE: kessler_run's "z" argument expects heights (z_mid), not layer
-      // thickness (dz) 
+      // thickness (dz)
+      start_timer("EAMxx::kessler::run::py_run");
       py_module_call("run", m_num_cols, nlevs, dt_timestep, lyr_surf, lyr_toa,
                     py_cpair,
                     py_rair,
@@ -428,8 +434,10 @@ void KesslerMicrophysics::run_impl (const double dt )
                     py_qr,
                     py_precl,
                     py_relhum);
+      stop_timer("EAMxx::kessler::run::py_run");
       m_atm_logger->info("[EAMxx] kessler called python run");
 
+      start_timer("EAMxx::kessler::run::py_update");
       py_module_call("update", m_num_cols, nlevs, dt_timestep,
                     py_cpair,
                     py_z_mid,
@@ -440,9 +448,11 @@ void KesslerMicrophysics::run_impl (const double dt )
                     py_temp_prev,
                     py_temp_tend,
                     py_st_energy);
+      stop_timer("EAMxx::kessler::run::py_update");
       m_atm_logger->info("[EAMxx] kessler called python update");
 
       if (m_params.get<std::string>("py_backend")=="host") {
+        start_timer("EAMxx::kessler::run::sync_to_dev");
         qv.sync_to_dev();
         qr.sync_to_dev();
         qc.sync_to_dev();
@@ -457,6 +467,7 @@ void KesslerMicrophysics::run_impl (const double dt )
         T_mid_prev.sync_to_dev();
         T_mid_tend.sync_to_dev();
         st_energy.sync_to_dev();
+        stop_timer("EAMxx::kessler::run::sync_to_dev");
       }
 
       m_atm_logger->info("[EAMxx] kessler run_impl - end ");
@@ -474,7 +485,14 @@ void KesslerMicrophysics::run_impl (const double dt )
 
 void KesslerMicrophysics::finalize_impl()
 {
-  // Do nothing
+  #ifdef EAMXX_HAS_PYTHON
+    if (has_py_module()) {
+      // Flush this rank's in-memory perf-log totals (see kessler_perf_log.py)
+      // to CSV. Doing this once here, instead of on every py_module_call
+      // ("run"/"update"), is what keeps the perf logger itself cheap.
+      py_module_call("finalize");
+    }
+  #endif
   m_atm_logger->info("[EAMxx] Kessler processes clean up.");
 }
 // =========================================================================================

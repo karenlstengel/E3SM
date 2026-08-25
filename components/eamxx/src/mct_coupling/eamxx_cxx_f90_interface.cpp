@@ -4,6 +4,7 @@
 
 #include "dynamics/register_dynamics.hpp"
 #include "physics/register_physics.hpp"
+#include "analytic_conditions/register_analytic_conditions.hpp"
 #include "share/diagnostics/register_diagnostics.hpp"
 #include "control/register_surface_coupling.hpp"
 
@@ -148,6 +149,7 @@ void scream_create_atm_instance (const MPI_Fint f_comm, const int atm_id,
     // In particular, register all atm processes, grids managers, and diagnostics.
     register_dynamics();
     register_physics();
+    register_analytic_conditions();
     register_diagnostics();
     register_surface_coupling();
 

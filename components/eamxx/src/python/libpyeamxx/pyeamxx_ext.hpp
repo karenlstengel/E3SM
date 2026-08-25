@@ -2,6 +2,7 @@
 #define PYSCREAM_HPP
 
 #include "physics/register_physics.hpp"
+#include "analytic_conditions/register_analytic_conditions.hpp"
 #include "diagnostics/register_diagnostics.hpp"
 #include "dynamics/register_dynamics.hpp"
 

@@ -22,6 +22,7 @@ void initialize (MPI_Comm mpi_comm) {
 
   // Register everything in the eamxx factories
   register_physics();
+  register_analytic_conditions();
   register_dynamics();
   register_diagnostics();
 

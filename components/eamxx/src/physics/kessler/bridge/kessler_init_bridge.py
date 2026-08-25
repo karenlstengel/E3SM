@@ -1,7 +1,8 @@
-# LLM: Gemini 3.1 PRO via Gemini CLI code agent — generated translation (copied from _2sd_exp_JDdata/gemini/, header added on promotion to _officialJAX)
+# Generated bridge (LAFT phase03, contract 1 + contract 2) — copied from out/bridge/ on promotion to _officialJAX; import rewritten out.jax.* -> kessler_jax.*
 """
 Bridge: kessler_init
-Strategy: ALWAYS transpose + contiguous; JIT handled by _core decorator
+Strategy: PATH C device-side layout conversion — pure H2D/D2H,
+in-jit axis reversal fused by XLA; public contract unchanged
 
 MODULE: kessler
 MODULE vars: lv, pref, rhoqr
@@ -21,11 +22,11 @@ from kessler_jax.kessler_init import kessler_init
 
 def kessler_init_bridge(lv_in, pref_in, rhoqr_in, errmsg, errflg, lv, pref, rhoqr):
     """
-    Production bridge for kessler_init.
+    Production bridge for kessler_init (scalar-only).
 
-    Strategy: transpose inputs/outputs (CPU), call wrapper directly.
-    kessler_init_core is @jax.jit decorated — JIT and GPU execution
-    are handled there, not here.
+    No array arguments — no layout conversion exists; calls the
+    translated wrapper directly (strings and Python control flow
+    stay host-side).
 
     MODULE VARIABLES (from kessler):
       - lv (INOUT)
@@ -35,11 +36,6 @@ def kessler_init_bridge(lv_in, pref_in, rhoqr_in, errmsg, errflg, lv, pref, rhoq
     Procedure type: INIT
     Pattern: MODULE vars passed as INOUT parameters
     """
-    # Convert inputs
-
-    # Compute — {proc_name}_core is @jax.jit decorated; JIT fires on first call
     errmsg_out, errflg_out, lv, pref, rhoqr = kessler_init(lv_in, pref_in, rhoqr_in, errmsg, errflg, lv, pref, rhoqr)
-
-    # Convert outputs and return MODULE vars (INOUT pattern)
 
     return errmsg_out, errflg_out, lv, pref, rhoqr

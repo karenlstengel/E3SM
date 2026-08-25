@@ -75,7 +75,7 @@ cd $CASE_SCRIPTS_DIR
 # ./atmchange physics::atm_procs_list=mac_aero_mic # this removes the rrtmgp physics
 # ./atmchange mac_aero_mic::atm_procs_list=kessler #kessler
 # ./atmchange save_field_manager_content=true
-# ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control_JAX.yml
+./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control_JAX.yml
 ./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/FKESSLER_NE30NP4.cam.i.moist_baroclinic_wave_dcmip2016.nc
 ./atmchange enable_fine_grain_timers=false
 ./atmchange mac_aero_mic::kessler::py_backend=host

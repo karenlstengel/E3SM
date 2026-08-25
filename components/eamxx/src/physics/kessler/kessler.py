@@ -30,13 +30,13 @@ from bridge.kessler_update_timestep_init_bridge import kessler_update_timestep_i
 from bridge.kessler_update_run_bridge import kessler_update_run_bridge_device, to_device
 from bridge.kessler_update_timestep_final_bridge import kessler_update_timestep_final_bridge_device
 
-# kessler_jax.kessler_run now does its own (ncol, nz) <-> (nz, ncol) transpose
-# on-device, inside its @jax.jit core (see the NATIVE-LAYOUT ADAPTER comments
-# in kessler_jax/kessler_run.py) -- so it can be called directly on EAMxx's
-# native-layout arrays, without going through bridge.kessler_run_bridge's
-# NumPy-level (host-side, non-jit) transpose.
-from bridge.kessler_init_bridge import kessler_init
-from kessler_jax.kessler_run import kessler_run # change this to bridge version once updated from Iris
+# kessler_jax.kessler_run_core expects arrays already in JAX (nz, ncol)
+# layout -- kessler_run_bridge is what does the (ncol, nz) <-> (nz, ncol)
+# layout conversion (in-jit, PATH C: pure H2D/D2H with the axis reversal
+# fused into the jitted kernel by XLA), so EAMxx's native (ncol, nz)
+# arrays go through the bridge, not kessler_jax.kessler_run directly.
+from bridge.kessler_init_bridge import kessler_init_bridge
+from bridge.kessler_run_bridge import kessler_run_bridge
 
 try:
     from kessler_perf_log import log_call as _log_perf_call, flush_log as _flush_perf_log
@@ -74,9 +74,20 @@ def run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, zm, pk, theta, qv, qc
     global latvap, pref, rhoqr
     global errmsg, errflg, scheme_name
 
-    # Compute — {proc_name}_core is @jax.jit decorated; JIT fires on first call.
-    # Called directly on native (ncol, nz) arrays -- no bridge/NumPy transpose.
-    theta_out, qv_out, qc_out, qr_out, precl_out, relhum_out, scheme_name, errmsg, errflg, latvap, pref, rhoqr = kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, zm, pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg, latvap, pref, rhoqr)
+    # Compute — kessler_run_bridge (contract 1, host-facing) handles the
+    # (ncol, nz) <-> (nz, ncol) layout conversion in-jit and does its own
+    # H2D/D2H; called directly on EAMxx's native (ncol, nz) arrays.
+    #
+    # Timed the same way as fortran_bridge/kessler_eamxx_bridge_main.F90's
+    # system_clock wrap around its `kessler_run` call, and logged under the
+    # same label, so py_run and F90_run rows line up in the perf CSV.
+    _t0_run = time.perf_counter()
+    theta_out, qv_out, qc_out, qr_out, precl_out, relhum_out, scheme_name, errmsg, errflg, latvap, pref, rhoqr = kessler_run_bridge(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, zm, pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg, latvap, pref, rhoqr)
+    if _log_perf_call is not None:
+        try:
+            _log_perf_call("kessler_run", ncol, nz, dt, time.perf_counter() - _t0_run)
+        except Exception:
+            pass
 
     # theta/qv/qc/qr/precl/relhum are zero-copy views into EAMxx's field
     # buffers (created in create_py_field()); the C++ caller (py_module_call)
@@ -148,16 +159,44 @@ def update(ncol, nz, dt, cpair, zm, pk, theta, phis, temp, temp_prev, temp_tend,
     phis_d  = to_device(phis)
     zeros_d = jnp.zeros((ncol, nz), dtype=jnp.float64)
 
+    # Per-phase timing below mirrors fortran_bridge/kessler_eamxx_bridge_update.F90's
+    # system_clock wrap around kessler_update_timestep_init/_run/_timestep_final
+    # (same three labels, so py_run and F90_run rows line up in the perf CSV).
+    # Unlike the Fortran calls, these three are intentionally left un-synced
+    # on the device -- contract 2's whole point is to chain them with no D2H
+    # between phases and fetch once at the end (see the batched device_get
+    # below) -- so perf_counter() here times host-side dispatch, not device
+    # execution. A true per-phase device time would need jax.block_until_ready()
+    # after each call, which would force a sync point between phases and
+    # defeat that chaining.
+    _t0 = time.perf_counter()
     temp_prev_d, ttend_t_d, e1 = kessler_update_timestep_init_bridge_device(
         temp=temp_d, temp_prev=zeros_d, ttend_t=zeros_d, errflg=0)
+    if _log_perf_call is not None:
+        try:
+            _log_perf_call("kessler_update_timestep_init", ncol, nz, dt, time.perf_counter() - _t0)
+        except Exception:
+            pass
 
+    _t0 = time.perf_counter()
     ttend_t_d, e2 = kessler_update_run_bridge_device(
         nz=nz, ncol=ncol, dt=dt, theta=theta_d, exner=exner_d,
         temp_prev=temp_prev_d, ttend_t=ttend_t_d, errflg=0)
+    if _log_perf_call is not None:
+        try:
+            _log_perf_call("kessler_update_run", ncol, nz, dt, time.perf_counter() - _t0)
+        except Exception:
+            pass
 
+    _t0 = time.perf_counter()
     st_energy_d, e3, gravit = kessler_update_timestep_final_bridge_device(
         nz=nz, cpair=cpair_d, temp=temp_d, zm=zm_d, phis=phis_d,
         st_energy=zeros_d, errflg=0, gravit=gravit)
+    if _log_perf_call is not None:
+        try:
+            _log_perf_call("kessler_update_timestep_final", ncol, nz, dt, time.perf_counter() - _t0)
+        except Exception:
+            pass
 
     # ONE batched D2H fetch for all three phases' outputs and errflg scalars.
     temp_prev_out, temp_tend_out, st_energy_out, e1, e2, e3 = jax.device_get(

@@ -121,7 +121,7 @@ all fields before dynamics or physics attempt to read them.
 **Minimal configuration (DCMIP2016 + Kessler only):**
 
 ```yaml
-atmosphere_processes:
+eamxx:
   schedule_type: sequential
   atm_procs_list: [dcmip2016_baroclinic_wave_ic, homme, kessler]
 
@@ -137,7 +137,7 @@ initial_conditions:
 **Extended configuration (adding SHOC and RRTMGP):**
 
 ```yaml
-atmosphere_processes:
+eamxx:
   schedule_type: sequential
   atm_procs_list: [dcmip2016_baroclinic_wave_ic, homme, shoc, rrtmgp, kessler]
 
@@ -155,6 +155,96 @@ initial_conditions:
   sfc_alb_dif_vis: 0.07
   sfc_alb_dif_nir: 0.07
   surf_lw_flux_up: 0.0
+```
+
+(Both examples nest under the top-level `eamxx:` section, as CIME's buildnml
+generates from `namelist_defaults_eamxx.xml` — see any file under
+`components/eamxx/tests/*/input.yaml` for other worked examples of this
+nesting convention.)
+
+### Configuring the test case
+
+All test-case knobs and reference constants are runtime params, read from the
+process's YAML/XML entry (`m_params.get<T>("name", default)` in
+`initialize_impl`).  Defaults are set in `namelist_defaults_eamxx.xml` under
+`dcmip2016_baroclinic_wave_ic`; the C++ code's own fallback (used only if a
+value is absent from *both* the YAML and the namelist defaults, e.g. in a
+hand-written standalone YAML) is noted below.
+
+| Param | Meaning | Default | C++ fallback if unset |
+|---|---|---|---|
+| `deep` | Deep (1) or shallow (0) atmosphere | `0` | `0` |
+| `moist` | Moist (1) or dry (0) | `1` | `1` |
+| `pertt` | Perturbation type: 0=exponential, 1=stream-function | `0` | `0` |
+| `X` | Earth reduced-size scaling factor | `1.0` | `1.0` |
+| `rearth` | Earth radius (m) | `6371220.0` | `physics::Constants<Real>::r_earth` (`6.376e6`) |
+| `Rd` | Dry-air gas constant (J/kg/K) | `287.0423113650487` | `physics::Constants<Real>::Rair` (`287.042`) |
+| `Rvap` | Water-vapor gas constant (J/kg/K) | `461.5046398201599` | `physics::Constants<Real>::RH2O` (`461.505`) |
+
+The `deep`/`moist`/`pertt`/`X` defaults match the DCMIP2016 Test 1 protocol
+(Ullrich et al. 2015) and the hardcoded values this process originally used.
+
+The `rearth`/`Rd`/`Rvap` **namelist defaults** intentionally do *not* match
+DCMIP2016's canonical literals (`a = 6.376e6`, `Rd = 287.042`,
+`Rvap = 461.505` — see "Reference constants" below) — they instead match the
+values Storm_SPEED's `moist_baroclinic_wave_dcmip2016` uses by default (CAM's
+`physconst` module, itself derived from `shr_const_mod`), so that an
+out-of-the-box EAMxx run and an out-of-the-box Storm_SPEED run of this test
+use the same background state.
+
+There is no automatic switch between the two conventions (no CIME
+compset/testmod distinguishes them yet) — override `rearth`/`Rd`/`Rvap`
+explicitly to get the other one. Both variants below are otherwise identical
+to the minimal configuration above.
+
+**Storm_SPEED-matching (default — no override needed):**
+
+```yaml
+eamxx:
+  schedule_type: sequential
+  atm_procs_list: [dcmip2016_baroclinic_wave_ic, homme, kessler]
+
+initial_conditions:
+  phis: 0.0
+```
+
+or, spelled out explicitly instead of relying on the namelist defaults:
+
+```yaml
+eamxx:
+  schedule_type: sequential
+  atm_procs_list: [dcmip2016_baroclinic_wave_ic, homme, kessler]
+  dcmip2016_baroclinic_wave_ic:
+    rearth: 6371220.0            # shr_const_rearth
+    Rd:     287.0423113650487    # shr_const_rdair
+    Rvap:   461.5046398201599    # shr_const_rwv
+
+initial_conditions:
+  phis: 0.0
+```
+
+**DCMIP2016-canonical (Ullrich et al. 2015 / `dcmip2016-baroclinic.F90` literals):**
+
+```yaml
+eamxx:
+  schedule_type: sequential
+  atm_procs_list: [dcmip2016_baroclinic_wave_ic, homme, kessler]
+  dcmip2016_baroclinic_wave_ic:
+    rearth: 6.376e6
+    Rd:     287.042
+    Rvap:   461.505
+
+initial_conditions:
+  phis: 0.0
+```
+
+Equivalently, after case creation, `atmchange` each param instead of editing
+the YAML directly:
+
+```bash
+./atmchange dcmip2016_baroclinic_wave_ic::rearth=6.376e6
+./atmchange dcmip2016_baroclinic_wave_ic::Rd=287.042
+./atmchange dcmip2016_baroclinic_wave_ic::Rvap=461.505
 ```
 
 ### Implementation files
@@ -190,3 +280,75 @@ initial_conditions:
 - **Restart safety**: `initialize_impl` returns immediately on
   `RunType::Restart`; the fields are already loaded from the restart file by
   the driver before this function is called.
+
+- **Virtual potential temperature (thetav) is not computed.** The reference
+  Fortran (`dcmip2016-baroclinic.F90`'s `baroclinic_wave_test`, and
+  Storm_SPEED's `Tv_given_z`-based path) also derives
+  `thetav = T*(1+Mvap*qv)*(p0/p)**(Rd/cp)`, but EAMxx has no consumer for a
+  `thetav` field on the physics grid (T_mid is the state variable HOMME's
+  theta-l dycore itself derives its internal theta from), so this port omits
+  it rather than add an orphaned output.  `Params::cp` is kept in
+  `dcmip2016_functions.hpp` for exactly this purpose, in case a future
+  diagnostic needs it — see the comment above `Params::cp`. If you do want it,
+  add a `thetav` `Computed` field in `create_requests()` (scalar3d_mid, K)
+  and compute it at the end of `wave_at_point` using the (already-available)
+  `Rd`/`p`/`p0` and a `moist_Rd_cp = Rd / P::cp` term, storing the result in a
+  new `State::thetav` member.
+
+### Reference constants
+
+DCMIP2016's paper (Ullrich et al. 2015) specifies exact values for the Earth
+radius and the dry-air/water-vapor gas constants, which HOMME's standalone
+`dcmip2016-baroclinic.F90` hardcodes: `a = 6.376e6` m, `Rd = 287.04` J/kg/K,
+`Rvap = 461.50` J/kg/K. This EAMxx port defaults to the same physical
+quantities via EAMxx's own `physics::Constants<Real>` (`r_earth = 6.376e6`,
+`Rair = 287.042`, `RH2O = 461.505` — matching to the precision each header
+happens to use), *when its `rearth`/`Rd`/`Rvap` YAML params are left unset
+entirely*. But because `namelist_defaults_eamxx.xml` always supplies a value
+for a registered process, an out-of-the-box run instead gets the
+**Storm_SPEED-matching defaults** described above in "Configuring the test
+case" — Storm_SPEED being a CAM-based implementation of this same test
+(`moist_baroclinic_wave_dcmip2016`,
+`src/dynamics/tests/initial_conditions/ic_baroclinic.F90`), which pulls
+`rearth`/`rair`/`rh2o` from CAM's `physconst` module. `physconst`'s defaults
+come from `shr_const_mod`'s `SHR_CONST_REARTH` (`6.37122e6` m — the standard
+CESM/E3SM Earth radius, not DCMIP2016's `6.376e6`),  `SHR_CONST_RDAIR`
+(`≈287.0423` J/kg/K), and `SHR_CONST_RWV` (`≈461.5046` J/kg/K). Storm_SPEED's
+`dctest_baro_kessler.xml` use-case does not override any of these, so an
+out-of-the-box Storm_SPEED DCMIP2016 baroclinic-wave run uses the real Earth
+radius rather than the DCMIP-specified one; `Rd`/`Rvap` happen to agree with
+the DCMIP paper's literals to within their stated precision.  Net effect: the
+Earth-radius discrepancy (~0.02%) is the only one with any real physical
+significance, and this port lets you pick either convention (or override
+independently) via the `rearth`/`Rd`/`Rvap` params documented above.
+
+### Known issue in Storm_SPEED's `ic_baroclinic.F90` (not present in this port)
+
+While comparing this port's math against Storm_SPEED's
+`moist_baroclinic_wave_dcmip2016` (`src/dynamics/tests/initial_conditions/ic_baroclinic.F90`),
+we found an argument-order mismatch between `evaluate_streamfunction`'s
+declaration and its call sites:
+
+- Declaration (`ic_baroclinic.F90:606`): `FUNCTION evaluate_streamfunction(z, lon_local, lat_local)`
+  — dummy-argument order is `(z, lon_local, lat_local)`.
+- Call sites, inside `uv_given_z` (`ic_baroclinic.F90:563-568`):
+  `evaluate_streamfunction(lon, lat ± dxepsilon, z)` — actual-argument order
+  is `(lon, lat, z)`.
+
+Fortran binds by position, so the actual longitude lands in the formal `z`
+(used for the vertical taper), the actual latitude lands in `lon_local`
+(used in `cos(lon_local - pertlon)`), and the actual altitude `z` (meters,
+up to ~30 km) lands in `lat_local` (used inside `sin`/`cos` as if it were a
+latitude in radians). This would produce physically meaningless wind
+perturbations.
+
+The bug is currently **dormant**: Storm_SPEED hardcodes `pertt = 0`
+(`ic_baroclinic.F90:56`), so the exponential-perturbation path
+(`evaluate_exponential`, which *does* have consistent argument order between
+its declaration and call site) is the only one exercised; the
+stream-function path (`pertt = 1`) is never called. It would need fixing in
+Storm_SPEED before `pertt = 1` could be used there.
+
+This EAMxx port does not have the analogous bug: `eval_streamfunction`'s
+declaration and both call sites in `wave_at_point`
+(`dcmip2016_functions_impl.hpp`) consistently use `(lon, lat, z)` throughout.

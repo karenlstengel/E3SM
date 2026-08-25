@@ -69,23 +69,33 @@ struct BaroclinicWaveFunctions
   // ScalarT is float or double.  Results are cast back to Scalar on output.
   //
   // Values match dcmip2016-baroclinic.F90 and EAMxx's physics_constants.hpp.
+  //
+  // NOTE: the Earth radius (a), dry-air gas constant (Rd), and water-vapor
+  // gas constant (Rvap) are NOT declared here.  They differ (slightly, for
+  // Rd/Rvap; more substantially, for the Earth radius) between this test's
+  // canonical DCMIP2016 values and the values used by other E3SM/CAM-based
+  // implementations of the same test (see README.md, "Reference constants").
+  // To let users match either convention, they are runtime parameters read
+  // from the atm_procs_list YAML/XML entry (falling back to EAMxx's
+  // physics::Constants<Real> values if unset) in
+  // eamxx_dcmip2016_ic_process_interface.cpp, and threaded as arguments
+  // through eval_pressure_temperature / eval_z_from_p / wave_at_point / main
+  // below instead of being hardcoded constants.
   // ==========================================================================
   struct Params {
     // Mathematical
     static constexpr double pi      = 3.14159265358979323846;
 
     // Earth reference values
-    static constexpr double a       = 6.376e6;     // Radius (m)
     static constexpr double g       = 9.80616;     // Gravity (m/s^2)
-    static constexpr double Rd      = 287.042;     // Dry-air gas constant (J/kg/K)
+    // cp/kappa are currently unused: they would only be needed to compute the
+    // virtual potential temperature (thetav) diagnostic from Ullrich et al.
+    // (2015), which this port intentionally does not compute -- see README.md,
+    // "Virtual potential temperature (thetav)". Retained here in case that
+    // diagnostic is added later.
     static constexpr double cp      = 1004.64;     // Specific heat Cp (J/kg/K)
-    static constexpr double Rvap    = 461.505;     // Water-vapor gas constant (J/kg/K)
     static constexpr double omega   = 7.292e-5;    // Earth's rotation rate (rad/s)
     static constexpr double p0      = 100000.0;    // Reference surface pressure (Pa)
-    static constexpr double kappa   = Rd / cp;     // Poisson exponent
-
-    // Mvap used in virtual-temperature correction: T_v = T*(1 + Mvap*qv)
-    static constexpr double Mvap    = Rvap / Rd - 1.0;   // ≈ 0.608
 
     // Background-state parameters (Ullrich et al. 2015, Table 1)
     static constexpr double T0E     = 310.0;   // Equatorial surface temperature (K)
@@ -137,9 +147,11 @@ struct BaroclinicWaveFunctions
 
   // Given altitude z (m), return hydrostatic pressure p (Pa) and temperature
   // T (K) at position (lon, lat) in radians.  Purely algebraic — GPU-safe.
+  // a/Rd: Earth radius (m) and dry-air gas constant (J/kg/K); see the note
+  // above Params for why these are arguments rather than Params constants.
   KOKKOS_FUNCTION
   static void eval_pressure_temperature(
-      int deep, double X, double lon, double lat, double z,
+      int deep, double X, double a, double Rd, double lon, double lat, double z,
       double& p, double& T);
 
   // Given pressure p_tgt (Pa), find altitude z (m) and temperature T (K) via
@@ -148,7 +160,7 @@ struct BaroclinicWaveFunctions
   // thread runs it independently (one thread per column in main()).
   KOKKOS_FUNCTION
   static void eval_z_from_p(
-      int deep, double X, double lon, double lat, double p_tgt,
+      int deep, double X, double a, double Rd, double lon, double lat, double p_tgt,
       double& z, double& T);
 
   // Zonal-wind perturbation for the exponential type (pertt = 0).  GPU-safe.
@@ -161,16 +173,20 @@ struct BaroclinicWaveFunctions
 
   // Compute the complete DCMIP2016 Test 1 state at one point.
   // Calls eval_z_from_p — valid on GPU (sequential loop per thread).
+  // a/Rd/Rvap: Earth radius, dry-air and water-vapor gas constants (m, J/kg/K).
   KOKKOS_FUNCTION
   static State wave_at_point(
-      int deep, int moist, int pertt, double X,
+      int deep, int moist, int pertt, double X, double a, double Rd, double Rvap,
       double lon, double lat, double p);
 
   // Kernel launcher: fills all output fields for every column and level.
   // Launched on DeviceT via a Kokkos RangePolicy (one thread per column).
+  // a/Rd/Rvap: Earth radius, dry-air and water-vapor gas constants, resolved
+  // by the process interface from YAML/XML params or (as fallback) EAMxx's
+  // physics::Constants<Real> -- see the note above Params.
   static void main(
       int ncols, int nlevs,
-      int deep, int moist, int pertt, Scalar X,
+      int deep, int moist, int pertt, Scalar X, Scalar a, Scalar Rd, Scalar Rvap,
       const view_1d<const Scalar>& lat_deg,   // geometry, degrees
       const view_1d<const Scalar>& lon_deg,   // geometry, degrees
       const view_1d<const Scalar>& hyam,      // hybrid-pressure A coefficients

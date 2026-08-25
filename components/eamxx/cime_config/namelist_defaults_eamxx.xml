@@ -197,6 +197,33 @@ be lost if SCREAM_HACK_XML is not enabled.
       <bfb_hash type="integer">18</bfb_hash>
     </homme>
 
+    <!-- DCMIP2016 Test 1 analytic initial conditions (moist baroclinic wave).
+         See components/eamxx/src/analytic_conditions/README.md for details. -->
+    <dcmip2016_baroclinic_wave_ic inherit="atm_proc_base">
+      <!-- Test-case knobs (Ullrich et al. 2015). Defaults match DCMIP2016 Test 1. -->
+      <deep type="integer" valid_values="0,1" doc="Deep (1) or shallow (0) atmosphere formulation">0</deep>
+      <moist type="integer" valid_values="0,1" doc="Include moisture (1) or run dry (0)">1</moist>
+      <pertt type="integer" valid_values="0,1" doc="Wind perturbation type: 0=exponential, 1=stream-function">0</pertt>
+      <X type="real" constraints="gt 0" doc="Earth reduced-size scaling factor (1.0 = full-size Earth)">1.0</X>
+
+      <!-- Reference constants. Values differ (slightly for Rd/Rvap, more
+           substantially for the Earth radius) between the DCMIP2016-canonical
+           values (used by HOMME's standalone dcmip2016-baroclinic.F90 and by
+           this process's own C++ math when these are left unset) and the
+           values used by other E3SM/CAM-based implementations of this test,
+           e.g. Storm_SPEED's moist_baroclinic_wave_dcmip2016
+           (src/dynamics/tests/initial_conditions/ic_baroclinic.F90), which
+           pulls rearth/Rd/Rvap from CAM's physconst module. The defaults
+           below match Storm_SPEED's values (CAM physconst's defaults, in
+           turn derived from shr_const_mod). If a value is left unset here
+           AND omitted from the process's YAML params, the C++ code falls
+           back to EAMxx's own physics::Constants<Real> instead (see
+           eamxx_dcmip2016_ic_process_interface.cpp). -->
+      <rearth type="real" constraints="gt 0" doc="Earth radius (m). Default matches Storm_SPEED/CAM's shr_const_rearth.">6371220.0</rearth>
+      <Rd type="real" constraints="gt 0" doc="Dry-air gas constant (J/kg/K). Default matches Storm_SPEED/CAM's rair (shr_const_rdair).">287.0423113650487</Rd>
+      <Rvap type="real" constraints="gt 0" doc="Water-vapor gas constant (J/kg/K). Default matches Storm_SPEED/CAM's rh2o (shr_const_rwv).">461.5046398201599</Rvap>
+    </dcmip2016_baroclinic_wave_ic>
+
     <!-- P3 microphysics -->
     <p3 inherit="atm_proc_base">
       <do_prescribed_ccn>true</do_prescribed_ccn>

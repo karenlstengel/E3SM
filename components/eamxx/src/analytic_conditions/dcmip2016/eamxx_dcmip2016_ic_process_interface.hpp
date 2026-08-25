@@ -50,6 +50,15 @@
 // The surface coupler (sc_import / sc_export) should be omitted from
 // atm_procs_list.  Provide surface-flux fields as constants in the
 // initial_conditions YAML block instead (see example above).
+//
+// Configurable params (see namelist_defaults_eamxx.xml, entry
+// "dcmip2016_baroclinic_wave_ic", and README.md, "Configuring the test
+// case" for the full list and defaults):
+//   deep, moist, pertt, X   -- DCMIP2016 test-case knobs
+//   rearth, Rd, Rvap        -- reference constants; default to values used
+//                              by Storm_SPEED's moist_baroclinic_wave_dcmip2016
+//                              rather than the DCMIP2016-canonical literals,
+//                              unless overridden here or via YAML.
 
 #include "share/atm_process/atmosphere_process.hpp"
 

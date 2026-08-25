@@ -32,17 +32,17 @@ namespace dcmip2016 {
 template <typename S, typename D>
 KOKKOS_FUNCTION
 void BaroclinicWaveFunctions<S,D>::eval_pressure_temperature(
-    int deep, double X, double lon, double lat, double z,
+    int deep, double X, double a, double Rd, double lon, double lat, double z,
     double& p, double& T)
 {
   using P = Params;
 
-  const double aref    = P::a / X;
+  const double aref    = a / X;
   const double T0      = 0.5 * (P::T0E + P::T0P);
   const double constA  = 1.0 / P::lapse;
   const double constB  = (T0 - P::T0P) / (T0 * P::T0P);
   const double constC  = 0.5 * (P::K + 2.0) * (P::T0E - P::T0P) / (P::T0E * P::T0P);
-  const double constH  = P::Rd * T0 / P::g;
+  const double constH  = Rd * T0 / P::g;
   const double scaledZ = z / (P::B * constH);
 
   // Tau functions: weighting factors for the hydrostatic integration
@@ -67,7 +67,7 @@ void BaroclinicWaveFunctions<S,D>::eval_pressure_temperature(
   T = 1.0 / (rratio * rratio * (tau1 - tau2 * inttermT));
 
   // Hydrostatic pressure from vertical integration
-  p = P::p0 * Kokkos::exp(-P::g / P::Rd * (inttau1 - inttau2 * inttermT));
+  p = P::p0 * Kokkos::exp(-P::g / Rd * (inttau1 - inttau2 * inttermT));
 }
 
 // ==========================================================================
@@ -90,20 +90,20 @@ void BaroclinicWaveFunctions<S,D>::eval_pressure_temperature(
 template <typename S, typename D>
 KOKKOS_FUNCTION
 void BaroclinicWaveFunctions<S,D>::eval_z_from_p(
-    int deep, double X, double lon, double lat, double p_tgt,
+    int deep, double X, double a, double Rd, double lon, double lat, double p_tgt,
     double& z, double& T)
 {
   // Initial bracket: sea level and 10 km
   double z0 = 0.0,     p0_tmp, T_tmp;
   double z1 = 10000.0, p1_tmp;
-  eval_pressure_temperature(deep, X, lon, lat, z0, p0_tmp, T_tmp);
-  eval_pressure_temperature(deep, X, lon, lat, z1, p1_tmp, T_tmp);
+  eval_pressure_temperature(deep, X, a, Rd, lon, lat, z0, p0_tmp, T_tmp);
+  eval_pressure_temperature(deep, X, a, Rd, lon, lat, z1, p1_tmp, T_tmp);
 
   // Secant iteration (mirrors the Fortran DO loop up to 1000 steps)
   double z2 = z1, p2_tmp = p1_tmp;
   for (int ix = 0; ix < 1000; ++ix) {
     z2 = z1 - (p1_tmp - p_tgt) * (z1 - z0) / (p1_tmp - p0_tmp);
-    eval_pressure_temperature(deep, X, lon, lat, z2, p2_tmp, T_tmp);
+    eval_pressure_temperature(deep, X, a, Rd, lon, lat, z2, p2_tmp, T_tmp);
 
     // Converge when relative pressure error is below 1e-13
     if (Kokkos::abs((p2_tmp - p_tgt) / p_tgt) < 1.e-13) break;
@@ -114,7 +114,7 @@ void BaroclinicWaveFunctions<S,D>::eval_z_from_p(
 
   z = z2;
   // Final T evaluation at the converged altitude
-  eval_pressure_temperature(deep, X, lon, lat, z, p2_tmp, T);
+  eval_pressure_temperature(deep, X, a, Rd, lon, lat, z, p2_tmp, T);
 }
 
 // ==========================================================================
@@ -200,7 +200,7 @@ template <typename S, typename D>
 KOKKOS_FUNCTION
 typename BaroclinicWaveFunctions<S,D>::State
 BaroclinicWaveFunctions<S,D>::wave_at_point(
-    int deep, int moist, int pertt, double X,
+    int deep, int moist, int pertt, double X, double a, double Rd, double Rvap,
     double lon, double lat, double p)
 {
   using P = Params;
@@ -208,13 +208,13 @@ BaroclinicWaveFunctions<S,D>::wave_at_point(
 
   // ---- 1. Invert p -> z, get dry temperature ----
   double z, T;
-  eval_z_from_p(deep, X, lon, lat, p, z, T);
+  eval_z_from_p(deep, X, a, Rd, lon, lat, p, z, T);
 
   // ---- 2. Background zonal wind from thermal-wind balance ----
-  const double aref       = P::a / X;
+  const double aref       = a / X;
   const double omegaref   = P::omega * X;
   const double T0         = 0.5 * (P::T0E + P::T0P);
-  const double constH     = P::Rd * T0 / P::g;
+  const double constH     = Rd * T0 / P::g;
   const double constC     = 0.5 * (P::K + 2.0) * (P::T0E - P::T0P) / (P::T0E * P::T0P);
   const double scaledZ    = z / (P::B * constH);
   const double inttau2    = constC * z * Kokkos::exp(-scaledZ * scaledZ);
@@ -261,7 +261,8 @@ BaroclinicWaveFunctions<S,D>::wave_at_point(
       qv = P::moistqs;
     }
     // Recover actual T from virtual T: T_v = T*(1 + Mvap*qv)  =>  T = T_v/(1+Mvap*qv)
-    T = T / (1.0 + P::Mvap * qv);
+    const double Mvap = Rvap / Rd - 1.0;   // ~0.608
+    T = T / (1.0 + Mvap * qv);
   }
   s.T  = Scalar(T);
   s.qv = Scalar(qv);
@@ -292,7 +293,7 @@ BaroclinicWaveFunctions<S,D>::wave_at_point(
 template <typename S, typename D>
 void BaroclinicWaveFunctions<S,D>::main(
     int ncols, int nlevs,
-    int deep, int moist, int pertt, Scalar X,
+    int deep, int moist, int pertt, Scalar X, Scalar a, Scalar Rd, Scalar Rvap,
     const view_1d<const Scalar>& lat_deg,
     const view_1d<const Scalar>& lon_deg,
     const view_1d<const Scalar>& hyam,
@@ -309,6 +310,9 @@ void BaroclinicWaveFunctions<S,D>::main(
 
   // Capture as plain values so the KOKKOS_LAMBDA can copy them
   const double X_d    = double(X);
+  const double a_d    = double(a);
+  const double Rd_d   = double(Rd);
+  const double Rvap_d = double(Rvap);
   const int    deep_  = deep;
   const int    moist_ = moist;
   const int    pertt_ = pertt;
@@ -347,7 +351,8 @@ void BaroclinicWaveFunctions<S,D>::main(
         // ps = p0 everywhere (no orography), so p_mid = (hyam + hybm)*p0.
         const double p_mid = (double(hyam(k)) + double(hybm(k))) * p0;
 
-        const auto s = wave_at_point(deep_, moist_, pertt_, X_d, lon, lat, p_mid);
+        const auto s = wave_at_point(deep_, moist_, pertt_, X_d, a_d, Rd_d, Rvap_d,
+                                      lon, lat, p_mid);
 
         T_col(k)  = s.T;
         u_col(k)  = s.u;

@@ -2,6 +2,7 @@
 #include "analytic_conditions/dcmip2016/dcmip2016_functions.hpp"
 
 #include "share/util/eamxx_units.hpp"
+#include "share/physics/physics_constants.hpp"
 
 namespace scream {
 
@@ -87,16 +88,31 @@ void DCMIP2016BaroclinicIC::initialize_impl(const RunType run_type)
   auto qc_v          = get_field_out("qc").get_view<Pack**>();
   auto qr_v          = get_field_out("qr").get_view<Pack**>();
 
-  // ---- DCMIP2016 test parameters ----
-  const int  deep  = 0;    // Shallow atmosphere
-  const int  moist = 1;    // Include moisture (needed for Kessler microphysics)
-  const int  pertt = 0;    // Exponential wind perturbation
-  const Real X     = 1.0; // Full Earth (no scaling)
+  // ---- DCMIP2016 test knobs ----
+  // Overridable via the process's YAML/XML params (see
+  // namelist_defaults_eamxx.xml, entry "dcmip2016_baroclinic_wave_ic").
+  // Defaults below match the DCMIP2016 Test 1 protocol (Ullrich et al. 2015).
+  const int  deep  = m_params.get<int>("deep",  0);  // Shallow atmosphere
+  const int  moist = m_params.get<int>("moist", 1);  // Include moisture (needed for Kessler)
+  const int  pertt = m_params.get<int>("pertt", 0);  // Exponential wind perturbation
+  const Real X     = m_params.get<double>("X",  1.0); // Full Earth (no scaling)
+
+  // ---- Reference constants (Earth radius, dry-air/water-vapor gas constants) ----
+  // These differ (slightly for Rd/Rvap, more substantially for the Earth
+  // radius) between the DCMIP2016-canonical values and the values used by
+  // other E3SM/CAM-based implementations of this test (e.g. Storm_SPEED's
+  // moist_baroclinic_wave_dcmip2016) -- see README.md, "Reference constants".
+  // Precedence: explicit YAML/XML param, else EAMxx's own
+  // physics::Constants<Real> (NOT the DCMIP2016-canonical literals).
+  using PC = physics::Constants<Real>;
+  const Real rearth = m_params.get<double>("rearth", PC::r_earth.value);
+  const Real Rd     = m_params.get<double>("Rd",     PC::Rair.value);
+  const Real Rvap   = m_params.get<double>("Rvap",   PC::RH2O.value);
 
   // Launch kernel; all column-level work runs on DeviceT
   BWFunctions::main(
     m_num_cols, m_num_levs,
-    deep, moist, pertt, X,
+    deep, moist, pertt, X, rearth, Rd, Rvap,
     lat_deg, lon_deg, hyam, hybm,
     T_mid_v, horiz_winds_v,
     ps_v, phis_v,

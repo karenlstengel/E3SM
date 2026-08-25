@@ -7,8 +7,9 @@ module kessler_eamxx_bridge_update
   ! use spmd_utils,      only: masterproc
 
   ! Kessler code from CAM-SIMA
-  use kessler_update 
-  ! use ccpp_kinds, only:  kind_phys
+  use kessler_update
+  use ccpp_kinds, only:  kind_phys
+  use kessler_perf_log, only: log_call
   !-----------------------------------------------------------------------------
   implicit none
   private
@@ -79,15 +80,46 @@ subroutine kessler_eamxx_bridge_update_c( ncol, nz, dt, cpair, pk, theta, temp_p
   real(kind=c_real),    dimension(pcols),      intent(in)    :: phis      ! Geopotential height of surface (m2/s2)
   real(kind=c_real),    dimension(pcols,pver), intent(out)   :: st_energy ! Dry static energy J/kg
 
+  integer(kind=8) :: count_start, count_end, count_rate
+  real(kind_phys) :: elapsed
+
   ! Call the Kessler update Functions
   #if defined(EAMXX_ENABLE_GPU) && defined(EAMXX_ENABLE_OPENACC)
+    call system_clock(count_start, count_rate)
     call kessler_update_timestep_init(ncol, nz, temp, temp_prev, temp_tend, errmsg, errflg)
+    call system_clock(count_end)
+    elapsed = real(count_end - count_start, kind_phys) / real(count_rate, kind_phys)
+    call log_call('kessler_update_timestep_init', ncol, nz, dt, elapsed)
+
+    call system_clock(count_start, count_rate)
     call kessler_update_run(nz, ncol, dt, theta, pk, temp_prev, temp_tend, errmsg, errflg)
+    call system_clock(count_end)
+    elapsed = real(count_end - count_start, kind_phys) / real(count_rate, kind_phys)
+    call log_call('kessler_update_run', ncol, nz, dt, elapsed)
+
+    call system_clock(count_start, count_rate)
     call kessler_update_timestep_final(nz, ncol, cpair, temp, z_mid, phis, st_energy, errflg, errmsg)
+    call system_clock(count_end)
+    elapsed = real(count_end - count_start, kind_phys) / real(count_rate, kind_phys)
+    call log_call('kessler_update_timestep_final', ncol, nz, dt, elapsed)
   #else
+    call system_clock(count_start, count_rate)
     call kessler_update_timestep_init(temp, temp_prev, temp_tend, errmsg, errflg)
+    call system_clock(count_end)
+    elapsed = real(count_end - count_start, kind_phys) / real(count_rate, kind_phys)
+    call log_call('kessler_update_timestep_init', ncol, nz, dt, elapsed)
+
+    call system_clock(count_start, count_rate)
     call kessler_update_run(nz, ncol, dt, theta, pk, temp_prev, temp_tend, errmsg, errflg)
+    call system_clock(count_end)
+    elapsed = real(count_end - count_start, kind_phys) / real(count_rate, kind_phys)
+    call log_call('kessler_update_run', ncol, nz, dt, elapsed)
+
+    call system_clock(count_start, count_rate)
     call kessler_update_timestep_final(nz, cpair, temp, z_mid, phis, st_energy, errflg, errmsg)
+    call system_clock(count_end)
+    elapsed = real(count_end - count_start, kind_phys) / real(count_rate, kind_phys)
+    call log_call('kessler_update_timestep_final', ncol, nz, dt, elapsed)
   #endif
 end subroutine kessler_eamxx_bridge_update_c
 

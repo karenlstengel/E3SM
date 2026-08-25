@@ -4,10 +4,11 @@ set(PATH_TO_LEGACY_CAM ${SCREAM_BASE_DIR}/../eam/src/pyhsics/cam)
 # Decide on if we should use the OpenACC version of Kessler or not. 
 if (EAMXX_ENABLE_OPENACC)
   message(STATUS "Using OpenACC version of Kessler")
-  set(PATH_TO_LEGACY_CAM_SIMA ${SCREAM_BASE_DIR}/../../../GPU_ports/atmospheric_physics)
+  set(PATH_TO_LEGACY_CAM_SIMA /glade/derecho/scratch/kstengel/E3SM/GPU_ports/atmospheric_physics)
+  
 else()
   message(STATUS "Using non-OpenACC version of Kessler")
-  set(PATH_TO_LEGACY_CAM_SIMA ${SCREAM_BASE_DIR}/../../../atmospheric_physics)
+  set(PATH_TO_LEGACY_CAM_SIMA /glade/derecho/scratch/kstengel/E3SM/atmospheric_physics)
 endif()
 
 set(PATH_TO_LEGACY_KESSLER ${PATH_TO_LEGACY_CAM_SIMA}/schemes/kessler)

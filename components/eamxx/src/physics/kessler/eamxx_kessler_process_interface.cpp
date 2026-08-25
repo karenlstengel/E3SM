@@ -7,6 +7,7 @@
 #include "share/physics/physics_constants.hpp"
 #include "share/physics/eamxx_common_physics_functions.hpp"
 // #include "share/physics/eamxx_common_physics_functions_impls.hpp"
+#include "share/util/eamxx_timing.hpp"
 
 #include <ekat_assert.hpp>
 #include <ekat_units.hpp>
@@ -232,6 +233,7 @@ void KesslerMicrophysics::run_impl (const double dt )
 
   int nlevs = m_num_levs; // local var, to avoid accessing *this.
 
+  start_timer("EAMxx::kessler::run::preprocess");
   Kokkos::parallel_for(
       "Kessler_preprocess", KT::RangePolicy(0, m_num_cols * nlevs),
       KOKKOS_CLASS_LAMBDA(const int i) {
@@ -284,15 +286,21 @@ void KesslerMicrophysics::run_impl (const double dt )
     PF::calculate_z_mid(team, nlevs, z_int_i, z_mid_i);
     team.team_barrier();
   });
+  stop_timer("EAMxx::kessler::run::preprocess");
 
-  // Initialize fortran data holders in structs 
+  // Initialize fortran data holders in structs
   params_helpers.init(m_num_cols, nlevs);
   params_computed.init(m_num_cols, nlevs);
 
   double dt_timestep = dt;
 
-  // This calls both kessler_rn and kessler_update now
+  // This calls both kessler_rn and kessler_update now. Scope name "F90_run"
+  // matches the label prefix kessler_perf_log.F90 uses internally
+  // ("a:EAMxx::kessler::run::F90_run::<label>"), so this GPTL total and the
+  // perf-log CSV breakdown underneath it stay directly comparable.
+  start_timer("EAMxx::kessler::run::F90_run");
   kessler_eamxx_bridge_run(m_num_cols, nlevs, dt_timestep, lyr_surf, lyr_toa, params_helpers, params_computed);
+  stop_timer("EAMxx::kessler::run::F90_run");
 
   // <scheme>qneg</scheme> // this is taken care of by the postcondition checks we have in place for qc, qr, and qi (these checks will set any negative values to 0.0)
   // <scheme>geopotential_temp</scheme> // -> done above when calculating z_mid
@@ -374,7 +382,11 @@ void KesslerMicrophysics::run_impl (const double dt )
 
 void KesslerMicrophysics::finalize_impl()
 {
-  // Do nothing
+  // Flush this rank's in-memory kessler_perf_log totals (see
+  // fortran_bridge/kessler_perf_log.F90) to CSV. Called once here, at
+  // finalize, mirroring kessler.py's finalize() -> _flush_perf_log() on the
+  // JAX side.
+  kessler::kessler_eamxx_bridge_finalize();
   m_atm_logger->info("[EAMxx] Kessler processes clean up.");
 }
 // =========================================================================================

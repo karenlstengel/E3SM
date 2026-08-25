@@ -1,6 +1,7 @@
 #include "kessler_eamxx_bridge.hpp"
 #include "kessler_functions.hpp"
 #include "share/core/eamxx_types.hpp"
+#include "share/util/eamxx_timing.hpp"
 
 #include <ekat_pack_kokkos.hpp>
 #include <ekat_workspace.hpp>
@@ -16,9 +17,11 @@ extern "C" {
 
     void kessler_eamxx_bridge_update_init_c(Int pcols, Int pver, Real gravit_in);
 
-    void kessler_eamxx_bridge_run_c(Int pcols, Int nz, double dt, Int lyr_surf, Int lyr_toa, Real* cpair, Real* rair, Real* rho, Real* z_mid, Real* pk, Real* theta, Real* qv, Real* qc, Real* qr, Real* precl, Real* relhum); 
+    void kessler_eamxx_bridge_run_c(Int pcols, Int nz, double dt, Int lyr_surf, Int lyr_toa, Real* cpair, Real* rair, Real* rho, Real* z_mid, Real* pk, Real* theta, Real* qv, Real* qc, Real* qr, Real* precl, Real* relhum);
 
     void kessler_eamxx_bridge_update_c(Int pcols, Int nz, double dt, Real* cpair, Real* pk, Real* theta, Real* temp_prev, Real* temp, Real* temp_tend, Real* z_mid, Real* phis, Real* st_energy);
+
+    void kessler_eamxx_bridge_finalize_c();
 } // extern "C" : end _c decls
 
 namespace scream {
@@ -33,9 +36,11 @@ namespace scream {
 
         //----------------------------------------------------------------------------
         // Need to transpose to match how Fortran handles things
+        start_timer("EAMxx::kessler::run::F90_run::transpose_c2f");
         params_helpers.transpose<ekat::TransposeDirection::c2f>(pcols,pver);
         params_computed.transpose<ekat::TransposeDirection::c2f>(pcols,pver);
         Kokkos::fence();
+        stop_timer("EAMxx::kessler::run::F90_run::transpose_c2f");
 
         #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
             
@@ -84,11 +89,17 @@ namespace scream {
                                                        params_computed.f_st_energy.data());
         #endif
         // Transpose back to C++ convention
+        start_timer("EAMxx::kessler::run::F90_run::transpose_f2c");
         params_helpers.transpose<ekat::TransposeDirection::f2c>(pcols,pver);
         params_computed.transpose<ekat::TransposeDirection::f2c>(pcols,pver);
+        stop_timer("EAMxx::kessler::run::F90_run::transpose_f2c");
 
         //----------------------------------------------------------------------------
     } // end run
+
+    void kessler_eamxx_bridge_finalize(){
+        kessler_eamxx_bridge_finalize_c();
+    }
 
     // end _c impls
 

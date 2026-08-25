@@ -10,6 +10,7 @@ module kessler_eamxx_bridge_main
   ! Kessler code from CAM-SIMA
   use kessler
   use ccpp_kinds, only:  kind_phys
+  use kessler_perf_log, only: log_call, flush_log
   !-----------------------------------------------------------------------------
   implicit none
   private
@@ -17,6 +18,7 @@ module kessler_eamxx_bridge_main
   ! public methods
   public :: kessler_eamxx_bridge_init_c
   public :: kessler_eamxx_bridge_run_c
+  public :: kessler_eamxx_bridge_finalize_c
 
   ! Public variables
   integer, public            :: pcols
@@ -97,11 +99,28 @@ subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, r
   integer :: i,k
   ! real(kind=c_real) :: relhum_max, pk_max, theta_max, qv_max
 
+  integer(kind=8) :: count_start, count_end, count_rate
+  real(kind_phys) :: elapsed
+
   ! Call the Kessler run function
+  call system_clock(count_start, count_rate)
   call kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z_mid, &
         pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg)
+  call system_clock(count_end)
+  elapsed = real(count_end - count_start, kind_phys) / real(count_rate, kind_phys)
+  call log_call('kessler_run', ncol, nz, dt, elapsed)
 
 end subroutine kessler_eamxx_bridge_run_c
+
+!===================================================================================================
+
+subroutine kessler_eamxx_bridge_finalize_c() bind(C, name="kessler_eamxx_bridge_finalize_c")
+  ! Flush this rank's in-memory kessler_perf_log totals to CSV. Meant to be
+  ! called exactly once per rank, at simulation finalize -- mirrors the
+  ! JAX-side kessler.py's finalize() -> _flush_perf_log().
+  call flush_log()
+
+end subroutine kessler_eamxx_bridge_finalize_c
 
 !===================================================================================================
 

@@ -24,20 +24,10 @@ inline Status do_register() {
 
 // ── initialize ──────────────────────────────────────────────────────────────
 
-struct InitializeArgs {
-    double           lv;
-    double           pref;
-    double           rhoqr;
-    double           gravit;
-};
-
-inline Status initialize(const InitializeArgs& a) {
+inline Status initialize() {
     char   errmsg[513]      = {};
     int    errflg           = 0;
-    Kessler_chost_physics_initialize(
-        a.lv, a.pref, a.rhoqr, a.gravit,
-        errmsg, &errflg
-    );
+    Kessler_chost_physics_initialize(errmsg, &errflg);
     return {errflg, errflg ? errmsg : ""};
 }
 
@@ -47,6 +37,44 @@ inline Status finalize() {
     char   errmsg[513]      = {};
     int    errflg           = 0;
     Kessler_chost_physics_finalize(errmsg, &errflg);
+    return {errflg, errflg ? errmsg : ""};
+}
+
+// ── run ─────────────────────────────────────────────────────────────────────
+
+struct RunArgs {
+    int              ncol;
+    int              nz;
+    double           dt;
+    int              lyr_surf;
+    int              lyr_toa;
+    const double*    cpair;
+    const double*    rair;
+    const double*    rho;
+    const double*    z_mid;
+    const double*    exner;
+    double*          theta;
+    double*          qv;
+    double*          qc;
+    double*          qr;
+    double*          precl;
+    double*          relhum;
+    const double*    temp_prev;
+    double*          temp_tend;
+};
+
+inline Status run(const RunArgs& a) {
+    char   scheme_name[65]  = {};
+    char   errmsg[513]      = {};
+    int    errflg           = 0;
+    Kessler_chost_physics_run(
+        a.ncol, a.nz, a.dt, a.lyr_surf,
+        a.lyr_toa, a.cpair, a.rair, a.rho,
+        a.z_mid, a.exner, a.theta, a.qv,
+        a.qc, a.qr, a.precl, a.relhum,
+        a.temp_prev, a.temp_tend, scheme_name, errmsg,
+        &errflg
+    );
     return {errflg, errflg ? errmsg : ""};
 }
 
@@ -93,67 +121,46 @@ inline Status timestep_final(const TimestepFinalArgs& a) {
     return {errflg, errflg ? errmsg : ""};
 }
 
-// ── run ─────────────────────────────────────────────────────────────────────
+// ── physics_initial ─────────────────────────────────────────────────────────
 
-struct RunArgs {
-    int              ncol;
-    int              nz;
-    int              col_start;
-    int              col_end;
-    double           dt;
-    int              lyr_surf;
-    int              lyr_toa;
-    const double*    cpair;
-    const double*    rair;
-    const double*    rho;
-    const double*    z_mid;
-    const double*    exner;
-    double*          theta;
-    double*          qv;
-    double*          qc;
-    double*          qr;
-    double*          precl;
-    double*          relhum;
-    const double*    temp_prev;
-    double*          temp_tend;
+struct PhysicsInitialArgs {
+    double           lv;
+    double           pref;
+    double           rhoqr;
+    double           gravit;
 };
 
-inline Status run(const RunArgs& a) {
-    char   scheme_name[65]  = {};
+inline Status physics_initial(const PhysicsInitialArgs& a) {
     char   errmsg[513]      = {};
     int    errflg           = 0;
-    Kessler_chost_physics_run(
-        a.ncol, a.nz, a.col_start, a.col_end,
-        a.dt, a.lyr_surf, a.lyr_toa, a.cpair,
-        a.rair, a.rho, a.z_mid, a.exner,
-        a.theta, a.qv, a.qc, a.qr,
-        a.precl, a.relhum, a.temp_prev, a.temp_tend,
-        scheme_name, errmsg, &errflg
+    Kessler_chost_physics_physics_initial(
+        a.lv, a.pref, a.rhoqr, a.gravit,
+        errmsg, &errflg
     );
+    return {errflg, errflg ? errmsg : ""};
+}
+
+// ── physics_final ───────────────────────────────────────────────────────────
+
+inline Status physics_final() {
+    char   errmsg[513]      = {};
+    int    errflg           = 0;
+    Kessler_chost_physics_physics_final(errmsg, &errflg);
     return {errflg, errflg ? errmsg : ""};
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
 struct State {
-    double           lv = 0;
-    double           pref = 0;
-    double           rhoqr = 0;
-    double           gravit = 0;
     int              ncol = 0;
     int              nz = 0;
-    double*          temp = nullptr;
-    double*          temp_prev = nullptr;
-    double*          temp_tend = nullptr;
-    double*          cpair = nullptr;
-    double*          z_mid = nullptr;
-    double*          phis = nullptr;
-    double*          st_energy = nullptr;
     double           dt = 0;
     int              lyr_surf = 0;
     int              lyr_toa = 0;
+    double*          cpair = nullptr;
     double*          rair = nullptr;
     double*          rho = nullptr;
+    double*          z_mid = nullptr;
     double*          exner = nullptr;
     double*          theta = nullptr;
     double*          qv = nullptr;
@@ -161,6 +168,15 @@ struct State {
     double*          qr = nullptr;
     double*          precl = nullptr;
     double*          relhum = nullptr;
+    double*          temp_prev = nullptr;
+    double*          temp_tend = nullptr;
+    double*          temp = nullptr;
+    double*          phis = nullptr;
+    double*          st_energy = nullptr;
+    double           lv = 0;
+    double           pref = 0;
+    double           rhoqr = 0;
+    double           gravit = 0;
 
     State(int ncol = 0, int nz = 0)
         : ncol(ncol), nz(nz) {}
@@ -168,24 +184,14 @@ struct State {
     // Allocate all array fields from internal storage.
     // Set ncol (and nz/ncnst for higher-rank arrays) before calling.
     void allocate() {
-        _temp.assign(static_cast<std::size_t>(ncol) * nz, 0);
-        temp = _temp.data();
-        _temp_prev.assign(static_cast<std::size_t>(ncol) * nz, 0);
-        temp_prev = _temp_prev.data();
-        _temp_tend.assign(static_cast<std::size_t>(ncol) * nz, 0);
-        temp_tend = _temp_tend.data();
         _cpair.assign(static_cast<std::size_t>(ncol) * nz, 0);
         cpair = _cpair.data();
-        _z_mid.assign(static_cast<std::size_t>(ncol) * nz, 0);
-        z_mid = _z_mid.data();
-        _phis.assign(static_cast<std::size_t>(ncol), 0);
-        phis = _phis.data();
-        _st_energy.assign(static_cast<std::size_t>(ncol) * nz, 0);
-        st_energy = _st_energy.data();
         _rair.assign(static_cast<std::size_t>(ncol) * nz, 0);
         rair = _rair.data();
         _rho.assign(static_cast<std::size_t>(ncol) * nz, 0);
         rho = _rho.data();
+        _z_mid.assign(static_cast<std::size_t>(ncol) * nz, 0);
+        z_mid = _z_mid.data();
         _exner.assign(static_cast<std::size_t>(ncol) * nz, 0);
         exner = _exner.data();
         _theta.assign(static_cast<std::size_t>(ncol) * nz, 0);
@@ -200,18 +206,23 @@ struct State {
         precl = _precl.data();
         _relhum.assign(static_cast<std::size_t>(ncol) * nz, 0);
         relhum = _relhum.data();
+        _temp_prev.assign(static_cast<std::size_t>(ncol) * nz, 0);
+        temp_prev = _temp_prev.data();
+        _temp_tend.assign(static_cast<std::size_t>(ncol) * nz, 0);
+        temp_tend = _temp_tend.data();
+        _temp.assign(static_cast<std::size_t>(ncol) * nz, 0);
+        temp = _temp.data();
+        _phis.assign(static_cast<std::size_t>(ncol), 0);
+        phis = _phis.data();
+        _st_energy.assign(static_cast<std::size_t>(ncol) * nz, 0);
+        st_energy = _st_energy.data();
     }
 
 private:
-    std::vector<double> _temp;
-    std::vector<double> _temp_prev;
-    std::vector<double> _temp_tend;
     std::vector<double> _cpair;
-    std::vector<double> _z_mid;
-    std::vector<double> _phis;
-    std::vector<double> _st_energy;
     std::vector<double> _rair;
     std::vector<double> _rho;
+    std::vector<double> _z_mid;
     std::vector<double> _exner;
     std::vector<double> _theta;
     std::vector<double> _qv;
@@ -219,14 +230,33 @@ private:
     std::vector<double> _qr;
     std::vector<double> _precl;
     std::vector<double> _relhum;
+    std::vector<double> _temp_prev;
+    std::vector<double> _temp_tend;
+    std::vector<double> _temp;
+    std::vector<double> _phis;
+    std::vector<double> _st_energy;
 };
 
-inline Status initialize(const State& s) {
-    return initialize({
-        .lv=s.lv,
-        .pref=s.pref,
-        .rhoqr=s.rhoqr,
-        .gravit=s.gravit,
+inline Status run(const State& s) {
+    return run({
+        .ncol=s.ncol,
+        .nz=s.nz,
+        .dt=s.dt,
+        .lyr_surf=s.lyr_surf,
+        .lyr_toa=s.lyr_toa,
+        .cpair=s.cpair,
+        .rair=s.rair,
+        .rho=s.rho,
+        .z_mid=s.z_mid,
+        .exner=s.exner,
+        .theta=s.theta,
+        .qv=s.qv,
+        .qc=s.qc,
+        .qr=s.qr,
+        .precl=s.precl,
+        .relhum=s.relhum,
+        .temp_prev=s.temp_prev,
+        .temp_tend=s.temp_tend,
     });
 }
 
@@ -252,28 +282,12 @@ inline Status timestep_final(const State& s) {
     });
 }
 
-inline Status run(const State& s, int col_start, int col_end) {
-    return run({
-        .ncol=s.ncol,
-        .nz=s.nz,
-        .col_start=col_start,
-        .col_end=col_end,
-        .dt=s.dt,
-        .lyr_surf=s.lyr_surf,
-        .lyr_toa=s.lyr_toa,
-        .cpair=s.cpair,
-        .rair=s.rair,
-        .rho=s.rho,
-        .z_mid=s.z_mid,
-        .exner=s.exner,
-        .theta=s.theta,
-        .qv=s.qv,
-        .qc=s.qc,
-        .qr=s.qr,
-        .precl=s.precl,
-        .relhum=s.relhum,
-        .temp_prev=s.temp_prev,
-        .temp_tend=s.temp_tend,
+inline Status physics_initial(const State& s) {
+    return physics_initial({
+        .lv=s.lv,
+        .pref=s.pref,
+        .rhoqr=s.rhoqr,
+        .gravit=s.gravit,
     });
 }
 

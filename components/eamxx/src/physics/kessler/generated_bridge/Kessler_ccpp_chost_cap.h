@@ -11,15 +11,35 @@ void Kessler_chost_physics_register(
 );
 
 void Kessler_chost_physics_initialize(
-    double           lv,
-    double           pref,
-    double           rhoqr,
-    double           gravit,
     char*            errmsg,
     int*             errflg 
 );
 
 void Kessler_chost_physics_finalize(
+    char*            errmsg,
+    int*             errflg 
+);
+
+void Kessler_chost_physics_run(
+    int              ncol,
+    int              nz,
+    double           dt,
+    int              lyr_surf,
+    int              lyr_toa,
+    const double*    cpair,
+    const double*    rair,
+    const double*    rho,
+    const double*    z_mid,
+    const double*    exner,
+    double*          theta,
+    double*          qv,
+    double*          qc,
+    double*          qr,
+    double*          precl,
+    double*          relhum,
+    const double*    temp_prev,
+    double*          temp_tend,
+    char*            scheme_name,
     char*            errmsg,
     int*             errflg 
 );
@@ -46,28 +66,16 @@ void Kessler_chost_physics_timestep_final(
     int*             errflg 
 );
 
-void Kessler_chost_physics_run(
-    int              ncol,
-    int              nz,
-    int              col_start,
-    int              col_end,
-    double           dt,
-    int              lyr_surf,
-    int              lyr_toa,
-    const double*    cpair,
-    const double*    rair,
-    const double*    rho,
-    const double*    z_mid,
-    const double*    exner,
-    double*          theta,
-    double*          qv,
-    double*          qc,
-    double*          qr,
-    double*          precl,
-    double*          relhum,
-    const double*    temp_prev,
-    double*          temp_tend,
-    char*            scheme_name,
+void Kessler_chost_physics_physics_initial(
+    double           lv,
+    double           pref,
+    double           rhoqr,
+    double           gravit,
+    char*            errmsg,
+    int*             errflg 
+);
+
+void Kessler_chost_physics_physics_final(
     char*            errmsg,
     int*             errflg 
 );

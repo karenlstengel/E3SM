@@ -5,42 +5,66 @@
 extern "C" {
 #endif
 
-void Kessler_ccpp_physics_register(
-    const char*      suite_name,
-    char*            errmsg,
+void ccpp_register(
+    const char*      suite_name,  /* null-terminated string, any length */
+    char*            errmsg,  /* caller must allocate >= 513 bytes (512 + null terminator) */
     int*             errflg 
 );
 
-void Kessler_ccpp_physics_initialize(
-    const char*      suite_name,
-    char*            errmsg,
+void ccpp_init(
+    const char*      suite_name,  /* null-terminated string, any length */
+    char*            errmsg,  /* caller must allocate >= 513 bytes (512 + null terminator) */
     int*             errflg 
 );
 
-void Kessler_ccpp_physics_finalize(
-    const char*      suite_name,
-    char*            errmsg,
+void ccpp_final(
+    const char*      suite_name,  /* null-terminated string, any length */
+    char*            errmsg,  /* caller must allocate >= 513 bytes (512 + null terminator) */
     int*             errflg 
 );
 
-void Kessler_ccpp_physics_timestep_initial(
-    const char*      suite_name,
-    char*            errmsg,
-    int*             errflg 
-);
-
-void Kessler_ccpp_physics_timestep_final(
-    const char*      suite_name,
-    char*            errmsg,
-    int*             errflg 
-);
-
-void Kessler_ccpp_physics_run(
-    const char*      suite_name,
-    const char*      suite_part,
+void ccpp_physics_run(
+    const char*      suite_name,  /* null-terminated string, any length */
+    const char*      suite_part,  /* null-terminated string, any length */
     int              col_start,
     int              col_end,
-    char*            errmsg,
+    char*            errmsg,  /* caller must allocate >= 513 bytes (512 + null terminator) */
+    int*             errflg 
+);
+
+void ccpp_physics_timestep_init(
+    const char*      suite_name,  /* null-terminated string, any length */
+    const char*      suite_part,  /* null-terminated string, any length */
+    int              col_start,
+    int              col_end,
+    char*            errmsg,  /* caller must allocate >= 513 bytes (512 + null terminator) */
+    int*             errflg 
+);
+
+void ccpp_physics_timestep_final(
+    const char*      suite_name,  /* null-terminated string, any length */
+    const char*      suite_part,  /* null-terminated string, any length */
+    int              col_start,
+    int              col_end,
+    char*            errmsg,  /* caller must allocate >= 513 bytes (512 + null terminator) */
+    int*             errflg 
+);
+
+void ccpp_physics_init(
+    const char*      suite_name,  /* null-terminated string, any length */
+    const char*      suite_part,  /* null-terminated string, any length */
+    int              col_start,
+    int              col_end,
+    char*            errmsg,  /* caller must allocate >= 513 bytes (512 + null terminator) */
+    int*             errflg 
+);
+
+void ccpp_physics_final(
+    const char*      suite_name,  /* null-terminated string, any length */
+    const char*      suite_part,  /* null-terminated string, any length */
+    int              col_start,
+    int              col_end,
+    char*            errmsg,  /* caller must allocate >= 513 bytes (512 + null terminator) */
     int*             errflg 
 );
 

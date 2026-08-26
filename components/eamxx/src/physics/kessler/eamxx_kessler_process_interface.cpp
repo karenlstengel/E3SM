@@ -145,8 +145,17 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
   int  errflg_init      = 0;
   Kessler_chost_physics_register(errmsg_init, &errflg_init);
   EKAT_REQUIRE_MSG(errflg_init == 0, "[EAMxx] Kessler register failed: " + std::string(errmsg_init));
-  Kessler_chost_physics_initialize(latvap, P0, rhoqr, gravit, errmsg_init, &errflg_init);
+  Kessler_chost_physics_initialize(errmsg_init, &errflg_init);
   EKAT_REQUIRE_MSG(errflg_init == 0, "[EAMxx] Kessler initialize failed: " + std::string(errmsg_init));
+  // Eight-phase lifecycle (2026-08-20 xdsl-ccpp change): the real kessler_init/
+  // kessler_update_init calls moved out of Kessler_chost_physics_initialize into this new,
+  // separate entry point. Must run AFTER Kessler_chost_physics_initialize, not before --
+  // kessler_suite_cap.F90's generated state machine requires ccpp_suite_state to already be
+  // 'initialized' (set by Kessler_chost_physics_initialize) before it will actually invoke
+  // kessler_init/kessler_update_init here; calling this first would silently no-op them and
+  // return errflg=1.
+  Kessler_chost_physics_physics_initial(latvap, P0, rhoqr, gravit, errmsg_init, &errflg_init);
+  EKAT_REQUIRE_MSG(errflg_init == 0, "[EAMxx] Kessler physics_initial failed: " + std::string(errmsg_init));
 
   #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
     // Allocate host mirror views for GPU -> CPU Fortran bridge
@@ -312,7 +321,7 @@ void KesslerMicrophysics::run_impl (const double dt )
       params_computed.h_temp.data(), params_computed.h_temp_prev.data(),
       params_computed.h_temp_tend.data(), errmsg_run, &errflg_run);
   Kessler_chost_physics_run(
-      m_num_cols, nlevs, 1, m_num_cols, dt_timestep, lyr_surf, lyr_toa,
+      m_num_cols, nlevs, dt_timestep, lyr_surf, lyr_toa,
       params_helpers.h_cpair.data(), params_helpers.h_rair.data(),
       params_helpers.h_rho.data(),   params_helpers.h_z_mid.data(),
       params_helpers.h_pk.data(),
@@ -333,7 +342,7 @@ void KesslerMicrophysics::run_impl (const double dt )
       params_computed.f_temp.data(), params_computed.f_temp_prev.data(),
       params_computed.f_temp_tend.data(), errmsg_run, &errflg_run);
   Kessler_chost_physics_run(
-      m_num_cols, nlevs, 1, m_num_cols, dt_timestep, lyr_surf, lyr_toa,
+      m_num_cols, nlevs, dt_timestep, lyr_surf, lyr_toa,
       params_helpers.f_cpair.data(), params_helpers.f_rair.data(),
       params_helpers.f_rho.data(),   params_helpers.f_z_mid.data(),
       params_helpers.f_pk.data(),
@@ -437,6 +446,13 @@ void KesslerMicrophysics::finalize_impl()
 {
   char errmsg_fin[513] = {};
   int  errflg_fin      = 0;
+  // Eight-phase lifecycle (2026-08-20 xdsl-ccpp change): must run BEFORE
+  // Kessler_chost_physics_finalize, not after -- kessler_suite_cap.F90's generated state
+  // machine requires ccpp_suite_state to still be 'initialized' when this runs (finalize()
+  // transitions it to 'uninitialized', which would fail this call's own state check if
+  // called first).
+  Kessler_chost_physics_physics_final(errmsg_fin, &errflg_fin);
+  EKAT_REQUIRE_MSG(errflg_fin == 0, "[EAMxx] Kessler physics_final failed: " + std::string(errmsg_fin));
   Kessler_chost_physics_finalize(errmsg_fin, &errflg_fin);
   EKAT_REQUIRE_MSG(errflg_fin == 0, "[EAMxx] Kessler finalize failed: " + std::string(errmsg_fin));
   m_atm_logger->info("[EAMxx] Kessler processes clean up.");

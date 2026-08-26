@@ -60,11 +60,15 @@ void Kessler::create_requests ()
   add_field<Computed>("precl",  scalar2d,     m/s,    grid_name);
   add_field<Computed>("relhum", scalar3d_mid, nondim, grid_name, ps);
 
-  // Initialise Kessler constants from physics constants
+  // Initialise Kessler constants from physics constants.
+  // cpair/rair are composition-independent dry-air scalar constants
+  // (TODO: use composition-dependent fields if/when available).
   using C = physics::Constants<Real>;
   m_kd.lv    = C::LatVap.value;
   m_kd.pref  = C::P0.value / Real(100);  // convert Pa reference pressure to hPa
   m_kd.rhoqr = Real(1000);               // density of fresh liquid water, kg m-3
+  m_kd.cpair = C::Cpair.value;
+  m_kd.rair  = C::Rair.value;
 
   // Pulled from SHOC
   // Boundary flux fields for energy and mass conservation checks
@@ -79,9 +83,12 @@ void Kessler::create_requests ()
 // =============================================================================
 void Kessler::initialize_impl (const RunType /* run_type */)
 {
-  // Nothing to do beyond buffer initialisation (handled by init_buffers)
+  // Size the Kessler scratch workspace here (once, at case startup)
+  // rather than lazily on the first run_impl call, so its one-time
+  // device allocation doesn't land inside the timed simulation loop.
+  m_kessler_workspace.init(m_ncols, m_nlevs);
 
-  // Set up energy fixer fields. 
+  // Set up energy fixer fields.
   if (has_energy_fixer()) {
     // Set the boundary fluxes to 0.0 at the start of the run
     auto vapor_flux = get_field_out("vapor_flux").get_view<Real*>();
@@ -125,7 +132,6 @@ void Kessler::run_impl (const double dt)
   // Physical constants needed inside device kernels
   using C = physics::Constants<Real>;
   const Real rair_val  = C::Rair.value;
-  const Real cpair_val = C::Cpair.value;
 
   // Compute exner, dz, z, rho, theta using PhysicsFunctions
   const int nlev_packs = ekat::npack<Pack>(nlevs);
@@ -182,17 +188,9 @@ void Kessler::run_impl (const double dt)
   auto precl_out  = get_field_out("precl").get_view<Real*>();
   auto relhum_out = get_field_out("relhum").get_view<Pack**>();
 
-  // Build scalar constant views for cpair and rair
-  // (composition-independent dry-air values; TODO: use composition-dependent fields)
-  KF::view_2d<Real> cpair_v("cpair", ncols, nlevs);
-  KF::view_2d<Real> rair_v ("rair",  ncols, nlevs);
-  Kokkos::parallel_for("kessler_fill_constants",
-    Kokkos::MDRangePolicy<KF::KT::ExeSpace, Kokkos::Rank<2>>(
-      {0, 0}, {ncols, nlevs}),
-    KOKKOS_LAMBDA(const int col, const int k) {
-      cpair_v(col, k) = cpair_val;
-      rair_v (col, k) = rair_val;
-    });
+  // cpair and rair are supplied to kessler_run as scalar constants via
+  // m_kd (set once in create_requests), so no per-call fill kernel or
+  // 2D constant views are needed here.
 
   // Scalarize 2D Pack views to Scalar views for the kessler kernel
   auto z_mid_s  = ekat::scalarize(z_mid);
@@ -211,9 +209,12 @@ void Kessler::run_impl (const double dt)
   const int lyr_surf = nlevs - 1;
   const int lyr_toa  = 0;
 
+  // m_kessler_workspace was already sized in initialize_impl(); the
+  // init() call kessler_run makes internally is then just a cheap
+  // dimension check, not a device allocation.
   KF::kessler_run(ncols, nlevs, Real(dt),
                   lyr_surf, lyr_toa, m_kd,
-                  cpair_v, rair_v, rho_s, z_mid_s, exner_s,
+                  m_kessler_workspace, rho_s, z_mid_s, exner_s,
                   theta_s, qv_s, qc_s, qr_s,
                   precl_out, relhum_s);
 

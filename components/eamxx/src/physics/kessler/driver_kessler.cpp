@@ -79,6 +79,12 @@ int main (int argc, char** argv)
     kd.lv    = 2.5e6;    // J kg-1
     kd.pref  = 1000.0;   // hPa  (Fortran passes 100000 Pa, /100 in init)
     kd.rhoqr = 1000.0;   // kg m-3
+    kd.cpair = 1004.0;   // J kg-1 K-1
+    kd.rair  = 287.0;    // J kg-1 K-1
+
+    // Persistent scratch workspace, allocated once and reused across calls
+    KF::KesslerWorkspace workspace;
+    workspace.init(ncols, nz);
 
     // ------------------------------------------------------------------
     // Build per-column scaling array: Normal(1, 0.1) via Box-Muller
@@ -98,8 +104,6 @@ int main (int argc, char** argv)
     // ------------------------------------------------------------------
     // Allocate and initialise host arrays
     // ------------------------------------------------------------------
-    HView2d h_cpair ("h_cpair",  ncols, nz);
-    HView2d h_rair  ("h_rair",   ncols, nz);
     HView2d h_rho   ("h_rho",    ncols, nz);
     HView2d h_z     ("h_z",      ncols, nz);
     HView2d h_pk    ("h_pk",     ncols, nz);
@@ -125,8 +129,6 @@ int main (int argc, char** argv)
         // Fortran: z(i,k) = arr(i) * 100*(k-1)  →  C++ k=0..nz-1
         const Real z_ik = a * (100.0 * k);
 
-        h_cpair (i, k) = 1004.0;
-        h_rair  (i, k) = 287.0;
         h_z     (i, k) = z_ik;
         h_rho   (i, k) = a * 1.2 * std::exp(-z_ik / 8000.0);
         h_pk    (i, k) = a * 1.0;
@@ -144,8 +146,6 @@ int main (int argc, char** argv)
     // ------------------------------------------------------------------
     // Deep-copy host arrays to device
     // ------------------------------------------------------------------
-    DView2d cpair  = Kokkos::create_mirror_view_and_copy(Device(), h_cpair);
-    DView2d rair   = Kokkos::create_mirror_view_and_copy(Device(), h_rair);
     DView2d rho    = Kokkos::create_mirror_view_and_copy(Device(), h_rho);
     DView2d z      = Kokkos::create_mirror_view_and_copy(Device(), h_z);
     DView2d pk     = Kokkos::create_mirror_view_and_copy(Device(), h_pk);
@@ -168,7 +168,7 @@ int main (int argc, char** argv)
     // Run kessler microphysics
     // ------------------------------------------------------------------
     KF::kessler_run(ncols, nz, dt, lyr_surf, lyr_toa, kd,
-                    cpair, rair, rho, z, pk,
+                    workspace, rho, z, pk,
                     theta, qv, qc, qr,
                     precl, relhum);
 
@@ -189,7 +189,7 @@ int main (int argc, char** argv)
     // ------------------------------------------------------------------
     const Real gravit = 9.80616;  // m s-2 (standard EAMxx value)
     KF::kessler_update_timestep_final(ncols, nz, gravit,
-                                      cpair, temp, zm, phis, st_energy);
+                                      kd.cpair, temp, zm, phis, st_energy);
 
     // ------------------------------------------------------------------
     // Print field sums (matches the Fortran driver output format)

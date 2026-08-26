@@ -83,6 +83,10 @@ protected:
 
   KesslerData m_kd;
 
+  // Persistent Kessler scratch workspace, allocated once (lazily sized
+  // on first run_impl call) and reused across every physics time step.
+  KesslerFunc::KesslerWorkspace m_kessler_workspace;
+
   std::shared_ptr<const AbstractGrid> m_grid;
 
 }; // class Kessler

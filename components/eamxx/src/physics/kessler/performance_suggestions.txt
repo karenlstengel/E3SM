@@ -1,53 +1,124 @@
 Kessler Kokkos Performance Suggestions
 =======================================
 
-1. SCRATCH VIEW PRE-ALLOCATION (high impact on GPU)
-   Ten views (r, rhalf, velqr, sed, pc, f5, dt0, mask, time_counter, precl_acc)
-   are allocated and freed on every call to kessler_run. GPU memory allocation
-   (cudaMalloc) is expensive and serializing. These should be pre-allocated and
-   passed in or held in a persistent workspace struct.
+Status: items 1-6 below have been implemented in kessler_functions.hpp /
+kessler_functions_impl.hpp, alongside the migration of cpair/rair from
+2D (ncols, nz) arrays to 1D scalar constants (KesslerData::cpair/rair),
+matching the updated Fortran interface. This also removed a
+per-timestep 2D fill kernel + 2 extra (ncols, nz) views that previously
+existed only to broadcast a single composition-independent value
+(eamxx_kessler_process_interface.cpp), and collapsed the per-thread
+xk = cp/R and f5 = 4093*lv/cp computations (and the f5 scratch view) to
+single host-side scalars.
 
-2. HOST-DEVICE SYNC EVERY SUB-CYCLE ITERATION (high impact)
-   The convergence check in Step 8 (parallel_reduce -> n_active) forces a
-   device-to-host sync every sub-cycle. For 128 columns this can mean dozens
-   of forced syncs per kessler_run call. Options:
-     a) Keep a device-side View<int> flag updated atomically and only pull it
-        to host every N iterations.
-     b) Precompute a worst-case sub-cycle count from the initial CFL constraint
-        and run that many iterations unconditionally, with the mask suppressing
-        inactive columns (already partially done with the mask pattern).
+A second pass added:
+7. Mask-guarded early exit in 3 of the 4 sub-cycle kernels, so columns
+   that converge early skip all further work instead of doing a no-op
+   pass every remaining iteration -- see below. This also resolves the
+   item-2 caveat from the first pass (extra iterations after a column's
+   own convergence are now truly free, not just numerically harmless).
+8. Removed an unnecessary Kokkos::fence() between the init kernels and
+   the sub-cycle loop -- nothing on the host reads device state there,
+   so it was only adding a stall.
+9. The Kessler scratch workspace is now sized in initialize_impl()
+   instead of lazily on the first run_impl() call, so its one-time
+   device allocation happens during case setup, not inside the timed
+   simulation loop.
 
-3. MEMORY ACCESS PATTERN WRONG FOR GPU (high impact on GPU)
-   With Kokkos default LayoutLeft on GPU, view(col, k) is stride-1 in col.
-   The current flattening:
-     col = idx / nk;       -- same col for nk consecutive threads
-     k   = kmin + idx % nk -- k varies -> stride ncols -> UNCOALESCED
-   Should be transposed for GPU:
-     col = idx % ncols;        -- col varies -> stride 1 -> COALESCED
-     k   = kmin + idx / ncols;
-   This is opposite to what is optimal on CPU (LayoutRight), so a
-   compile-time switch or architecture-dependent macro is needed.
+Please re-validate against the fortran_bridge / driver_kessler reference
+on a supported machine before merging.
 
-4. KERNEL FUSION IN THE SUB-CYCLE LOOP (medium impact)
-   Each sub-cycle iteration launches 7-8 separate kernels. Candidates to fuse:
-     a) Steps 1+2+3 (precl_accum + sed_inner + sed_toa): all deal with
-        sedimentation and can be combined into one ncols*nz kernel with a
-        branch on k == lyr_toa.
-     b) Steps 5+6 (update_time + velqr_update): the 1D time/mask update is
-        independent of k, so a single ncols*nk kernel can do the time update
-        once per column (guarded by k == kmin) and velqr for all k.
-   Reduces kernel launch overhead and scheduler cost per sub-cycle.
+1. SCRATCH VIEW PRE-ALLOCATION (high impact on GPU) -- DONE
+   The ten scratch views now live in a caller-owned KesslerWorkspace
+   (kessler_functions.hpp), sized once via KesslerWorkspace::init() and
+   reused across calls (a no-op once ncols/nz stop changing). The EAMxx
+   process interface holds one as a persistent member (m_kessler_workspace);
+   driver_kessler.cpp allocates one before its single call. f5 was
+   dropped entirely (see above -- it's now a scalar, not a view).
 
-5. REPEATED std::pow CALLS WITH SAME BASE IN SUB-CYCLE (medium impact)
-   velqr is recomputed every sub-cycle via pow(qr * r, 0.1364), which
-   internally calls exp(log(...)). The evaporation term also has:
-     pow(rqr, 0.2046) and pow(rqr, 0.525)
-   Note: 0.525 / 0.2046 ~ 2.568, so these share the same base. The second
-   can be computed as pow(rqr_0_2046, 2.568), eliminating one log evaluation.
-   Using exp/log explicitly may also allow fast-math compiler optimizations.
+2. HOST-DEVICE SYNC EVERY SUB-CYCLE ITERATION (high impact) -- DONE
+   Implemented option (a): the convergence parallel_reduce (and its
+   device-to-host sync) now only runs every CHECK_INTERVAL=4 iterations
+   instead of every iteration.
+   Originally this came with a caveat: dt0 for an already-converged
+   column can retain a tiny (<=1e-5 s) nonzero residual rather than
+   being forced to exactly zero, so extra iterations past a column's
+   own convergence were not strictly no-ops. Item 7 below (mask-guarded
+   early exit) makes that moot: precl_sed/micro/dt0_recompute now skip
+   a converged column entirely rather than recomputing a near-zero
+   update, so the residual is never touched again once mask hits 0 --
+   extra iterations really are free now, not just numerically small.
+   Still worth confirming precl/qr/qc against the Fortran reference and
+   tuning CHECK_INTERVAL if anything looks off.
+   A fully synchronization-free version would require moving the whole
+   sub-cycle loop on-device (e.g. one team per column running its own
+   while loop in scratch/registers) -- a larger, separate redesign not
+   attempted here given the correctness risk of a from-scratch rewrite
+   without the ability to compile/test locally.
 
-6. TeamPolicy FOR dt0 RECOMPUTE PER SUB-CYCLE (lower impact)
-   kessler_recompute_dt0 uses TeamPolicy(ncols, AUTO) to reduce over 55 levels
-   per column. For small nk_sed on CPU this has team-formation overhead. After
-   the velqr_update kernel, this could be folded into a fused kernel using
-   Kokkos::atomic_min or by doing the reduction inline per column.
+3. MEMORY ACCESS PATTERN WRONG FOR GPU (high impact on GPU) -- DONE
+   Every ncols*nk kernel now picks its (col,k) flattening based on the
+   view's actual Kokkos array_layout (col-fastest for LayoutLeft/GPU,
+   level-fastest for LayoutRight/CPU), decided once via
+   std::is_same<view_2d<Scalar>::array_layout, Kokkos::LayoutLeft> and
+   reused as a plain bool captured into each lambda (the compiler folds
+   away the dead branch).
+
+4. KERNEL FUSION IN THE SUB-CYCLE LOOP (medium impact) -- DONE
+   a) Steps 1+2+3 (precl_accum + sed_inner + sed_toa) are now one
+      ncols*nk kernel ("kessler_precl_sed") with branches on
+      k==lyr_surf / k==lyr_toa.
+   b) Steps 5+6 (update_time + velqr_update) are now one ncols*nk kernel
+      ("kessler_time_velqr"), guarded on k==kmin for the per-column
+      time/mask/dt0 update; velqr is recomputed for all k. (Verified
+      safe: velqr's computation does not read dt0, so there is no
+      ordering hazard between the k==kmin branch and the rest.)
+   Sub-cycle kernel count per iteration is down from 8 to 4.
+
+5. REPEATED std::pow CALLS WITH SAME BASE IN SUB-CYCLE (medium impact) -- DONE
+   The evaporation term's rqr^0.2046 and rqr^0.525 now share a single
+   std::log(rqr), with each power obtained via std::exp(exponent*log_rqr).
+   Guarded on rqr > 0 (falls back to both terms = 0) to avoid a log(0)
+   trap under debug/fpe standalone test builds -- qr == 0 is a common,
+   physically valid state (e.g. dry columns).
+
+6. TeamPolicy FOR dt0 RECOMPUTE PER SUB-CYCLE (lower impact) -- DONE
+   Both the initial dt0 CFL reduction (previously kernel 2, a
+   TeamPolicy(ncols, AUTO) reduction) and the per-sub-cycle recompute
+   (previously step 7) are now folded into the neighboring ncols*nk
+   kernel via Kokkos::atomic_min(&dt0(col), ...), guarded on k != lyr_toa.
+   In both cases the atomic only reads velqr(col,k) that the same
+   thread just wrote, so there is no cross-thread race.
+
+7. MASK-GUARDED EARLY EXIT FOR CONVERGED COLUMNS (medium-high impact,
+   especially when columns need very different sub-cycle counts, e.g.
+   dry vs. heavily-precipitating columns) -- DONE
+   kessler_precl_sed, kessler_micro, and kessler_dt0_recompute each now
+   start with `if (mask(col) == 0) return;`, so a column that converged
+   on a prior iteration costs one read + a branch instead of a full
+   (wasted) pass through sedimentation/microphysics/CFL math.
+   kessler_time_velqr is deliberately NOT guarded this way: it both
+   writes mask (from the k==kmin thread) and would need to read it (for
+   the guard) from every other thread for the same column, within one
+   Kokkos::parallel_for -- there is no ordering guarantee between
+   indices in a flat RangePolicy launch, so combining that read and
+   write there would be a genuine data race, not just a numerical
+   nicety. (This was caught and reverted during review -- the first
+   attempt guarded all 4 kernels uniformly, which was wrong.) That
+   kernel instead keeps its original `mask(col) *` multiplier so it
+   stays an exact no-op for converged columns without any control-flow
+   dependence on mask.
+
+8. UNNECESSARY MID-FUNCTION FENCE (low impact, but free) -- DONE
+   The Kokkos::fence() between the init kernels and the sub-cycle loop
+   was removed. Kernels on the same execution-space instance execute in
+   submission order, and nothing between them read results back on the
+   host, so the fence was only forcing a stall in kernel enqueueing
+   without changing what got computed.
+
+9. WORKSPACE ALLOCATION TIMING (low impact, but free) -- DONE
+   m_kessler_workspace.init() is now called once in
+   Kessler::initialize_impl() (case startup) instead of relying on the
+   lazy init() inside the first run_impl()/kessler_run() call, so the
+   one-time device allocation happens during setup rather than as part
+   of the first timed physics step.

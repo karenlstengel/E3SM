@@ -24,8 +24,9 @@ Design:
 Fortran fidelity notes:
 - `f5` is a SCALAR in the Fortran, overwritten on every iteration of the
   first per-level loop; the sub-cycle then reads the surviving value, i.e.
-  the one computed at klev = lyr_toa. Reproduced here as
-  `f5_col = 4093 * lv / cpair[toa]` (NOT a per-level field).
+  the one computed at klev = lyr_toa. `cpair`/`rair` are spatially-uniform
+  physical constants (scalars here, not per-level fields), so
+  `f5 = 4093 * lv / cpair` is exactly that surviving value already.
 - Error semantics are per column, without Fortran's early RETURN: a column
   with a bad time split (initial dt0 < 1e-12) skips its sub-cycle and keeps
   its post-floor state (qr floored, theta/qv/qc unchanged, precl 0), and
@@ -54,7 +55,8 @@ def kessler_run_core(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk,
                      theta, qv, qc, qr, precl, relhum, errflg, lv, pref, rhoqr):
     """Pure JAX kernel for kessler_run.
 
-    2-D arrays are (nz, ncol); precl is (ncol,). Returns
+    cpair/rair are spatially-uniform scalars. Other 2-D arrays are
+    (nz, ncol); precl is (ncol,). Returns
     theta, qv, qc, qr, precl, relhum, errflg, lv, pref, rhoqr.
     """
     # --- canonical surface-first level order (statics -> trace-time Python) ---
@@ -71,13 +73,11 @@ def kessler_run_core(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk,
     identity = order == tuple(range(nz))               # [STATIC-INT]
 
     if identity:                                       # [PY-IF] on [STATIC-INT] — resolved at trace time
-        cpair_o, rair_o, rho_o, z_o, pk_o = cpair, rair, rho, z, pk    # [PY] aliasing only
+        rho_o, z_o, pk_o = rho, z, pk                  # [PY] aliasing only
         theta_o, qv_o, qc_o, qr_o = theta, qv, qc, qr  # [PY] aliasing only
         idx = None                                     # [PY]
     else:
         idx = jnp.asarray(order, dtype=jnp.int32)      # [JAX] static gather indices
-        cpair_o = cpair[idx, :]                        # [JAX-VEC] gather to canonical order
-        rair_o = rair[idx, :]                          # [JAX-VEC]
         rho_o = rho[idx, :]                            # [JAX-VEC]
         z_o = z[idx, :]                                # [JAX-VEC]
         pk_o = pk[idx, :]                              # [JAX-VEC]
@@ -90,20 +90,21 @@ def kessler_run_core(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk,
     f2x = 17.27                                        # [PY] float64 literal (inherits from operands)
     r_o = 0.001 * rho_o                                # [JAX-VEC] r(klev)
     rhalf_o = jnp.sqrt(rho_o[0:1, :] / rho_o)          # [JAX-VEC] sqrt(rho_surf/rho)
-    xk_o = cpair_o / rair_o                            # [JAX-VEC] xk per level (used in pc only)
-    pc_o = 3.8 / (pk_o ** xk_o * pref)                 # [JAX-VEC] pc(klev)
+    xk = cpair / rair                                  # [PY] cpair/rair are spatially-uniform scalars
+    pc_o = 3.8 / (pk_o ** xk * pref)                   # [JAX-VEC] pc(klev)
     qr0_o = jnp.maximum(qr_o, 0.0)                     # [JAX-VEC] Fortran qr floor
     velqr0_o = 36.34 * rhalf_o * (qr0_o * r_o) ** 0.1364  # [JAX-VEC] initial fallspeed
     # Fortran fidelity: f5 is a SCALAR overwritten every klev iteration; the
     # sub-cycle below uses its value from the LAST iteration (klev = lyr_toa).
-    f5_col = 4093.0 * lv / cpair_o[-1, :]              # [JAX-VEC] scalar carry-over, per column
+    # cpair is spatially uniform, so this is a single scalar shared by all columns.
+    f5 = 4093.0 * lv / cpair                           # [PY] scalar carry-over
     rho_surf_col = rho_o[0, :]                         # [JAX-VEC] rho at the surface, per column
     # z neighbour of the TOA level, from the FULL native array: equals the
     # canonical zc[-2] whenever nlev >= 2, and is the Fortran
     # z(col, lyr_toa - lyr_step) when the range is a single level.
     z_below_top_col = z[t - step, :]                   # [JAX-VEC] static row index
 
-    def _column(dt_c, f5, rho_surf, z_below_top, r, rhalf, pc, zc, pkc, cpairc,
+    def _column(dt_c, rho_surf, z_below_top, r, rhalf, pc, zc, pkc,
                 th0, qv0, qc0, qr0, velqr_init):       # [JAX-VMAP] per-column sub-cycle
         """Sub-cycle for one column; all 1-D args are (nlev,) canonical order."""
         dz = zc[1:] - zc[:-1]                          # [JAX-VEC] z(klev+step) - z(klev)
@@ -159,7 +160,7 @@ def kessler_run_core(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk,
                     * (jnp.maximum(qvs - qvv, 0.0) / (r * qvs)),  # [JAX-VEC] DIM(qvs,qv) = max(qvs-qv,0)
                     jnp.maximum(-prod - qcc, 0.0)),
                 qrr)
-            th = th + lv / (cpairc * pkc) * (jnp.maximum(prod, -qcc) - ern)  # [JAX-VEC]
+            th = th + lv / (cpair * pkc) * (jnp.maximum(prod, -qcc) - ern)  # [JAX-VEC] cpair: closed-over scalar
             qvv = jnp.maximum(qvv - jnp.maximum(prod, -qcc) + ern, 0.0)  # [JAX-VEC]
             qcc = qcc + jnp.maximum(prod, -qcc)        # [JAX-VEC]
             qrr = jnp.maximum(qrr - ern, 0.0)          # [JAX-VEC]
@@ -188,12 +189,12 @@ def kessler_run_core(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk,
 
     _vcolumn = jax.vmap(                               # [JAX-VMAP] columns are independent
         _column,
-        in_axes=(None, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+        in_axes=(None, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
         out_axes=(1, 1, 1, 1, 0, 1, 0),
     )
     (theta_n, qv_n, qc_n, qr_n, precl_n, relhum_n, bad_split) = _vcolumn(
-        dt, f5_col, rho_surf_col, z_below_top_col, r_o, rhalf_o, pc_o, z_o,
-        pk_o, cpair_o, theta_o, qv_o, qc_o, qr0_o, velqr0_o)
+        dt, rho_surf_col, z_below_top_col, r_o, rhalf_o, pc_o, z_o,
+        pk_o, theta_o, qv_o, qc_o, qr0_o, velqr0_o)
 
     # --- scatter back to the native level order ---
     if identity:                                       # [PY-IF] on [STATIC-INT] — resolved at trace time

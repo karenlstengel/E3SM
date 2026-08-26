@@ -16,10 +16,11 @@ JAX translation of the Fortran subroutine `kessler_update_timestep_final`.
 
 Dry static energy diagnostic at the end of the step:
     st_energy(i,klev) = temp*cpair + gravit*zm + phis(i)
-for klev = 1..nz over all columns (n1 = SIZE(cpair,1)). Arrays arrive in the
-core as (nz, ncol) float64; phis is (ncol,); `nz` is a static int. The
-MODULE variable `gravit` (kessler_update) follows the INOUT pattern: passed
-in (set by kessler_update_init), used, returned unchanged.
+for klev = 1..nz over all columns. `cpair` is a spatially-uniform physical
+constant (scalar). Other arrays arrive in the core as (nz, ncol) float64;
+phis is (ncol,); `nz` is a static int. The MODULE variable `gravit`
+(kessler_update) follows the INOUT pattern: passed in (set by
+kessler_update_init), used, returned unchanged.
 """
 
 
@@ -27,14 +28,14 @@ in (set by kessler_update_init), used, returned unchanged.
 def kessler_update_timestep_final_core(nz, cpair, temp, zm, phis, st_energy,
                                        errflg, gravit):
     """
-    Pure JAX compute. nz static; cpair/temp/zm/st_energy (nz, ncol) float64;
-    phis (ncol,) float64; gravit traced float64 scalar (MODULE var, INOUT).
-    Returns: st_energy, errflg, gravit
+    Pure JAX compute. nz static; cpair scalar; temp/zm/st_energy (nz, ncol)
+    float64; phis (ncol,) float64; gravit traced float64 scalar (MODULE
+    var, INOUT). Returns: st_energy, errflg, gravit
     """
     # Fortran: do klev=1,nz / do i=1,n1 — one fused elementwise expression on
     # the [:nz, :] block; phis(i) broadcast along the level axis.
     st_energy = st_energy.at[:nz, :].set(                                  # [JAX-VEC]
-        temp[:nz, :] * cpair[:nz, :] + gravit * zm[:nz, :] + phis[None, :])
+        temp[:nz, :] * cpair + gravit * zm[:nz, :] + phis[None, :])
     errflg = jnp.asarray(0, dtype=jnp.int32)                               # [JAX]
     return st_energy, errflg, gravit
 

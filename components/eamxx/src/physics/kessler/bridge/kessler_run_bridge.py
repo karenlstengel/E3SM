@@ -79,9 +79,8 @@ def kessler_run_bridge_device(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho,
     host bridge is this function wrapped in to_device / device_get).
     """
     # In-jit input reversal: reverse ALL axes on rank>=2
-    # (covers rank 3+; rank 0/1 pass through)
-    cpair = jnp.transpose(cpair)
-    rair = jnp.transpose(rair)
+    # (covers rank 3+; rank 0/1 pass through). cpair/rair are scalars,
+    # so they pass through unchanged.
     rho = jnp.transpose(rho)
     z = jnp.transpose(z)
     pk = jnp.transpose(pk)
@@ -126,9 +125,8 @@ def kessler_run_bridge(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk,
     Procedure type: COMPUTE
     Pattern: MODULE vars passed as INOUT parameters
     """
-    # Ship arrays to the device unchanged (pure H2D, no host permute)
-    cpair_dev = to_device(cpair)
-    rair_dev = to_device(rair)
+    # Ship arrays to the device unchanged (pure H2D, no host permute).
+    # cpair/rair are spatially-uniform scalars, passed through as-is.
     rho_dev = to_device(rho)
     z_dev = to_device(z)
     pk_dev = to_device(pk)
@@ -140,7 +138,7 @@ def kessler_run_bridge(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z, pk,
     relhum_dev = to_device(relhum)
 
     # Compute — in-jit layout conversion + jitted core
-    theta_out, qv_out, qc_out, qr_out, precl_out, relhum_out, errflg_out, lv, pref, rhoqr = kessler_run_bridge_device(ncol=ncol, nz=nz, dt=dt, lyr_surf=lyr_surf, lyr_toa=lyr_toa, cpair=cpair_dev, rair=rair_dev, rho=rho_dev, z=z_dev, pk=pk_dev, theta=theta_dev, qv=qv_dev, qc=qc_dev, qr=qr_dev, precl=precl_dev, relhum=relhum_dev, errflg=errflg, lv=lv, pref=pref, rhoqr=rhoqr)
+    theta_out, qv_out, qc_out, qr_out, precl_out, relhum_out, errflg_out, lv, pref, rhoqr = kessler_run_bridge_device(ncol=ncol, nz=nz, dt=dt, lyr_surf=lyr_surf, lyr_toa=lyr_toa, cpair=cpair, rair=rair, rho=rho_dev, z=z_dev, pk=pk_dev, theta=theta_dev, qv=qv_dev, qc=qc_dev, qr=qr_dev, precl=precl_dev, relhum=relhum_dev, errflg=errflg, lv=lv, pref=pref, rhoqr=rhoqr)
 
     # Convert outputs — ONE batched D2H (single sync); layout already
     # Fortran (ncol, nz) C-order

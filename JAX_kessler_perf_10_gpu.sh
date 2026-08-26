@@ -21,12 +21,12 @@ COMPSET=F2000-SCREAMv1-KESSLER
 RESOLUTION=ne30_ne30 #ne30pg2_ne30pg2,ne4pg2_ne4pg2
 DYCORE=theta-l_kokkos
 MACH=derecho
-MYCOMPILER=nvidia
+MYCOMPILER=nvidiagpu
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="JAX_T_ne30np4_10day_gpu"
-CASE_ROOT="$scratch/e3sm_test/${CASE_NAME}"
+CASE_NAME="JAX_ne30np4_10day_gpu"
+CASE_ROOT="$scratch/e3sm_test/JAX_v_Fortran_perf/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
 CASE_RUN_DIR=${CASE_ROOT}/run

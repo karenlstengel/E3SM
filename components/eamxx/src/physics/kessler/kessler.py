@@ -48,17 +48,25 @@ except ImportError:
 latvap = None
 pref = None
 rhoqr = None
-gravit = None 
+gravit = None
+cpair = None
+rair = None
 errmsg = ""
 errflg = 0
 scheme_name = "kessler"
 
-# latvap, P0, rhoqr, gravit
-def init(lv_in, pref_in, rhoqr_in, gravit_in):
-    global latvap, pref, rhoqr, gravit
+# latvap, P0, rhoqr, gravit, cpair, rair
+def init(lv_in, pref_in, rhoqr_in, gravit_in, cpair_in, rair_in):
+    global latvap, pref, rhoqr, gravit, cpair, rair
     global errmsg, errflg
 
     errmsg, errflg, latvap, pref, rhoqr = kessler_init_bridge(lv_in, pref_in, rhoqr_in, errmsg, errflg, latvap, pref, rhoqr)
+
+    # cpair/rair are spatially-uniform physical constants (not per-level
+    # MODULE state), so they are just stored here rather than threaded
+    # through kessler_init_bridge's INOUT pattern.
+    cpair = float(cpair_in)
+    rair = float(rair_in)
 
     # kessler_update carries its own MODULE variable `gravit` (INOUT,
     # threaded from here through every kessler_update_timestep_final call
@@ -69,9 +77,9 @@ def init(lv_in, pref_in, rhoqr_in, gravit_in):
 # calls the kessler_run function from https://github.com/NCAR/llm-fortran-modernization/tree/main/fortran2jax-kessler/_officialJAX
 # these arrays should be automatically updated back in EAMxx if everything is setup correctly.
 
-def run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, zm, pk, theta, qv, qc, qr, precl, relhum):
+def run(ncol, nz, dt, lyr_surf, lyr_toa, rho, zm, pk, theta, qv, qc, qr, precl, relhum):
 
-    global latvap, pref, rhoqr
+    global latvap, pref, rhoqr, cpair, rair
     global errmsg, errflg, scheme_name
 
     # Compute — kessler_run_bridge (contract 1, host-facing) handles the
@@ -140,8 +148,8 @@ def run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, zm, pk, theta, qv, qc
         except Exception:
             pass
 
-def update(ncol, nz, dt, cpair, zm, pk, theta, phis, temp, temp_prev, temp_tend, st_energy):
-    global gravit
+def update(ncol, nz, dt, zm, pk, theta, phis, temp, temp_prev, temp_tend, st_energy):
+    global gravit, cpair
     global errmsg, errflg
 
     # Contract 2 (device-resident): upload each array ONCE (to_device is a
@@ -150,11 +158,11 @@ def update(ncol, nz, dt, cpair, zm, pk, theta, phis, temp, temp_prev, temp_tend,
     # timestep_final entirely on the GPU with no transfers between phases,
     # then fetch ONCE at the end. Per-phase errflg is left on the device
     # (contract 2's own convention) and fetched together with the arrays,
-    # not checked per call.
+    # not checked per call. cpair is a spatially-uniform scalar, so it
+    # is passed through as-is (no device transfer needed).
     temp_d  = to_device(temp)
     theta_d = to_device(theta)
     exner_d = to_device(pk)
-    cpair_d = to_device(cpair)
     zm_d    = to_device(zm)
     phis_d  = to_device(phis)
     zeros_d = jnp.zeros((ncol, nz), dtype=jnp.float64)
@@ -190,7 +198,7 @@ def update(ncol, nz, dt, cpair, zm, pk, theta, phis, temp, temp_prev, temp_tend,
 
     _t0 = time.perf_counter()
     st_energy_d, e3, gravit = kessler_update_timestep_final_bridge_device(
-        nz=nz, cpair=cpair_d, temp=temp_d, zm=zm_d, phis=phis_d,
+        nz=nz, cpair=cpair, temp=temp_d, zm=zm_d, phis=phis_d,
         st_energy=zeros_d, errflg=0, gravit=gravit)
     if _log_perf_call is not None:
         try:

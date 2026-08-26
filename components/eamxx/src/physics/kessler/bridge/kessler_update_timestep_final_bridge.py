@@ -78,8 +78,8 @@ def kessler_update_timestep_final_bridge_device(nz, cpair, temp, zm, phis, st_en
     host bridge is this function wrapped in to_device / device_get).
     """
     # In-jit input reversal: reverse ALL axes on rank>=2
-    # (covers rank 3+; rank 0/1 pass through)
-    cpair = jnp.transpose(cpair)
+    # (covers rank 3+; rank 0/1 pass through). cpair is a scalar,
+    # so it passes through unchanged.
     temp = jnp.transpose(temp)
     zm = jnp.transpose(zm)
     st_energy = jnp.transpose(st_energy)
@@ -113,15 +113,15 @@ def kessler_update_timestep_final_bridge(nz, cpair, temp, zm, phis, st_energy, e
     Procedure type: COMPUTE
     Pattern: MODULE vars passed as INOUT parameters
     """
-    # Ship arrays to the device unchanged (pure H2D, no host permute)
-    cpair_dev = to_device(cpair)
+    # Ship arrays to the device unchanged (pure H2D, no host permute).
+    # cpair is a spatially-uniform scalar, passed through as-is.
     temp_dev = to_device(temp)
     zm_dev = to_device(zm)
     phis_dev = to_device(phis)
     st_energy_dev = to_device(st_energy)
 
     # Compute — in-jit layout conversion + jitted core
-    st_energy_out, errflg_out, gravit = kessler_update_timestep_final_bridge_device(nz=nz, cpair=cpair_dev, temp=temp_dev, zm=zm_dev, phis=phis_dev, st_energy=st_energy_dev, errflg=errflg, gravit=gravit)
+    st_energy_out, errflg_out, gravit = kessler_update_timestep_final_bridge_device(nz=nz, cpair=cpair, temp=temp_dev, zm=zm_dev, phis=phis_dev, st_energy=st_energy_dev, errflg=errflg, gravit=gravit)
 
     # Convert outputs — ONE batched D2H (single sync); layout already
     # Fortran (ncol, nz) C-order

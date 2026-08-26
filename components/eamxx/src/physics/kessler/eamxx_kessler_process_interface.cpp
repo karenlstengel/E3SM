@@ -118,8 +118,6 @@ void KesslerMicrophysics::create_requests () //set_grids(const std::shared_ptr<c
     add_field<Computed>("heat_flux",  scalar2d_layout, W/m2,      grid_name);
   }
 
-  add_field<Computed>("cpair", scalar3d_layout_mid, J/kg/K, grid_name, pack_size);
-  add_field<Computed>("rair",  scalar3d_layout_mid, J/kg/K, grid_name, pack_size);
   add_field<Computed>("z_mid",  scalar3d_layout_mid, m, grid_name, pack_size);
   add_field<Computed>("z_int",  scalar3d_layout_mid, m, grid_name, pack_size);
 
@@ -166,6 +164,8 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
   const Real latvap = PC::LatVap.value; // Latent heat of vaporization; lv_in
   const Real rhoqr  = PC::RHOW.value;   // rhoqr_in
   const Real gravit = PC::gravit.value; // gravitational acceleration
+  const Real Cpair  = PC::Cpair.value; // Specific heat of dry air at constant pressure
+  const Real Rair   = PC::Rair.value;  // Gas constant of dry air
 
   // m_params.set<std::string>("py_module_name","kessler_jax");
   const auto& py_module_name = m_params.get<std::string>("py_module_name");
@@ -175,28 +175,12 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
   m_atm_logger->info("[EAMxx] kessler py_module_path: "+ py_module_path);
 
 
-  // The JAX code currently keeps Cpair and Rair as 2D arrays so we need to set them here. 
   #ifdef EAMXX_HAS_PYTHON
-    const Real Cpair  = PC::Cpair.value; // Specific heat of dry air at constant pressure
-    const Real Rair   = PC::Rair.value;  // Gas constant of dry air
-    int nlevs = m_num_levs; // local var, to avoid accessing *this.
 
     if (has_py_module()) {
-      py_module_call("init", latvap, P0, rhoqr, gravit);
+      py_module_call("init", latvap, P0, rhoqr, gravit, Cpair, Rair);
       m_atm_logger->info("[EAMxx] kessler called python init");
     }
-
-    auto cpair = get_field_out("cpair").get_view<Real**>();
-    auto rair  = get_field_out("rair").get_view<Real**>();
-
-    Kokkos::parallel_for("py_air_const",KT::RangePolicy(0, m_num_cols * nlevs), KOKKOS_CLASS_LAMBDA (const int idx) { 
-    const int icol = idx/nlevs;
-    const int klev = idx%nlevs;
-
-    cpair(icol,klev)        = Cpair;
-    rair(icol,klev)         = Rair;
-    }
-  );
   #endif
   // kessler::kessler_eamxx_bridge_init(m_num_cols, m_num_levs, latvap, P0, rhoqr, gravit);
 }
@@ -339,8 +323,6 @@ void KesslerMicrophysics::run_impl (const double dt )
   auto qv     = get_field_out("qv");
   auto qc     = get_field_out("qc");
   auto qr     = get_field_out("qr");
-  auto cpair  = get_field_out("cpair");
-  auto rair   = get_field_out("rair");
   auto rho    = get_field_out("rho");
   auto z_mid  = get_field_out("z_mid");
   auto pk     = get_field_out("pk");
@@ -359,7 +341,7 @@ void KesslerMicrophysics::run_impl (const double dt )
   m_atm_logger->info("[EAMxx] kessler run_impl: in python check");
     if (has_py_module()) {
       pybind11::array py_qv, py_qc, py_qr,
-                      py_cpair, py_rair, py_rho, py_z_mid, py_pk,
+                      py_rho, py_z_mid, py_pk,
                       py_theta, py_precl, py_relhum,
                       py_phis, py_temp, py_temp_prev, py_temp_tend, py_st_energy;
 
@@ -367,8 +349,6 @@ void KesslerMicrophysics::run_impl (const double dt )
         py_qv                = get_py_field_dev("qv");
         py_qc                = get_py_field_dev("qc");
         py_qr                = get_py_field_dev("qr");
-        py_cpair             = get_py_field_dev("cpair");
-        py_rair              = get_py_field_dev("rair");
         py_rho               = get_py_field_dev("rho");
         py_z_mid             = get_py_field_dev("z_mid");
         py_pk                = get_py_field_dev("pk");
@@ -386,8 +366,6 @@ void KesslerMicrophysics::run_impl (const double dt )
         qv.sync_to_host();
         qc.sync_to_host();
         qr.sync_to_host();
-        cpair.sync_to_host();
-        rair.sync_to_host();
         rho.sync_to_host();
         z_mid.sync_to_host();
         pk.sync_to_host();
@@ -403,8 +381,6 @@ void KesslerMicrophysics::run_impl (const double dt )
         py_qv                = get_py_field_host("qv");
         py_qc                = get_py_field_host("qc");
         py_qr                = get_py_field_host("qr");
-        py_cpair             = get_py_field_host("cpair");
-        py_rair              = get_py_field_host("rair");
         py_rho               = get_py_field_host("rho");
         py_z_mid             = get_py_field_host("z_mid");
         py_pk                = get_py_field_host("pk");
@@ -423,8 +399,6 @@ void KesslerMicrophysics::run_impl (const double dt )
       // thickness (dz)
       start_timer("EAMxx::kessler::run::py_run");
       py_module_call("run", m_num_cols, nlevs, dt_timestep, lyr_surf, lyr_toa,
-                    py_cpair,
-                    py_rair,
                     py_rho,
                     py_z_mid,
                     py_pk,
@@ -439,7 +413,6 @@ void KesslerMicrophysics::run_impl (const double dt )
 
       start_timer("EAMxx::kessler::run::py_update");
       py_module_call("update", m_num_cols, nlevs, dt_timestep,
-                    py_cpair,
                     py_z_mid,
                     py_pk,
                     py_theta,
@@ -456,8 +429,6 @@ void KesslerMicrophysics::run_impl (const double dt )
         qv.sync_to_dev();
         qr.sync_to_dev();
         qc.sync_to_dev();
-        cpair.sync_to_dev();
-        rair.sync_to_dev();
         pk.sync_to_dev();
         theta.sync_to_dev();
         precl.sync_to_dev();

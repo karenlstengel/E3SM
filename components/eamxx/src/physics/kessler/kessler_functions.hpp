@@ -4,6 +4,7 @@
 #include "share/physics/physics_constants.hpp"
 #include "share/physics/eamxx_common_physics_functions.hpp"
 #include "share/core/eamxx_types.hpp"
+#include "share/util/eamxx_timing.hpp"
 
 #include <ekat_pack_kokkos.hpp>
 #include <ekat_team_policy_utils.hpp>
@@ -53,8 +54,6 @@ struct params_helpers {
     params_helpers() = default;
 
     // Needed for kessler_run or to compute things to pass to kessler
-    // real(kind_phys),  intent(in)    :: cpair(:,:) ! Specific_heat_of_dry_air_at_constant_pressure (J/kg/K)
-    // real(kind_phys),  intent(in)    :: rair(:,:)  ! Gas constant of dry air (J/kg/K)
     // real(kind_phys),  intent(in)    :: rho(:,:)   ! Dry air density (kg/m^3)
     // real(kind_phys),  intent(in)    :: z_mid(:,:) ! Heights of thermo. levels (m)
     // real(kind_phys),  intent(in)    :: pk(:,:)    ! Exner function (p/p0)**(R/cp)
@@ -71,8 +70,6 @@ struct params_helpers {
     view_1d<Scalar>  phis;
 
     // kessler_run Fortran holders/in Fortran format
-    fview_2dl<Real>  f_cpair;
-    fview_2dl<Real>  f_rair;
     fview_2dl<Real>  f_rho;
     fview_2dl<Real>  f_pk;
     fview_2dl<Real>  f_z_mid;
@@ -81,9 +78,7 @@ struct params_helpers {
 
     #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
       // Host mirror views for passing to Fortran code on CPU
-      
-      view_2dh<Real>   h_cpair;
-      view_2dh<Real>   h_rair;
+
       view_2dh<Real>   h_rho;
       view_2dh<Real>   h_pk;
       view_2dh<Real>   h_z_mid;
@@ -94,16 +89,11 @@ struct params_helpers {
     static constexpr int num_1d_intgr   = 0;  // number of 1D integer views
     static constexpr int num_1d_scalr   = 1;  // number of 1D scalar views (phis or f_phis)
     static constexpr int num_2d_c       = 4;  // number of 2D fields (dz, rho, pk, z_mid)
-    static constexpr int num_2d_f       = 5;  // number of 2D fields (f_cpair, f_rair, f_rho, f_pk, f_z_mid)
+    static constexpr int num_2d_f       = 3;  // number of 2D fields (f_rho, f_pk, f_z_mid)
     static constexpr int num_2d_intlv_c = 1;  // for z_int, which is an interface variable.
-    
+
     // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
     void init(int ncol_in, int pver_in) { // TODO - Kokko-ize this
-      using PC  = scream::physics::Constants<Real>;
-
-      const Real cpair  = PC::Cpair.value; // Specific heat of dry air at constant pressure
-      const Real Rair   = PC::Rair.value;  // Gas constant of dry air
-
       Real init_fill_value = 0;
 
       // using MDPolicy = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
@@ -116,8 +106,6 @@ struct params_helpers {
         KOKKOS_CLASS_LAMBDA(const int i) {
           const int icol = i / pver_in;
           const int klev = i % pver_in;
-          f_cpair(icol, klev) = cpair;
-          f_rair(icol, klev) = Rair;
           f_rho(icol, klev) = init_fill_value;
           f_pk(icol, klev) = init_fill_value;
           f_z_mid(icol, klev) = init_fill_value;
@@ -140,7 +128,6 @@ struct params_helpers {
           KOKKOS_CLASS_LAMBDA(const int i) {
             const int icol            = i / pver_in;
             const int klev            = i % pver_in;
-            // Don't need to transpose cpair, rair
 
             f_rho(icol, klev) = rho(icol, klev / Pack::n)[klev % Pack::n];
             f_pk(icol, klev) = pk(icol, klev / Pack::n)[klev % Pack::n];
@@ -151,23 +138,23 @@ struct params_helpers {
         );
         #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
           // Copy from device to host mirrors for Fortran
-          
-          Kokkos::deep_copy(h_cpair, f_cpair);
-          Kokkos::deep_copy(h_rair,  f_rair);
+          start_timer("EAMxx::kessler::run::sync_to_host");
           Kokkos::deep_copy(h_rho,   f_rho);
           Kokkos::deep_copy(h_pk,    f_pk);
           Kokkos::deep_copy(h_z_mid, f_z_mid);
           Kokkos::deep_copy(h_phis,  f_phis);
+          stop_timer("EAMxx::kessler::run::sync_to_host");
         #endif
       }
       if (D == ekat::TransposeDirection::f2c) {  // Not needed but leaving in just in case/temporary
         #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
           // Copy from host mirrors back to device
-          
+          start_timer("EAMxx::kessler::run::sync_to_dev");
           Kokkos::deep_copy(f_rho,   h_rho);
           Kokkos::deep_copy(f_pk,    h_pk);
           Kokkos::deep_copy(f_z_mid, h_z_mid);
           Kokkos::deep_copy(f_phis,  h_phis);
+          stop_timer("EAMxx::kessler::run::sync_to_dev");
         #endif
 
         Kokkos::parallel_for(
@@ -175,7 +162,6 @@ struct params_helpers {
             KOKKOS_CLASS_LAMBDA(const int i) {
               const int icol = i / pver_in;
               const int klev = i % pver_in;
-              // Don't need to transpose cpair, rair
 
               rho(icol, klev / Pack::n)[klev % Pack::n] = f_rho(icol, klev);
               pk(icol, klev / Pack::n)[klev % Pack::n] = f_pk(icol, klev);
@@ -310,7 +296,7 @@ struct params_computed {
         );
         #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
           // Copy from device to host mirrors for Fortran
-          
+          start_timer("EAMxx::kessler::run::sync_to_host");
           Kokkos::deep_copy(h_theta, f_theta);
           Kokkos::deep_copy(h_qv, f_qv);
           Kokkos::deep_copy(h_qc, f_qc);
@@ -321,12 +307,13 @@ struct params_computed {
           Kokkos::deep_copy(h_temp, f_temp);
           Kokkos::deep_copy(h_temp_tend, f_temp_tend);
           Kokkos::deep_copy(h_st_energy, f_st_energy);
+          stop_timer("EAMxx::kessler::run::sync_to_host");
         #endif
       }
       if (D == ekat::TransposeDirection::f2c) {
         #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
           // Copy from host mirrors back to device
-          
+          start_timer("EAMxx::kessler::run::sync_to_dev");
           Kokkos::deep_copy(f_theta, h_theta);
           Kokkos::deep_copy(f_qv, h_qv);
           Kokkos::deep_copy(f_qc, h_qc);
@@ -337,6 +324,7 @@ struct params_computed {
           Kokkos::deep_copy(f_temp, h_temp);
           Kokkos::deep_copy(f_temp_tend, h_temp_tend);
           Kokkos::deep_copy(f_st_energy, h_st_energy);
+          stop_timer("EAMxx::kessler::run::sync_to_dev");
         #endif
 
         Kokkos::parallel_for(

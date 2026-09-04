@@ -39,7 +39,7 @@ module kessler_eamxx_bridge_main
 contains
 !===================================================================================================
 
-subroutine kessler_eamxx_bridge_init_c( pcol_in, pver_in, lv_in, pref_in, rhoqr_in) bind(C, name="kessler_eamxx_bridge_init_c")
+subroutine kessler_eamxx_bridge_init_c( pcol_in, pver_in, lv_in, pref_in, rhoqr_in, cpair_in, rair_in) bind(C, name="kessler_eamxx_bridge_init_c")
   ! Define uses here
   !-----------------------------------------------------------------------------
   ! Arguments
@@ -50,6 +50,8 @@ subroutine kessler_eamxx_bridge_init_c( pcol_in, pver_in, lv_in, pref_in, rhoqr_
   real(kind=c_real), value,    intent(in)  :: lv_in    ! latent heat of vaporization, J/kg
   real(kind=c_real), value,    intent(in)  :: pref_in  ! reference pressure, Pa
   real(kind=c_real), value,    intent(in)  :: rhoqr_in ! density of fresh liquid water, kg/m^3
+  real(kind=c_real), value,    intent(in)  :: cpair_in ! specific heat of dry air at constant pressure, J/kg/K
+  real(kind=c_real), value,    intent(in)  :: rair_in  ! gas constant of dry air, J/kg/K
 
   integer :: mpi_rank, ierror
 
@@ -61,8 +63,8 @@ subroutine kessler_eamxx_bridge_init_c( pcol_in, pver_in, lv_in, pref_in, rhoqr_
   errflg = 0
   scheme_name = "KESSLER"
 
-  ! Call the Kessler init function 
-  call kessler_init(lv_in, pref_in, rhoqr_in, errmsg, errflg)
+  ! Call the Kessler init function
+  call kessler_init(lv_in, pref_in, rhoqr_in, cpair_in, rair_in, errmsg, errflg)
 
   call mpi_comm_rank(MPI_COMM_WORLD, mpi_rank, ierror)
   masterproc = .false.
@@ -72,7 +74,7 @@ end subroutine kessler_eamxx_bridge_init_c
 
 !===================================================================================================
 
-subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z_mid, &
+subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, rho, z_mid, &
         pk, theta, qv, qc, qr, precl, relhum) bind(C, name="kessler_eamxx_bridge_run_c")
   ! Define uses here
   !-----------------------------------------------------------------------------
@@ -82,8 +84,6 @@ subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, r
   real(kind=c_real),     value,                intent(in)    :: dt       ! Physics time step (s)
   integer(kind=c_int), value,                intent(in)    :: lyr_surf ! Index of surface layer in the vertical coordinate
   integer(kind=c_int), value,                intent(in)    :: lyr_toa  ! Index of top of the atmosphere in the vertical coordinate
-  real(kind=c_real),  dimension(pcols,pver), intent(in)    :: cpair    ! Specific_heat_of_dry_air_at_constant_pressure (J/kg/K)
-  real(kind=c_real),    dimension(pcols,pver), intent(in)    :: rair     ! Gas constant of dry air (J/kg/K)
   real(kind=c_real),    dimension(pcols,pver), intent(in)    :: rho      ! Dry air density (kg/m^3)
   real(kind=c_real),    dimension(pcols,pver), intent(in)    :: z_mid    ! Heights of thermo. levels (m)
   real(kind=c_real),    dimension(pcols,pver), intent(in)    :: pk       ! Exner function (p/p0)**(R/cp)
@@ -104,7 +104,7 @@ subroutine kessler_eamxx_bridge_run_c( ncol, nz, dt, lyr_surf, lyr_toa, cpair, r
 
   ! Call the Kessler run function
   call system_clock(count_start, count_rate)
-  call kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, cpair, rair, rho, z_mid, &
+  call kessler_run(ncol, nz, dt, lyr_surf, lyr_toa, rho, z_mid, &
         pk, theta, qv, qc, qr, precl, relhum, scheme_name, errmsg, errflg)
   call system_clock(count_end)
   elapsed = real(count_end - count_start, kind_phys) / real(count_rate, kind_phys)

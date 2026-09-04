@@ -36,7 +36,7 @@ module kessler_eamxx_bridge_update
 contains
 !===================================================================================================
 
-subroutine kessler_eamxx_bridge_update_init_c(pcol_in, pver_in, gravit_in) bind(C, name="kessler_eamxx_bridge_update_init_c")
+subroutine kessler_eamxx_bridge_update_init_c(pcol_in, pver_in, gravit_in, cpair_in) bind(C, name="kessler_eamxx_bridge_update_init_c")
   ! Define uses here
   !-----------------------------------------------------------------------------
   ! Arguments
@@ -45,6 +45,7 @@ subroutine kessler_eamxx_bridge_update_init_c(pcol_in, pver_in, gravit_in) bind(
 
   ! Things to pass along to the Kessler base code
   real(kind=c_real), value,    intent(in)  :: gravit_in    ! gravity acceleration m/s^2
+  real(kind=c_real), value,    intent(in)  :: cpair_in     ! specific heat of dry air at constant pressure, J/kg/K
 
   ! Set dimensions of fields
   pcols = pcol_in
@@ -54,22 +55,21 @@ subroutine kessler_eamxx_bridge_update_init_c(pcol_in, pver_in, gravit_in) bind(
   errflg = 0
   scheme_name = "KESSLER"
 
-  ! Call the Kessler update init function 
-  call kessler_update_init(gravit_in, errmsg, errflg)
+  ! Call the Kessler update init function
+  call kessler_update_init(gravit_in, cpair_in, errmsg, errflg)
 
 end subroutine kessler_eamxx_bridge_update_init_c
 
 !===================================================================================================
 
-subroutine kessler_eamxx_bridge_update_c( ncol, nz, dt, cpair, pk, theta, temp_prev, temp, temp_tend, z_mid, phis, st_energy) bind(C, name="kessler_eamxx_bridge_update_c")
+subroutine kessler_eamxx_bridge_update_c( ncol, nz, dt, pk, theta, temp_prev, temp, temp_tend, z_mid, phis, st_energy) bind(C, name="kessler_eamxx_bridge_update_c")
   ! Define uses here
   !-----------------------------------------------------------------------------
   ! Arguments
-  integer(kind=c_int), value,                intent(in)    :: ncol      ! Number of columns
-  integer(kind=c_int), value,                intent(in)    :: nz        ! Number of vertical levels
-  real(kind=c_real),     value,                intent(in)    :: dt        ! Physics time step (s)
+  integer(kind=c_int),  value,                intent(in)    :: ncol      ! Number of columns
+  integer(kind=c_int),  value,                intent(in)    :: nz        ! Number of vertical levels
+  real(kind=c_real),    value,                intent(in)    :: dt        ! Physics time step (s)
 
-  real(kind=c_real),    dimension(pcols,pver), intent(in)    :: cpair     ! Specific_heat_of_dry_air_at_constant_pressure (J/kg/K)
   real(kind=c_real),    dimension(pcols,pver), intent(in)    :: pk        ! Exner function (p/p0)**(R/cp)
   real(kind=c_real),    dimension(pcols,pver), intent(in)    :: theta     ! Potential temperature (K)
 
@@ -98,7 +98,7 @@ subroutine kessler_eamxx_bridge_update_c( ncol, nz, dt, cpair, pk, theta, temp_p
     call log_call('kessler_update_run', ncol, nz, dt, elapsed)
 
     call system_clock(count_start, count_rate)
-    call kessler_update_timestep_final(nz, ncol, cpair, temp, z_mid, phis, st_energy, errflg, errmsg)
+    call kessler_update_timestep_final(nz, ncol, temp, z_mid, phis, st_energy, errflg, errmsg)
     call system_clock(count_end)
     elapsed = real(count_end - count_start, kind_phys) / real(count_rate, kind_phys)
     call log_call('kessler_update_timestep_final', ncol, nz, dt, elapsed)
@@ -116,7 +116,7 @@ subroutine kessler_eamxx_bridge_update_c( ncol, nz, dt, cpair, pk, theta, temp_p
     call log_call('kessler_update_run', ncol, nz, dt, elapsed)
 
     call system_clock(count_start, count_rate)
-    call kessler_update_timestep_final(nz, cpair, temp, z_mid, phis, st_energy, errflg, errmsg)
+    call kessler_update_timestep_final(nz, temp, z_mid, phis, st_energy, errflg, errmsg)
     call system_clock(count_end)
     elapsed = real(count_end - count_start, kind_phys) / real(count_rate, kind_phys)
     call log_call('kessler_update_timestep_final', ncol, nz, dt, elapsed)

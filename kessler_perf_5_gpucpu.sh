@@ -9,7 +9,7 @@ scratch=/glade/derecho/scratch/$user/E3SM
 ####################################################################
 # Machine, compset, etc.
 ####################################################################
-CCSMROOT=${scratch}_claude/E3SM
+CCSMROOT=${scratch}/E3SM
 # CCSMROOT=/glade/derecho/scratch/$user/E3SM/E3SM
 COMPSET=F2000-SCREAMv1-KESSLER
 RESOLUTION=ne30_ne30 #ne30pg2_ne30pg2,ne4pg2_ne4pg2

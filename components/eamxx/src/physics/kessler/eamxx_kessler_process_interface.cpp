@@ -140,15 +140,15 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
   const Real P0     = PC::P0.value;     // Reference pressure; pref_in
   const Real latvap = PC::LatVap.value; // Latent heat of vaporization; lv_in
   const Real rhoqr  = PC::RHOW.value;   // rhoqr_in
+  const Real cpair  = PC::Cpair.value;  // Specific heat of dry air at constant pressure; cpair_in
+  const Real rair   = PC::Rair.value;   // Gas constant of dry air; rair_in
   const Real gravit = PC::gravit.value; // gravitational acceleration
 
-  kessler::kessler_eamxx_bridge_init(m_num_cols, m_num_levs, latvap, P0, rhoqr, gravit);
+  kessler::kessler_eamxx_bridge_init(m_num_cols, m_num_levs, latvap, P0, rhoqr, cpair, rair, gravit);
 
   #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
     // Allocate host mirror views for GPU -> CPU Fortran bridge
-    
-    params_helpers.h_cpair      = KMF::view_2dh<Real>("kessler.h_cpair",     m_num_cols, m_num_levs);
-    params_helpers.h_rair       = KMF::view_2dh<Real>("kessler.h_rair",      m_num_cols, m_num_levs);
+
     params_helpers.h_rho        = KMF::view_2dh<Real>("kessler.h_rho",       m_num_cols, m_num_levs);
     params_helpers.h_pk         = KMF::view_2dh<Real>("kessler.h_pk",        m_num_cols, m_num_levs);
     params_helpers.h_z_mid      = KMF::view_2dh<Real>("kessler.h_z_mid",     m_num_cols, m_num_levs);
@@ -413,7 +413,7 @@ size_t KesslerMicrophysics::requested_buffer_size_in_bytes() const
   buffer_size+= num_1d_scalr   * sizeof(Real)   * m_num_cols;                  // should be 2, for fortran holders
   buffer_size+= num_2d_midlv_c * sizeof(Pack)  * m_num_cols * nlevm_packs;    // should be 13, C++ holders
   buffer_size+= num_2d_intlv_c * sizeof(Pack)  * m_num_cols * nlev_int_packs; // should be 1, C++ holders
-  buffer_size+= num_2d_midlv_f * sizeof(Real)   * m_num_cols * m_num_levs;     // should be 14, for fortran holders
+  buffer_size+= num_2d_midlv_f * sizeof(Real)   * m_num_cols * m_num_levs;     // should be 12, for fortran holders
 
   return buffer_size;
 }
@@ -464,9 +464,7 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
   Real* r_mem = reinterpret_cast<Real*>(r1_mem);
   //----------------------------------------------------------------------------
   // 2D "f_" views
-  KMF::fview_2dl<Real>* midlv_f_ptrs[num_2d_midlv_f] = { &params_helpers.f_cpair,
-                                                         &params_helpers.f_rair,
-                                                         &params_helpers.f_rho,
+  KMF::fview_2dl<Real>* midlv_f_ptrs[num_2d_midlv_f] = { &params_helpers.f_rho,
                                                          &params_helpers.f_pk,
                                                          &params_helpers.f_z_mid,
                                                          &params_computed.f_theta,

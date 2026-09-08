@@ -1,12 +1,13 @@
 #include "analytic_conditions/dcmip2016/eamxx_dcmip2016_ic_process_interface.hpp"
 #include "analytic_conditions/dcmip2016/dcmip2016_functions.hpp"
 
-#include "share/util/eamxx_units.hpp"
+#include <ekat_units.hpp>
 #include "share/physics/physics_constants.hpp"
 
 namespace scream {
 
 using namespace ekat::units;
+using namespace ShortFieldTagsNames;
 
 // ==========================================================================
 // create_requests

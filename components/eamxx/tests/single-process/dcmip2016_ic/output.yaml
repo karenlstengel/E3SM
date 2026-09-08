@@ -1,0 +1,19 @@
+%YAML 1.1
+---
+filename_prefix: dcmip2016_ic_standalone_output
+averaging_type: instant
+fields:
+  physics_gll:
+    field_names:
+      - T_mid
+      - horiz_winds
+      - ps
+      - phis
+      - qv
+      - qc
+      - qr
+
+output_control:
+  frequency: 1
+  frequency_units: nsteps
+...

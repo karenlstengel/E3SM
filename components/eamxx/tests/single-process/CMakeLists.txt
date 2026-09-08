@@ -1,5 +1,6 @@
 if ("${SCREAM_DYNAMICS_DYCORE}" STREQUAL "HOMME")
   add_subdirectory(homme)
+  add_subdirectory(dcmip2016_ic)
 endif()
 add_subdirectory(p3)
 add_subdirectory(shoc)

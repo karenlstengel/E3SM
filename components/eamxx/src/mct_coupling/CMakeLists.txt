@@ -42,6 +42,7 @@ set (SCREAM_LIBS
      iop_forcing
      nudging
      tms
+     dcmip2016_ic
 )
 
 # ZM is not always on yet

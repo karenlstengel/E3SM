@@ -377,7 +377,13 @@ def apply_change(xml_root, node, new_value, append_this, remove_this=False):
     # If we detect that this node is an atm proc group, don't modify the text, but do something els
     if node.tag=="atm_procs_list":
         parent_map = create_parent_map(xml_root)
-        group = get_parents(node,parent_map)[-1]
+        # The owning group is node's direct parent. get_parents() excludes the
+        # search root from its result, so it returns [] (and [-1] raises)
+        # when the group being edited *is* xml_root itself -- e.g. when
+        # changing the top-level eamxx::atm_procs_list, where xml_root is the
+        # eamxx group node being regenerated. Look up the direct parent
+        # instead of relying on get_parents() for this.
+        group = parent_map[node]
         return modify_ap_list(group, new_value, append_this, remove_this)
 
     if append_this:

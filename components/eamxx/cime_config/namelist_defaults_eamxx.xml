@@ -948,7 +948,9 @@ be lost if SCREAM_HACK_XML is not enabled.
     <se_topology COMPSET=".*DP-EAMxx">plane</se_topology>
     <se_tstep type="real" constraints="gt 0">UNSET</se_tstep>
     <se_tstep hgrid="ne4np4">600</se_tstep>
+    <se_tstep hgrid="ne16np4">300</se_tstep>
     <se_tstep hgrid="ne30np4">300</se_tstep>
+    <se_tstep hgrid="ne60np4">200</se_tstep>
     <se_tstep hgrid="ne32np4">300</se_tstep>
     <se_tstep hgrid="ne64np4">150</se_tstep>
     <se_tstep hgrid="ne128np4">75</se_tstep>

@@ -23,11 +23,11 @@ if (TARGET eamxx_physics)
   target_link_libraries(eamxx_physics INTERFACE kessler)
 endif()
 
-# Standalone driver executable
-if (NOT SCREAM_LIB_ONLY)
-  add_executable(driver_kessler driver_kessler.cpp)
-  target_link_libraries(driver_kessler kessler scream_share)
-  target_include_directories(driver_kessler PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-  )
-endif()
+# # Standalone driver executable
+# if (NOT SCREAM_LIB_ONLY)
+#   add_executable(driver_kessler driver_kessler.cpp)
+#   target_link_libraries(driver_kessler kessler scream_share)
+#   target_include_directories(driver_kessler PRIVATE
+#     ${CMAKE_CURRENT_SOURCE_DIR}
+#   )
+# endif()

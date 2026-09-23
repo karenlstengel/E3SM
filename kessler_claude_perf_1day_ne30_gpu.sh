@@ -10,6 +10,7 @@ scratch=/glade/derecho/scratch/$user/E3SM
 # Machine, compset, etc.
 ####################################################################
 CCSMROOT=${scratch}/E3SM
+# CCSMROOT=/glade/derecho/scratch/$user/E3SM/E3SM
 COMPSET=F2000-SCREAMv1-KESSLER
 RESOLUTION=ne30_ne30 #ne30pg2_ne30pg2,ne4pg2_ne4pg2
 DYCORE=theta-l_kokkos
@@ -18,7 +19,7 @@ MYCOMPILER=nvidiagpu
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="CPP_ne30np4_10day_gpu"
+CASE_NAME="CPP_ne30np4_1day_gpu"
 CASE_ROOT="$scratch/e3sm_test/JAX_v_Fortran_perf/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
@@ -71,7 +72,7 @@ cd $CASE_SCRIPTS_DIR
 # ./atmchange physics::atm_procs_list=mac_aero_mic # this removes the rrtmgp physics
 # ./atmchange mac_aero_mic::atm_procs_list=kessler #kessler
 # ./atmchange save_field_manager_content=true
-./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control_JAX.yml
+# ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control_IC.yml
 ./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/FKESSLER_NE30NP4.cam.i.moist_baroclinic_wave_dcmip2016.nc
 ./atmchange enable_fine_grain_timers=false
 
@@ -91,7 +92,7 @@ cd $CASE_SCRIPTS_DIR
 # ####################################################################
 # Run E3SM
 # ####################################################################
-cd $CASE_SCRIPTS_DIR
+# cd $CASE_SCRIPTS_DIR
 
 ./xmlchange RUN_TYPE="startup"
 if [[ $COMPSET == *"F20TR"* ]]; then
@@ -103,8 +104,8 @@ else
 fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
-./xmlchange STOP_N='10',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
-./xmlchange JOB_WALLCLOCK_TIME='07:00:00'
+./xmlchange STOP_N='1',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
+./xmlchange JOB_WALLCLOCK_TIME='01:00:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE
 

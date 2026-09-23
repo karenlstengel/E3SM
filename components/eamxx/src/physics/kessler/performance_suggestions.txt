@@ -51,3 +51,142 @@ Kessler Kokkos Performance Suggestions
    per column. For small nk_sed on CPU this has team-formation overhead. After
    the velqr_update kernel, this could be folded into a fused kernel using
    Kokkos::atomic_min or by doing the reduction inline per column.
+
+7. WORKSPACE VS. NO-WORKSPACE FOR THE 10 SCRATCH ARRAYS (2026-09-22)
+=======================================================================
+
+Follow-up on item 1. Current state of the working tree is mid-refactor and
+does not compile, independent of which design below is chosen:
+  - kessler_functions_impl.hpp's kessler_run reads ws.r, ws.rhalf, ws.velqr,
+    ws.sed, ws.pc, ws.f5, ws.dt0, ws.mask, ws.time_counter, ws.precl_acc as
+    if `ws` were an ambient workspace, but kessler_functions.hpp's kessler_run
+    signature has no Workspace/ws parameter (and it's a static function, so
+    there is no implicit member either).
+  - The same function also reads z(col,k) (needed for the sedimentation
+    height difference z(kup)-z(k)), but the signature only has `dz`
+    (layer thickness), not `z` (level height). This needs resolving
+    regardless of the workspace decision -- either pass both z and dz, or
+    derive z from a cumulative sum of dz once at the top of kessler_run.
+  - eamxx_kessler_process_interface.cpp's run_impl calls kessler_run with
+    ncols/lyr_surf/exner that are never declared in run_impl (should be
+    m_num_cols / the actual lyr_surf local / pk), and omits the required
+    pref argument.
+  - driver_kessler.cpp still builds a KF::Workspace ws and calls the old
+    12-arg kessler_run(..., KesslerData kd, ..., ws) form; neither
+    Workspace nor KesslerData exist in the current header.
+  These call-site / z-vs-dz fixes are needed either way and are not
+  duplicated between the two plans below.
+
+Plan A: keep a persistent workspace (pre-allocated once, reused every call)
+----------------------------------------------------------------------------
+  This is what item 1 above asks for, and matches the existing P3/SHOC
+  pattern in this codebase (Buffer struct + ATMBufferManager +
+  init_buffers()/requested_buffer_size_in_bytes()).
+
+  Confirmed from atmosphere_driver.cpp / atmosphere_process_group.cpp:
+    - AtmosphereDriver::initialize_atm_procs() automatically calls
+      requested_buffer_size_in_bytes() then init_buffers() on every
+      registered AtmosphereProcess (atmosphere_driver.cpp:1559-1561), via
+      AtmosphereProcessGroup forwarding both calls to each child process
+      (atmosphere_process_group.cpp:668-683). No manual registration
+      needed -- but the base class default is a no-op / assert(size==0)
+      (atmosphere_process.hpp:216,220-225), so overriding only one of the
+      two methods fails an EKAT_REQUIRE_MSG at runtime rather than being
+      silently skipped.
+    - P3 and SHOC do NOT allocate 10 separate Kokkos::Views in
+      init_buffers(). They take one contiguous Real* from
+      buffer_manager.get_memory() and construct UNMANAGED views at
+      successive offsets (e.g. scalar_1d_view_t(mem, m_num_cols)),
+      advancing the pointer by each view's .size(), then assert the
+      running total equals requested_buffer_size_in_bytes()
+      (eamxx_p3_process_interface.cpp:190-262, eamxx_shoc_process_interface.cpp:150-252).
+      Kessler's Buffer/Workspace should follow the same offset-carving
+      pattern: 6 unmanaged view_2d of size ncols*nlevs (r, rhalf, velqr,
+      sed, pc, f5) + 4 unmanaged view_1d of size ncols (dt0, mask,
+      time_counter, precl_acc), all carved from one pointer -- not 10
+      independently-named Kokkos::View constructions like
+      driver_kessler.cpp currently does (that standalone driver doesn't
+      go through ATMBufferManager, so it can keep its own simpler
+      separately-allocated views as long as the field names/types match
+      what kessler_run expects).
+
+  Changes:
+    1. kessler_functions.hpp: add back a Workspace struct (6x view_2d +
+       4x view_1d) and a `const Workspace& ws` parameter to kessler_run.
+    2. kessler_functions_impl.hpp: keep the existing ws.* lines, just make
+       ws a real parameter again; fix z vs dz as above.
+    3. eamxx_kessler_process_interface.hpp: add a Buffer struct (mirroring
+       P3/SHOC), requested_buffer_size_in_bytes(), init_buffers(const
+       ATMBufferManager&), and an m_buffer member.
+    4. eamxx_kessler_process_interface.cpp: implement those two methods
+       (size = 6*ncols*nlevs + 4*ncols reals) and fix run_impl's call site.
+    5. driver_kessler.cpp: re-sync its hand-built Workspace fields and the
+       kessler_run argument order with the new (non-KesslerData) signature.
+
+  Pros:
+    - One allocation per case instead of ~10 device allocs/frees every
+      physics timestep -- the "high impact on GPU" cost in item 1.
+    - Matches the existing P3/SHOC idiom -- familiar to reviewers.
+    - Can share ATMBufferManager's pooled memory across processes,
+      reducing total device footprint vs. independent per-process allocs.
+    - Leaves room to add more scratch fields later without reopening the
+      alloc/free question.
+
+  Cons:
+    - More plumbing: a struct, two lifecycle hooks, and a standalone test
+      driver (driver_kessler.cpp) that must stay in sync with the
+      production Buffer shape (two places construct matching views).
+    - Introduces persistent state into something the header currently
+      calls "a stateless struct" -- update that comment if this path is
+      taken.
+    - If ncols/nlevs ever changed without re-running init_buffers, reads/
+      writes would go out of bounds -- low risk today since grid size is
+      fixed per case, but worth noting.
+
+Plan B: no workspace -- allocate scratch fresh inside kessler_run every call
+------------------------------------------------------------------------------
+  Matches kessler_run's own top-of-function docstring in
+  kessler_functions_impl.hpp ("Scratch arrays ... are allocated as Kokkos
+  views here and freed on return") -- i.e. make the code match that
+  existing comment instead of the other way around.
+
+  Changes:
+    1. kessler_functions.hpp: no Workspace type, no extra parameter --
+       signature stays as-is.
+    2. kessler_functions_impl.hpp: replace each ws.* with a local
+       view_2d<Scalar>/view_1d<Scalar> constructed at the top of
+       kessler_run (still need the z vs dz fix independently).
+    3. eamxx_kessler_process_interface.hpp/.cpp: no Buffer, no
+       init_buffers/requested_buffer_size_in_bytes -- just fix the
+       existing run_impl call-site bugs (missing pref, ncols->m_num_cols,
+       exner->pk, undefined lyr_surf).
+    4. driver_kessler.cpp: delete the KF::Workspace block; call
+       kessler_run directly with the 18 scalar/view args.
+
+  Pros:
+    - Simplest code to read/reason about -- kessler_run is genuinely
+      self-contained, matching its own docstring and the "stateless"
+      framing at the top of the header.
+    - One calling convention everywhere (driver and production interface
+      look identical) -- nothing to keep in sync.
+    - No stale-scratch bugs: every call starts from freshly constructed
+      views, so there's no way for leftover data from a previous timestep
+      to leak in.
+
+  Cons:
+    - Pays for 10 device allocations + frees every kessler_run call, i.e.
+      every atmosphere physics timestep, every MPI rank. On GPU these are
+      synchronizing cudaMalloc/cudaFree calls -- the same cost item 1
+      already flags as high impact.
+    - Works directly against item 1's recommendation.
+    - Real-world cost depends somewhat on the Kokkos allocator's caching
+      behavior for the given backend/version, but relying on that instead
+      of just not allocating is fragile.
+
+Recommendation: item 1 already identifies persistent pre-allocation as the
+top perf lever, and P3/SHOC already establish the pattern to copy, so Plan A
+is the right end state for production/GPU use. Plan B is a reasonable
+temporary simplification while correctness is still being validated (fewer
+moving parts to debug against driver_kessler), with a planned migration to
+Plan A once the science checks out -- the z/dz fix and the run_impl call-site
+bugs need fixing under either plan, so that work isn't wasted either way.

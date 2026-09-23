@@ -3,6 +3,7 @@
 
 #include "physics/kessler/kessler_functions.hpp"
 #include "share/atm_process/atmosphere_process.hpp"
+#include "share/atm_process/ATMBufferManager.hpp"
 
 #include <ekat_parameter_list.hpp>
 
@@ -32,58 +33,80 @@ namespace scream
  * of subcomponents.
  */
 
-class Kessler : public AtmosphereProcess
+class KesslerMicrophysics : public AtmosphereProcess
 {
-  using KesslerFunc = kessler::KesslerFunctions<Real, DefaultDevice>;
-  using KesslerData = KesslerFunc::KesslerData;
-  using Pack        = ekat::Pack<Real, SCREAM_PACK_SIZE>;
-  using view_2d     = KesslerFunc::view_2d<Pack>;
-  using uview_2d    = ekat::Unmanaged<view_2d>;
-  using view_2d_int = KesslerFunc::view_2d<Pack>;
-  using uview_2d_int = ekat::Unmanaged<view_2d_int>;
-
 public:
+  using KT  = ekat::KokkosTypes<DefaultDevice>;
+  using KMF = kessler::KesslerMicrophysicsFunctions<Real, DefaultDevice>;
+  using PF  = scream::PhysicsFunctions<DefaultDevice>;
+  using PC  = scream::physics::Constants<Real>;
 
-  Kessler (const ekat::Comm& comm, const ekat::ParameterList& params);
+  using Scalar = KMF::Scalar;
+  using Pack = KMF::Pack;
 
-  AtmosphereProcessType type () const { return AtmosphereProcessType::Physics; }
+  template <typename S> using uview_1d = typename ekat::template Unmanaged<KT::view_1d<S>>;
+  template <typename S> using uview_2d = typename ekat::template Unmanaged<KT::view_2d<S>>;
+
+  // Constructors
+  KesslerMicrophysics (const ekat::Comm& comm, const ekat::ParameterList& params);
+
+  // The type of subcomponent
+  AtmosphereProcessType type () const override { return AtmosphereProcessType::Physics; }
+
+  // The name of the subcomponent
   std::string name () const override { return "kessler"; }
 
-  void create_requests () override;
+  // Create grid-dependent field requests
+  void create_requests() override;
 
-  // Buffer for intermediate / scratch Pack views
-  struct Buffer {
-    // 2D midpoint scratch arrays
-    static constexpr int num_2d_mid = 5; // exner, dz, z_mid, rho, theta
-    uview_2d exner, dz, z_mid, rho, theta;
+  // Buffer/workspace management: request one ATMBufferManager allocation
+  // for kessler_run's persistent scratch instead of allocating and
+  // freeing it on every call (mirrors P3Microphysics/SHOCMacrophysics'
+  // own Buffer + requested_buffer_size_in_bytes()/init_buffers()).
+  size_t requested_buffer_size_in_bytes() const override;
+  void init_buffers(const ATMBufferManager& buffer_manager) override;
+  // Old method 
+  // void set_grids(
+  //   const std::shared_ptr<const GridsManager> grids_manager) override;
+  
+  // Define the protected functions, usually at least initialize_impl, run_impl
+  // and finalize_impl, but others could be included.  See
+  // eamxx_template_process_interface.cpp for definitions of each of these.
+  #ifndef KOKKOS_ENABLE_CUDA
+    protected:
+  #endif
+    void initialize_impl(const RunType run_type) override;
+    void run_impl(const double dt) override;
+  protected:
+    void finalize_impl() override;
 
-    // 2D interface scratch array
-    static constexpr int num_2d_int = 1; // z_int
-    uview_2d_int z_int;
-  };
+    // Keep track of field dimensions
+    std::shared_ptr<const AbstractGrid> m_grid;
+    Int m_num_cols;
+    Int m_num_levs;
 
-#ifndef KOKKOS_ENABLE_CUDA
-protected:
-#endif
+    // Parameters
+    Real Cpair;
+    Real Rair;
+    Real latvap;
+    Real pref;
+    Real rhoqr;
+    Real gravity;
 
-  void run_impl (const double dt) override;
+    // Persistent scratch for kessler_run, carved from one
+    // ATMBufferManager allocation in init_buffers() (see
+    // KMF::Workspace in kessler_functions.hpp, which these fields
+    // populate at each run_impl call). Same 6x Pack view_2d + 4x Real
+    // view_1d split as KMF::Workspace, unmanaged since the memory is
+    // owned by the ATMBufferManager, not this struct.
+    struct Buffer {
+      static constexpr int num_2d_vector = KMF::Workspace::num_2d_vector;
+      static constexpr int num_1d_scalar = KMF::Workspace::num_1d_scalar;
 
-protected:
-
-  void initialize_impl (const RunType run_type) override;
-  void finalize_impl   () override;
-
-  size_t requested_buffer_size_in_bytes () const;
-  void   init_buffers (const ATMBufferManager& buffer_manager);
-
-  Buffer m_buffer;
-
-  int  m_ncols;
-  int  m_nlevs;
-
-  KesslerData m_kd;
-
-  std::shared_ptr<const AbstractGrid> m_grid;
+      uview_2d<Pack> r, rhalf, velqr, sed, pc, f5;
+      uview_1d<Real> dt0, mask, time_counter, precl_acc;
+    };
+    Buffer m_buffer;
 
 }; // class Kessler
 

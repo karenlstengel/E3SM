@@ -104,7 +104,7 @@ inline void register_physics () {
   proc_factory.register_product("cld_frac_net",&create_atmosphere_process<CldFracNet>);
 #endif
 #ifdef EAMXX_HAS_KESSLER
-  proc_factory.register_product("kessler",&create_atmosphere_process<Kessler>);
+  proc_factory.register_product("kessler",&create_atmosphere_process<KesslerMicrophysics>);
 #endif 
 
   // If no physics was enabled, silence compile warning about unused var

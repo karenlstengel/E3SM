@@ -9,7 +9,7 @@ namespace kessler {
  * is included via kessler_functions.hpp; on CPU and RDC builds this
  * translation unit provides the single instantiation.
  */
-template struct KesslerFunctions<Real, DefaultDevice>;
+template struct KesslerMicrophysicsFunctions<Real, DefaultDevice>;
 
 } // namespace kessler
 } // namespace scream

@@ -3,10 +3,26 @@
 
 #include "kessler_functions.hpp"
 
+#include <ekat_assert.hpp>
+
 #include <Kokkos_Core.hpp>
 
 #include <limits>
 #include <cmath>
+#include <string>
+
+
+// TEMPORARY DEBUG: surface silent CUDA launch failures (release Kokkos
+// only checks cudaGetLastError under KOKKOS_ENABLE_DEBUG_BOUNDS_CHECK).
+#ifdef KOKKOS_ENABLE_CUDA
+#include <cstdio>
+#define KESSLER_DBG_CHECK(name) do { Kokkos::fence(); \
+    cudaError_t e_ = cudaGetLastError(); \
+    if (e_ != cudaSuccess) std::printf("KESSLER_DBG launch error after %s: %s\n", name, cudaGetErrorString(e_)); \
+  } while(0)
+#else
+#define KESSLER_DBG_CHECK(name) do {} while(0)
+#endif
 
 namespace scream {
 namespace kessler {
@@ -21,40 +37,77 @@ namespace kessler {
  *
  * Strategy:
  *  - Scratch arrays (r, rhalf, velqr, sed, pc, f5, dt0, mask,
- *    time_counter, precl_acc) are allocated as Kokkos views here
- *    and freed on return.
+ *    time_counter, precl_acc) live in the caller-owned Workspace `ws`
+ *    (see kessler_functions.hpp), persistent across calls instead of
+ *    allocated and freed here every time (see Buffer/init_buffers in
+ *    eamxx_kessler_process_interface.hpp/.cpp for how the production
+ *    caller carves them from one ATMBufferManager allocation, mirroring
+ *    the P3/SHOC Buffer pattern).
+ *  - Per-(col,level) fields, including the 6 Workspace 2D scratch
+ *    arrays, are Pack-typed and operated on Pack-wide using ekat's
+ *    Pack-aware math (ekat::exp/pow/sqrt/max/min, not std::, which has
+ *    no Pack overloads) -- the same idiom SHOC uses throughout (e.g.
+ *    shoc_assumed_pdf_impl.hpp).
+ *  - Sedimentation needs the scalar neighbor level (k +/- lyr_step),
+ *    which generally falls in an adjacent Pack, not the current one.
+ *    That neighbor is assembled via ekat::shift_left/shift_right, the
+ *    same mechanism P3's calc_first_order_upwind_step uses for its own
+ *    vertical upwind stencil (p3_upwind_impl.hpp).
+ *  - A handful of per-level operations are irregular (the CFL-limited
+ *    dt0 reductions) or inherently single-level (the lyr_surf/lyr_toa
+ *    boundary terms); these use ekat::scalarize() views instead of
+ *    fighting Pack lanes for a reduction, matching how P3's own
+ *    generalized_sedimentation uses scalarize() for its precip
+ *    accumulation.
+ *  - Levels beyond nz within the last Pack (padding, when nz is not a
+ *    multiple of Pack::n) and, in the sedimentation kernel, the single
+ *    level nearest lyr_toa, are excluded via an in-range Mask. Inputs
+ *    that would otherwise divide by zero or hit a pow() domain error on
+ *    excluded lanes are clamped to a safe placeholder before the op
+ *    runs -- the computation itself must not trap under this codebase's
+ *    fpe build, even though the result there is never read back out.
  *  - The sub-cycling while loop runs on the host; each iteration
  *    dispatches device kernels and then checks convergence via a
- *    device-to-host reduction.
+ *    device-to-host reduction. Each column's `dt0` is re-checked
+ *    against the CFL condition every sub-cycle (using the just-
+ *    updated rain fall speed), exactly as the reference Fortran
+ *    `kessler_run` (module `kessler`, atmospheric_physics) and its
+ *    JAX translation (`kessler_jax/kessler_run.py`) do -- not
+ *    computed once up front. This matters: if the fall speed grows
+ *    during the timestep, a `dt0` fixed from the initial fall speed
+ *    would violate CFL for later sub-steps.
  *  - Convention: lyr_surf and lyr_toa are 0-based C++ indices.
- *    lyr_step = +1 if lyr_surf <= lyr_toa, -1 otherwise.
- *    The driver sets lyr_surf=0, lyr_toa=nz-1 (surface at k=0).
+ *    lyr_step = +1 if lyr_surf <= lyr_toa, -1 otherwise. EAMxx orders
+ *    levels top-down, so the production caller passes
+ *    lyr_surf = nlevs-1, lyr_toa = 0 (lyr_step = -1).
  */
 template <typename S, typename D>
-void KesslerFunctions<S,D>::kessler_run(
-  const int ncols,
-  const int nz,
-  const Scalar dt,
-  const int lyr_surf,
-  const int lyr_toa,
-  const KesslerData& kd,
-  const view_2d<const Scalar>& cpair,
-  const view_2d<const Scalar>& rair,
-  const view_2d<const Scalar>& rho,
-  const view_2d<const Scalar>& z,
-  const view_2d<const Scalar>& pk,
-  const view_2d<Scalar>& theta,
-  const view_2d<Scalar>& qv,
-  const view_2d<Scalar>& qc,
-  const view_2d<Scalar>& qr,
-  const view_1d<Scalar>& precl,
-  const view_2d<Scalar>& relhum)
+void KesslerMicrophysicsFunctions<S,D>::kessler_run(
+  const Int ncols,
+    const Int nz,
+    const Real dt,
+    const Int lyr_surf,
+    const Int lyr_toa,
+    const Real rhoqr,
+    const Real lv,
+    const Real pref,
+    const Real cpair,
+    const Real rair,
+    const view_2d<const Pack>& rho,
+    const view_2d<const Pack>& z_mid,
+    const view_2d<const Pack>& pk,
+    const view_2d<Pack>& theta,
+    const view_2d<Pack>& qv,
+    const view_2d<Pack>& qc,
+    const view_2d<Pack>& qr,
+    const view_1d<Scalar>& precl,
+    const view_2d<Pack>& relhum,
+    const Workspace& ws)
 {
   // Physical constants (captured by value in lambdas)
-  const Scalar lv    = kd.lv;
-  const Scalar pref  = kd.pref;    // already in hPa
-  const Scalar rhoqr = kd.rhoqr;
-  const Scalar f2x   = Scalar(17.27);
+  const Real f2x   = Real(17.27);
+  const Real xk    = cpair / rair;              // cp/R
+  const Real f5_dk = Real(4093) * lv / cpair;    // Durran & Klemp (1983) Eq A13 coefficient
 
   // Vertical direction
   const int lyr_step = (lyr_surf <= lyr_toa) ? 1 : -1;
@@ -62,45 +115,82 @@ void KesslerFunctions<S,D>::kessler_run(
   // Level ranges (0-based inclusive)
   const int kmin = (lyr_step > 0) ? lyr_surf : lyr_toa;
   const int kmax = (lyr_step > 0) ? lyr_toa  : lyr_surf;
-  const int nk   = kmax - kmin + 1; // nz
 
   // Range for the sedimentation inner loop: all levels except lyr_toa
   const int kmin_sed = (lyr_step > 0) ? lyr_surf       : lyr_toa + 1;
   const int kmax_sed = (lyr_step > 0) ? lyr_toa - 1    : lyr_surf;
   const int nk_sed   = kmax_sed - kmin_sed + 1; // nz-1
 
+  const int nlev_packs = ekat::npack<Pack>(nz);
+
   // ---------------------------------------------------------------
-  // Allocate scratch views
+  // Workspace scratch: persistent, caller-owned (see Workspace in
+  // kessler_functions.hpp).
   // ---------------------------------------------------------------
-  view_2d<Scalar> r            ("kessler_r",            ncols, nz);
-  view_2d<Scalar> rhalf        ("kessler_rhalf",        ncols, nz);
-  view_2d<Scalar> velqr        ("kessler_velqr",        ncols, nz);
-  view_2d<Scalar> sed          ("kessler_sed",          ncols, nz);
-  view_2d<Scalar> pc           ("kessler_pc",           ncols, nz);
-  view_2d<Scalar> f5           ("kessler_f5",           ncols, nz);
-  view_1d<Scalar> dt0          ("kessler_dt0",          ncols);
-  view_1d<Scalar> mask         ("kessler_mask",         ncols);
-  view_1d<Scalar> time_counter ("kessler_time_counter", ncols);
-  view_1d<Scalar> precl_acc    ("kessler_precl_acc",    ncols);
+  const view_2d<Pack>& r     = ws.r;
+  const view_2d<Pack>& rhalf = ws.rhalf;
+  const view_2d<Pack>& velqr = ws.velqr;
+  const view_2d<Pack>& sed   = ws.sed;
+  const view_2d<Pack>& pc    = ws.pc;
+  // ws.f5 is sized/carved as part of the Workspace but unused by the
+  // current algorithm -- the f5 Durran & Klemp coefficient below is a
+  // scalar constant, not a per-level field.
+  const view_1d<Scalar>& dt0          = ws.dt0;
+  const view_1d<Scalar>& mask         = ws.mask;
+  const view_1d<Scalar>& time_counter = ws.time_counter;
+  const view_1d<Scalar>& precl_acc    = ws.precl_acc;
+
+  // Scalarized (zero-copy, flat per-scalar-level) views for the
+  // handful of operations that are irregular (CFL reductions) or
+  // inherently single-level (surface/TOA boundary terms, and the
+  // rare-path debug diagnostic at the end of this function).
+  const auto rho_s    = ekat::scalarize(rho);
+  const auto z_s       = ekat::scalarize(z_mid);
+  const auto qr_s      = ekat::scalarize(qr);
+  const auto qv_s      = ekat::scalarize(qv);
+  const auto qc_s      = ekat::scalarize(qc);
+  const auto pk_s       = ekat::scalarize(pk);
+  const auto theta_s    = ekat::scalarize(theta);
+  const auto pc_s       = ekat::scalarize(pc);
+  const auto relhum_s   = ekat::scalarize(relhum);
+  const auto r_s        = ekat::scalarize(r);
+  const auto velqr_s    = ekat::scalarize(velqr);
+  const auto sed_s       = ekat::scalarize(sed);
+  const auto rhalf_s     = ekat::scalarize(rhalf); // TEMPORARY DEBUG
 
   // ---------------------------------------------------------------
   // Kernel 1: initialise derived constants and terminal fall speed
   // ---------------------------------------------------------------
   Kokkos::parallel_for("kessler_init_fields",
-    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nk),
+    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nlev_packs),
     KOKKOS_LAMBDA(const int idx) {
-      const int col = idx / nk;
-      const int k   = kmin + (idx % nk);
-      const Scalar xk = cpair(col, k) / rair(col, k);      // cp/R
-      f5(col, k)    = Scalar(4093) * lv / cpair(col, k);
-      r(col, k)     = Scalar(0.001) * rho(col, k);          // g/cm^3
-      rhalf(col, k) = std::sqrt(rho(col, lyr_surf) / rho(col, k));
-      pc(col, k)    = Scalar(3.8) / (std::pow(pk(col, k), xk) * pref);
+      const int col = idx / nlev_packs;
+      const int kp  = idx % nlev_packs;
+
+      const auto level = ekat::range<IntPack>(kp * Pack::n);
+      const auto valid  = (level >= kmin) && (level <= kmax);
+
+      // Guard denominators/bases so invalid (padding or out-of-range)
+      // lanes never hit a division-by-zero or a pow() domain error --
+      // their results are never read downstream, but the computation
+      // itself must not trap under the fpe build.
+      Pack rho_kp = rho(col, kp);
+      rho_kp.set(!valid, Real(1));
+      Pack pk_kp = pk(col, kp);
+      pk_kp.set(!valid, Real(1));
+
+      const Scalar rho_surf = rho_s(col, lyr_surf);
+
+      r(col, kp)     = Real(0.001) * rho_kp;          // g/cm^3
+      rhalf(col, kp) = ekat::sqrt(rho_surf / rho_kp);
+      pc(col, kp)    = Real(3.8) / (ekat::pow(pk_kp, xk) * pref);
       // Guard against round-off negative qr before computing velqr
-      qr(col, k)    = std::max(qr(col, k), Scalar(0));
-      velqr(col, k) = Scalar(36.34) * rhalf(col, k) *
-                      std::pow(qr(col, k) * r(col, k), Scalar(0.1364));
+      qr(col, kp)    = ekat::max(qr(col, kp), Real(0));
+      velqr(col, kp) = Real(36.34) * rhalf(col, kp) *
+                       ekat::pow(qr(col, kp) * r(col, kp), Real(0.1364));
     });
+    KESSLER_DBG_CHECK("kessler_init_fields");
+  Kokkos::fence();
 
   // ---------------------------------------------------------------
   // Kernel 2: compute initial sub-cycling time step dt0 via CFL
@@ -121,140 +211,235 @@ void KesslerFunctions<S,D>::kessler_run(
         Kokkos::TeamThreadRange(team, nk_sed),
         [&](const int idx, Scalar& lmin) {
           const int k = kmin_sed + idx;
-          if (std::abs(velqr(col, k)) > Scalar(1e-12)) {
-            const Scalar dz = z(col, k + lyr_step) - z(col, k);
-            lmin = std::min(lmin, Scalar(0.8) * dz / velqr(col, k));
+          if (std::abs(velqr_s(col, k)) > Real(1e-12)) {
+            const Scalar dzk = z_s(col, k + lyr_step) - z_s(col, k);
+            lmin = std::min(lmin, Real(0.8) * dzk / velqr_s(col, k));
           }
         },
         Kokkos::Min<Scalar>(dtmin));
 
       Kokkos::single(Kokkos::PerTeam(team), [&]() {
         dt0(col)          = std::min(dt, dtmin);
-        mask(col)         = Scalar(1);
-        time_counter(col) = Scalar(0);
-        precl_acc(col)    = Scalar(0);
-        precl(col)        = Scalar(0);
+        mask(col)         = Real(1);
+        time_counter(col) = Real(0);
+        precl_acc(col)    = Real(0);
+        precl(col)        = Real(0);
       });
     });
+    KESSLER_DBG_CHECK("kessler_init_dt0");
 
   Kokkos::fence();
+
+  // TEMPORARY DEBUG (sub-cycle non-convergence on GPU): dump column 0.
+  Kokkos::parallel_for("kessler_debug_init",
+    Kokkos::RangePolicy<typename KT::ExeSpace>(0, 1),
+    KOKKOS_LAMBDA(const int) {
+      const int col = 0;
+      Kokkos::printf("KESSLER_DBG init: nz=%d npack=%d Pack::n=%d lyr_surf=%d lyr_toa=%d "
+                     "kmin_sed=%d kmax_sed=%d dt=%.6e dt0=%.6e\n",
+                     nz, nlev_packs, (int)Pack::n, lyr_surf, lyr_toa,
+                     kmin_sed, kmax_sed, (double)dt, (double)dt0(col));
+      for (int k = 0; k < nz; ++k) {
+        Kokkos::printf("KESSLER_DBG k=%d rho=%.6e z=%.6e pk=%.6e theta=%.6e qv=%.6e "
+                       "qc=%.6e qr=%.6e r=%.6e rhalf=%.6e pc=%.6e velqr=%.6e\n",
+                       k, (double)rho_s(col,k), (double)z_s(col,k), (double)pk_s(col,k),
+                       (double)theta_s(col,k), (double)qv_s(col,k), (double)qc_s(col,k),
+                       (double)qr_s(col,k), (double)r_s(col,k),
+                       (double)rhalf_s(col,k), (double)pc_s(col,k),
+                       (double)velqr_s(col,k));
+      }
+    });
+    KESSLER_DBG_CHECK("kessler_debug_init");
+  Kokkos::fence();
+
+  // ---------------------------------------------------------------
+  // Guard against a degenerate initial CFL time step. Mirrors the
+  // reference Fortran kessler_run's "bad time splitting" abort
+  // (kessler.F90: `if (dt0 < 1e-12) then errflg = 1; return`), which
+  // the original port of this routine omitted, allowing a column
+  // with a pathologically small CFL-limited dt0 to silently subcycle
+  // instead of failing loudly.
+  // ---------------------------------------------------------------
+  Scalar dt0_min = std::numeric_limits<Scalar>::max();
+  Kokkos::parallel_reduce("kessler_check_dt0",
+    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols),
+    KOKKOS_LAMBDA (const int col, Scalar& lmin) {
+      lmin = std::min(lmin, dt0(col));
+    },
+    Kokkos::Min<Scalar>(dt0_min));
+    KESSLER_DBG_CHECK("kessler_check_dt0");
+  EKAT_REQUIRE_MSG(dt0_min >= Real(1e-12),
+    "Error! KESSLER: bad time splitting (dt = " + std::to_string(dt) +
+    ", dt0 = " + std::to_string(dt0_min) + ").\n");
 
   // ---------------------------------------------------------------
   // Sub-cycling while loop
   // Host drives the loop; convergence checked via parallel_reduce.
   // ---------------------------------------------------------------
   bool all_converged = false;
+  int n_iter = 0;
   while (!all_converged) {
 
     // -- Step 1: accumulate precipitation (weighted by sub-cycle dt) --
     Kokkos::parallel_for("kessler_precl_accum",
       Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols),
       KOKKOS_LAMBDA(const int col) {
-        const Scalar p_val = rho(col, lyr_surf) * qr(col, lyr_surf) *
-                             velqr(col, lyr_surf) / rhoqr;
+        const Scalar p_val = rho_s(col, lyr_surf) * qr_s(col, lyr_surf) *
+                             velqr_s(col, lyr_surf) / rhoqr;
         precl(col)     = p_val;
         precl_acc(col) += mask(col) * p_val * dt0(col);
       });
+    KESSLER_DBG_CHECK("kessler_precl_accum");
 
     // -- Step 2: sedimentation for all levels except lyr_toa --
     Kokkos::parallel_for("kessler_sed_inner",
-      Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nk_sed),
+      Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nlev_packs),
       KOKKOS_LAMBDA(const int idx) {
-        const int col = idx / nk_sed;
-        const int k   = kmin_sed + (idx % nk_sed);
-        const int kup = k + lyr_step;
-        sed(col, k) = dt0(col) *
-          ((r(col, kup) * qr(col, kup) * velqr(col, kup)) -
-           (r(col, k)   * qr(col, k)   * velqr(col, k))) /
-          (r(col, k) * (z(col, kup) - z(col, k)));
+        const int col = idx / nlev_packs;
+        const int kp  = idx % nlev_packs;
+
+        const auto level = ekat::range<IntPack>(kp * Pack::n);
+        const auto valid  = (level >= kmin_sed) && (level <= kmax_sed);
+
+        const Pack rqv_k = r(col, kp) * qr(col, kp) * velqr(col, kp);
+        const Pack z_k   = z_mid(col, kp);
+
+        // Neighbor pack in the array-index direction lyr_step points.
+        // Clamped at the pack-array edge; the lane(s) that would
+        // genuinely need an out-of-domain neighbor are always the
+        // ones `valid` excludes (kmin_sed/kmax_sed already stop one
+        // level short of lyr_toa by construction), so the clamped,
+        // otherwise-unused value is never read.
+        Pack rqv_up, z_up;
+        if (lyr_step > 0) {
+          const int kp_nbr = (kp + 1 < nlev_packs) ? kp + 1 : kp;
+          const Pack rqv_next = r(col, kp_nbr) * qr(col, kp_nbr) * velqr(col, kp_nbr);
+          rqv_up = ekat::shift_left(rqv_next, rqv_k);
+          z_up   = ekat::shift_left(z_mid(col, kp_nbr), z_k);
+        } else {
+          const int kp_nbr = (kp > 0) ? kp - 1 : kp;
+          const Pack rqv_prev = r(col, kp_nbr) * qr(col, kp_nbr) * velqr(col, kp_nbr);
+          rqv_up = ekat::shift_right(rqv_prev, rqv_k);
+          z_up   = ekat::shift_right(z_mid(col, kp_nbr), z_k);
+        }
+
+        Pack dz_up = z_up - z_k;
+        dz_up.set(!valid, Real(1)); // guard div-by-zero on excluded lanes
+
+        Pack r_k_g = r(col, kp);
+        r_k_g.set(!valid, Real(1));
+
+        sed(col, kp) = dt0(col) * (rqv_up - rqv_k) / (r_k_g * dz_up);
       });
+    KESSLER_DBG_CHECK("kessler_sed_inner");
 
     // -- Step 3: sedimentation at lyr_toa (no flux from above) --
     Kokkos::parallel_for("kessler_sed_toa",
       Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols),
       KOKKOS_LAMBDA(const int col) {
         const int kbelow = lyr_toa - lyr_step;
-        sed(col, lyr_toa) = -dt0(col) * qr(col, lyr_toa) *
-          velqr(col, lyr_toa) /
-          (Scalar(0.5) * (z(col, lyr_toa) - z(col, kbelow)));
+        sed_s(col, lyr_toa) = -dt0(col) * qr_s(col, lyr_toa) *
+          velqr_s(col, lyr_toa) /
+          (Real(0.5) * (z_s(col, lyr_toa) - z_s(col, kbelow)));
       });
+    KESSLER_DBG_CHECK("kessler_sed_toa");
 
     // -- Step 4: microphysics adjustments (autoconversion, collection,
     //            evaporation, saturation adjustment) --
     Kokkos::parallel_for("kessler_micro",
-      Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nk),
+      Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nlev_packs),
       KOKKOS_LAMBDA(const int idx) {
-        const int col = idx / nk;
-        const int k   = kmin + (idx % nk);
-        const Scalar msk  = mask(col);
-        const Scalar dt0c = dt0(col);
+        const int col = idx / nlev_packs;
+        const int kp  = idx % nlev_packs;
+
+        const auto level = ekat::range<IntPack>(kp * Pack::n);
+        const auto valid  = (level >= kmin) && (level <= kmax);
+
+        const Pack msk  = mask(col);
+        const Pack dt0c = dt0(col);
+
+        // pk's padding lanes are only ever multiplied elsewhere, but
+        // here they're also a denominator (theta update below), so
+        // guard them the same way kernel 1 does.
+        Pack pk_kp = pk(col, kp);
+        pk_kp.set(!valid, Real(1));
 
         // Autoconversion + collection (Klemp & Wilhelmson 1978, Eq 2.13a,b)
         // Semi-implicit treatment of the collection term.
-        const Scalar qrprod =
-          qc(col, k) -
-          (qc(col, k) - dt0c *
-            std::max(Scalar(0.001) * (qc(col, k) - Scalar(0.001)),
-                     Scalar(0))) /
-          (Scalar(1) + dt0c * Scalar(2.2) *
-           std::pow(qr(col, k), Scalar(0.875)));
-        qc(col, k) = std::max(qc(col, k) - qrprod, Scalar(0));
-        qr(col, k) = std::max(qr(col, k) + qrprod + sed(col, k), Scalar(0));
+        const Pack qrprod =
+          qc(col, kp) -
+          (qc(col, kp) - dt0c *
+            ekat::max(Real(0.001) * (qc(col, kp) - Real(0.001)),
+                      Real(0))) /
+          (Real(1) + dt0c * Real(2.2) *
+           ekat::pow(qr(col, kp), Real(0.875)));
+        // Guard with msk: once a column has converged (elapsed time
+        // reached dt), it must not be perturbed further by leftover
+        // sub-cycle iterations still running for other columns --
+        // matching the Fortran, where each column's do-while loop
+        // exits independently and nothing more happens to it.
+        qc(col, kp) = msk * ekat::max(qc(col, kp) - qrprod, Real(0))
+                    + (Real(1) - msk) * qc(col, kp);
+        qr(col, kp) = msk * ekat::max(qr(col, kp) + qrprod + sed(col, kp), Real(0))
+                    + (Real(1) - msk) * qr(col, kp);
 
         // Saturation mixing ratio via Teten's formula
         // (Klemp & Wilhelmson 1978, Eq 2.11)
-        const Scalar T_pi = pk(col, k) * theta(col, k); // temperature = pi*theta
-        const Scalar qvs  = pc(col, k) *
-          std::exp(f2x * (T_pi - Scalar(273)) / (T_pi - Scalar(36)));
+        const Pack T_pi = pk_kp * theta(col, kp); // temperature = pi*theta
+        const Pack qvs  = pc(col, kp) *
+          ekat::exp(f2x * (T_pi - Real(273)) / (T_pi - Real(36)));
 
         // Condensation rate (Durran & Klemp 1983, Eq A13-A14)
-        const Scalar dT_pi_36 = T_pi - Scalar(36);
-        const Scalar prod = (qv(col, k) - qvs) /
-          (Scalar(1) + qvs * f5(col, k) / (dT_pi_36 * dT_pi_36));
+        const Pack dT_pi_36 = T_pi - Real(36);
+        const Pack prod = (qv(col, kp) - qvs) /
+          (Real(1) + qvs * f5_dk / (dT_pi_36 * dT_pi_36));
 
         // Evaporation rate (Klemp & Wilhelmson 1978, Eq 2.14a,b)
         // dim(qvs, qv) = max(qvs - qv, 0): evaporation only in subsaturated air
-        const Scalar rqr = r(col, k) * qr(col, k);
-        const Scalar A = dt0c *
-          ((Scalar(1.6) + Scalar(124.9) * std::pow(rqr, Scalar(0.2046))) *
-           std::pow(rqr, Scalar(0.525)) /
-           (Scalar(2550000) * pc(col, k) / (Scalar(3.8) * qvs) +
-            Scalar(540000))) *
-          (std::max(qvs - qv(col, k), Scalar(0)) / (r(col, k) * qvs));
-        const Scalar B   = std::max(-prod - qc(col, k), Scalar(0));
-        const Scalar ern = std::min(A, std::min(B, qr(col, k)));
+        const Pack rqr = r(col, kp) * qr(col, kp);
+        const Pack A = dt0c *
+          ((Real(1.6) + Real(124.9) * ekat::pow(rqr, Real(0.2046))) *
+           ekat::pow(rqr, Real(0.525)) /
+           (Real(2550000) * pc(col, kp) / (Real(3.8) * qvs) +
+            Real(540000))) *
+          (ekat::max(qvs - qv(col, kp), Real(0)) / (r(col, kp) * qvs));
+        const Pack B   = ekat::max(-prod - qc(col, kp), Real(0));
+        const Pack ern = ekat::min(A, ekat::min(B, qr(col, kp)));
 
         // Saturation adjustment (Durran & Klemp 1983, Eq A1-A4)
         // Applied only to non-converged columns via mask.
-        const Scalar prod_adj = std::max(prod, -qc(col, k));
-        theta(col, k) += msk * (lv / (cpair(col, k) * pk(col, k)) *
+        const Pack prod_adj = ekat::max(prod, -qc(col, kp));
+        theta(col, kp) += msk * (lv / (cpair * pk_kp) *
                                 (prod_adj - ern));
-        qv(col, k) = msk * std::max(qv(col, k) - prod_adj + ern, Scalar(0))
-                   + (Scalar(1) - msk) * qv(col, k);
-        qc(col, k) += msk * prod_adj;
-        qr(col, k) = msk * std::max(qr(col, k) - ern, Scalar(0))
-                   + (Scalar(1) - msk) * qr(col, k);
+        qv(col, kp) = msk * ekat::max(qv(col, kp) - prod_adj + ern, Real(0))
+                    + (Real(1) - msk) * qv(col, kp);
+        qc(col, kp) += msk * prod_adj;
+        qr(col, kp) = msk * ekat::max(qr(col, kp) - ern, Real(0))
+                    + (Real(1) - msk) * qr(col, kp);
       });
+    KESSLER_DBG_CHECK("kessler_micro");
 
     // -- Step 5: advance elapsed time and update mask / dt0 --
     Kokkos::parallel_for("kessler_update_time",
       Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols),
       KOKKOS_LAMBDA(const int col) {
         time_counter(col) += mask(col) * dt0(col);
-        dt0(col) = std::max(dt - time_counter(col), Scalar(0));
-        mask(col) = (std::abs(dt - time_counter(col)) > Scalar(1e-5))
-                      ? Scalar(1) : Scalar(0);
+        dt0(col) = std::max(dt - time_counter(col), Real(0));
+        mask(col) = (std::abs(dt - time_counter(col)) > Real(1e-5))
+                      ? Real(1) : Real(0);
       });
+    KESSLER_DBG_CHECK("kessler_update_time");
 
     // -- Step 6: recompute terminal fall speed with updated qr --
     Kokkos::parallel_for("kessler_velqr_update",
-      Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nk),
+      Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nlev_packs),
       KOKKOS_LAMBDA(const int idx) {
-        const int col = idx / nk;
-        const int k   = kmin + (idx % nk);
-        velqr(col, k) = Scalar(36.34) * rhalf(col, k) *
-                        std::pow(qr(col, k) * r(col, k), Scalar(0.1364));
+        const int col = idx / nlev_packs;
+        const int kp  = idx % nlev_packs;
+        velqr(col, kp) = Real(36.34) * rhalf(col, kp) *
+                        ekat::pow(qr(col, kp) * r(col, kp), Real(0.1364));
       });
+    KESSLER_DBG_CHECK("kessler_velqr_update");
 
     // -- Step 7: recompute dt0 with updated velqr (CFL constraint) --
     Kokkos::parallel_for("kessler_recompute_dt0",
@@ -266,9 +451,9 @@ void KesslerFunctions<S,D>::kessler_run(
           Kokkos::TeamThreadRange(team, nk_sed),
           [&](const int idx, Scalar& lmin) {
             const int k = kmin_sed + idx;
-            if (std::abs(velqr(col, k)) > Scalar(1e-12)) {
-              const Scalar dz = z(col, k + lyr_step) - z(col, k);
-              lmin = std::min(lmin, Scalar(0.8) * dz / velqr(col, k));
+            if (std::abs(velqr_s(col, k)) > Real(1e-12)) {
+              const Scalar dzk = z_s(col, k + lyr_step) - z_s(col, k);
+              lmin = std::min(lmin, Real(0.8) * dzk / velqr_s(col, k));
             }
           },
           Kokkos::Min<Scalar>(dtmin));
@@ -276,15 +461,60 @@ void KesslerFunctions<S,D>::kessler_run(
           dt0(col) = std::min(dt0(col), dtmin);
         });
       });
+    KESSLER_DBG_CHECK("kessler_recompute_dt0");
 
     // -- Step 8: check convergence (returns to host) --
+    // Also count active columns whose sub-cycle step is non-positive:
+    // those can never reach dt, and the loop would spin forever.
     int n_active = 0;
+    int n_stuck  = 0;
     Kokkos::parallel_reduce("kessler_converge",
       Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols),
-      KOKKOS_LAMBDA(const int col, int& cnt) {
-        if (mask(col) != Scalar(0)) ++cnt;
-      }, n_active);
+      KOKKOS_LAMBDA(const int col, int& cnt, int& stuck) {
+        if (mask(col) != Real(0)) {
+          ++cnt;
+          if (!(dt0(col) > Real(0))) ++stuck;
+        }
+      }, n_active, n_stuck);
+    KESSLER_DBG_CHECK("kessler_converge");
     all_converged = (n_active == 0);
+
+    // TEMPORARY DEBUG: col 0 state + the CFL-limiting level.
+    if (n_iter < 5 || n_iter % 20000 == 0) {
+      const int it = n_iter;
+      Kokkos::parallel_for("kessler_debug_iter",
+        Kokkos::RangePolicy<typename KT::ExeSpace>(0, 1),
+        KOKKOS_LAMBDA(const int) {
+          const int col = 0;
+          int kmin_cfl = -1;
+          Scalar cfl_min = 1e300;
+          for (int k = kmin_sed; k <= kmax_sed; ++k) {
+            if (std::abs(velqr_s(col, k)) > Real(1e-12)) {
+              const Scalar c = Real(0.8) * (z_s(col, k + lyr_step) - z_s(col, k)) / velqr_s(col, k);
+              if (c < cfl_min) { cfl_min = c; kmin_cfl = k; }
+            }
+          }
+          Kokkos::printf("KESSLER_DBG iter=%d n_active=%d dt0=%.6e time=%.6e mask=%.1f "
+                         "cfl_min=%.6e at k=%d\n",
+                         it, n_active, (double)dt0(col), (double)time_counter(col),
+                         (double)mask(col), (double)cfl_min, kmin_cfl);
+          if (kmin_cfl >= 0) {
+            const int k = kmin_cfl;
+            Kokkos::printf("KESSLER_DBG   k=%d z=%.6e z_nbr=%.6e velqr=%.6e qr=%.6e r=%.6e "
+                           "rhalf=%.6e sed=%.6e\n",
+                           k, (double)z_s(col,k), (double)z_s(col,k+lyr_step),
+                           (double)velqr_s(col,k), (double)qr_s(col,k), (double)r_s(col,k),
+                           (double)rhalf_s(col,k), (double)sed_s(col,k));
+          }
+        });
+    KESSLER_DBG_CHECK("kessler_debug_iter");
+      Kokkos::fence();
+    }
+    ++n_iter;
+    EKAT_REQUIRE_MSG(n_stuck == 0 && n_iter < 10 /* TEMPORARY DEBUG, was 100000 */,
+      "Error! KESSLER: sub-cycling cannot converge (iter = " +
+      std::to_string(n_iter) + ", active cols = " + std::to_string(n_active) +
+      ", cols with dt0 <= 0 = " + std::to_string(n_stuck) + ").\n");
 
   } // while (!all_converged)
 
@@ -296,20 +526,55 @@ void KesslerFunctions<S,D>::kessler_run(
     KOKKOS_LAMBDA(const int col) {
       precl(col) = precl_acc(col) / dt;
     });
+    KESSLER_DBG_CHECK("kessler_precl_final");
 
   // ---------------------------------------------------------------
   // Diagnostic: relative humidity
   // ---------------------------------------------------------------
   Kokkos::parallel_for("kessler_relhum",
-    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nk),
+    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nlev_packs),
     KOKKOS_LAMBDA(const int idx) {
-      const int col = idx / nk;
-      const int k   = kmin + (idx % nk);
-      const Scalar T_pi = pk(col, k) * theta(col, k);
-      const Scalar qvs  = pc(col, k) *
-        std::exp(f2x * (T_pi - Scalar(273)) / (T_pi - Scalar(36)));
-      relhum(col, k) = qv(col, k) / qvs * Scalar(100);
+      const int col = idx / nlev_packs;
+      const int kp  = idx % nlev_packs;
+      const Pack T_pi = pk(col, kp) * theta(col, kp);
+      const Pack qvs  = pc(col, kp) *
+        ekat::exp(f2x * (T_pi - Real(273)) / (T_pi - Real(36)));
+      relhum(col, kp) = qv(col, kp) / qvs * Real(100);
     });
+    KESSLER_DBG_CHECK("kessler_relhum");
+  Kokkos::fence();
+
+  // TEMPORARY DEBUG: dump every input to the relhum formula when it
+  // goes non-finite, to find which one first breaks down. Scalar
+  // (non-Pack) on purpose -- this is a rare-path diagnostic printf,
+  // not a perf-sensitive kernel, so it reads the scalarized views and
+  // recomputes pc/qvs fresh (rather than trusting the stored, packed
+  // values) to check whether the *stored* pc from kessler_init_fields
+  // matches what the same inputs would give if recomputed right here.
+  Kokkos::parallel_for("kessler_relhum_debug_check",
+    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * (kmax - kmin + 1)),
+    KOKKOS_LAMBDA(const int idx) {
+      const int col = idx / (kmax - kmin + 1);
+      const int k   = kmin + idx % (kmax - kmin + 1);
+      if (!Kokkos::isfinite(relhum_s(col, k))) {
+        const Scalar xk_dbg    = cpair / rair;
+        const Scalar pk_xk_dbg = std::pow(pk_s(col, k), xk_dbg);
+        const Scalar pc_dbg    = Real(3.8) / (pk_xk_dbg * pref);
+        const Scalar T_pi_dbg  = pk_s(col, k) * theta_s(col, k);
+        const Scalar qvs_dbg   = pc_s(col, k) *
+          std::exp(f2x * (T_pi_dbg - Real(273)) / (T_pi_dbg - Real(36)));
+        Kokkos::printf(
+          "KESSLER_DEBUG_RELHUM col=%d k=%d qv=%.17e qvs=%.17e pc=%.17e "
+          "pc_dbg=%.17e xk_dbg=%.17e pk_xk_dbg=%.17e cpair=%.17e rair=%.17e "
+          "T_pi=%.17e theta=%.17e pk=%.17e f5=%.17e qc=%.17e qr=%.17e\n",
+          col, k, (double)qv_s(col, k), (double)qvs_dbg, (double)pc_s(col, k),
+          (double)pc_dbg, (double)xk_dbg, (double)pk_xk_dbg,
+          (double)cpair, (double)rair,
+          (double)T_pi_dbg, (double)theta_s(col, k), (double)pk_s(col, k),
+          (double)f5_dk, (double)qc_s(col, k), (double)qr_s(col, k));
+      }
+    });
+    KESSLER_DBG_CHECK("kessler_relhum_debug_check");
 
   Kokkos::fence();
 }
@@ -317,20 +582,21 @@ void KesslerFunctions<S,D>::kessler_run(
 // -----------------------------------------------------------------------
 
 template <typename S, typename D>
-void KesslerFunctions<S,D>::kessler_update_timestep_init(
-  const int ncols,
-  const int nz,
-  const view_2d<const Scalar>& temp,
-  const view_2d<Scalar>& temp_prev,
-  const view_2d<Scalar>& ttend_t)
+void KesslerMicrophysicsFunctions<S,D>::kessler_update_timestep_init(
+  const Int ncols,
+    const Int nz,
+    const view_2d<const Pack>& temp,
+    const view_2d<Pack>& temp_prev,
+    const view_2d<Pack>& ttend_t)
 {
+  const int nlev_packs = ekat::npack<Pack>(nz);
   Kokkos::parallel_for("kessler_ts_init",
-    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nz),
+    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nlev_packs),
     KOKKOS_LAMBDA(const int idx) {
-      const int col = idx / nz;
-      const int k   = idx % nz;
-      temp_prev(col, k) = temp(col, k);
-      ttend_t(col, k)   = Scalar(0);
+      const int col = idx / nlev_packs;
+      const int kp  = idx % nlev_packs;
+      temp_prev(col, kp) = temp(col, kp);
+      ttend_t(col, kp)   = Real(0);
     });
   Kokkos::fence();
 }
@@ -338,21 +604,22 @@ void KesslerFunctions<S,D>::kessler_update_timestep_init(
 // -----------------------------------------------------------------------
 
 template <typename S, typename D>
-void KesslerFunctions<S,D>::kessler_update_run(
-  const int ncols,
-  const int nz,
-  const Scalar dt,
-  const view_2d<const Scalar>& theta,
-  const view_2d<const Scalar>& exner,
-  const view_2d<const Scalar>& temp_prev,
-  const view_2d<Scalar>& ttend_t)
+void KesslerMicrophysicsFunctions<S,D>::kessler_update_run(
+  const Int ncols,
+    const Int nz,
+    const Real dt,
+    const view_2d<const Pack>& theta,
+    const view_2d<const Pack>& exner,
+    const view_2d<const Pack>& temp_prev,
+    const view_2d<Pack>& ttend_t)
 {
+  const int nlev_packs = ekat::npack<Pack>(nz);
   Kokkos::parallel_for("kessler_update_run",
-    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nz),
+    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nlev_packs),
     KOKKOS_LAMBDA(const int idx) {
-      const int col = idx / nz;
-      const int k   = idx % nz;
-      ttend_t(col, k) += (theta(col, k) * exner(col, k) - temp_prev(col, k)) / dt;
+      const int col = idx / nlev_packs;
+      const int kp  = idx % nlev_packs;
+      ttend_t(col, kp) += (theta(col, kp) * exner(col, kp) - temp_prev(col, kp)) / dt;
     });
   Kokkos::fence();
 }
@@ -360,23 +627,24 @@ void KesslerFunctions<S,D>::kessler_update_run(
 // -----------------------------------------------------------------------
 
 template <typename S, typename D>
-void KesslerFunctions<S,D>::kessler_update_timestep_final(
-  const int ncols,
-  const int nz,
-  const Scalar gravit,
-  const view_2d<const Scalar>& cpair,
-  const view_2d<const Scalar>& temp,
-  const view_2d<const Scalar>& zm,
-  const view_1d<const Scalar>& phis,
-  const view_2d<Scalar>& st_energy)
+void KesslerMicrophysicsFunctions<S,D>::kessler_update_timestep_final(
+  const Int ncols,
+    const Int nz,
+    const Real gravit,
+    const Real cpair,
+    const view_2d<const Pack>& temp,
+    const view_2d<const Pack>& z_mid,
+    const view_1d<const Scalar>& phis,
+    const view_2d<Pack>& st_energy)
 {
+  const int nlev_packs = ekat::npack<Pack>(nz);
   Kokkos::parallel_for("kessler_ts_final",
-    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nz),
+    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nlev_packs),
     KOKKOS_LAMBDA(const int idx) {
-      const int col = idx / nz;
-      const int k   = idx % nz;
-      st_energy(col, k) = cpair(col, k) * temp(col, k) +
-                          gravit * zm(col, k) + phis(col);
+      const int col = idx / nlev_packs;
+      const int kp  = idx % nlev_packs;
+      st_energy(col, kp) = cpair * temp(col, kp) +
+                          gravit * z_mid(col, kp) + phis(col);
     });
   Kokkos::fence();
 }

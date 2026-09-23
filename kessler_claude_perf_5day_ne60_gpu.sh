@@ -9,18 +9,18 @@ scratch=/glade/derecho/scratch/$user/E3SM
 ####################################################################
 # Machine, compset, etc.
 ####################################################################
-CCSMROOT=${scratch}_claude/E3SM
+CCSMROOT=${scratch}/E3SM
 # CCSMROOT=/glade/derecho/scratch/$user/E3SM/E3SM
 COMPSET=F2000-SCREAMv1-KESSLER
-RESOLUTION=ne30_ne30 #ne30pg2_ne30pg2,ne4pg2_ne4pg2
+RESOLUTION=ne60_ne60 #ne30pg2_ne30pg2,ne4pg2_ne4pg2
 DYCORE=theta-l_kokkos
 MACH=derecho
-MYCOMPILER=nvidia
-QUEUE_NAME=develop
+MYCOMPILER=nvidiagpu
+QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="ne30np4_1day_cpu_claude"
-CASE_ROOT="$scratch/e3sm_test/kessler_perf2/${CASE_NAME}"
+CASE_NAME="CPP_ne60np4_5day_gpu"
+CASE_ROOT="$scratch/e3sm_test/JAX_v_Fortran_perf/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
 CASE_RUN_DIR=${CASE_ROOT}/run
@@ -50,9 +50,16 @@ cd $CASE_SCRIPTS_DIR
 
 ./xmlchange DEBUG=FALSE
 
-./xmlchange NTASKS=128
+./xmlchange NTASKS=4
 ./xmlchange NTHRDS=1
+./xmlchange NGPUS_PER_NODE=4
+./xmlchange GPU_TYPE=a100 # NVIDIA A100 GPUs in Derecho
+./xmlchange OPENACC_GPU_OFFLOAD=TRUE # TRUE for with OpenACC 
+./xmlchange OPENMP_GPU_OFFLOAD=FALSE
+./xmlchange KOKKOS_GPU_OFFLOAD=TRUE
+./xmlchange OVERSUBSCRIBE_GPU=FALSE
 ./xmlchange ROOTPE='0'
+./xmlchange DOUT_S=false
 
 ./case.setup
 
@@ -64,16 +71,20 @@ cd $CASE_SCRIPTS_DIR
 ./atmchange atm_log_level=info #debug
 # ./atmchange physics::atm_procs_list=mac_aero_mic # this removes the rrtmgp physics
 # ./atmchange mac_aero_mic::atm_procs_list=kessler #kessler
-./atmchange save_field_manager_content=true
-# ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM_claude/E3SM/output_control_IC.yml
-./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/FKESSLER_NE30NP4.cam.i.moist_baroclinic_wave_dcmip2016.nc
+# ./atmchange save_field_manager_content=true
+# ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control_IC.yml
+./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/FKESSLER_ne60np4.cam.i.moist_baroclinic_wave_dcmip2016.nc
 ./atmchange enable_fine_grain_timers=false
 
 # use below to match to stormspeed
+./atmchange ctl_nl::dt_remap_factor=2
 ./atmchange ctl_nl::dt_tracer_factor=6
 ./atmchange ctl_nl::hypervis_subcycle_q=6
+./atmchange ctl_nl::nu_top=250000.0
 ./atmchange ctl_nl::se_ftype=2
+./atmchange ctl_nl::se_ne=60
 ./atmchange ctl_nl::se_nsplit=2
+./atmchange ctl_nl::se_tstep=150
 ./atmchange ctl_nl::statefreq=488
 ./atmchange ctl_nl::transport_alg=12
 
@@ -85,7 +96,7 @@ cd $CASE_SCRIPTS_DIR
 # ####################################################################
 # Run E3SM
 # ####################################################################
-cd $CASE_SCRIPTS_DIR
+# cd $CASE_SCRIPTS_DIR
 
 ./xmlchange RUN_TYPE="startup"
 if [[ $COMPSET == *"F20TR"* ]]; then
@@ -97,8 +108,8 @@ else
 fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
-./xmlchange STOP_N='1',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
-./xmlchange JOB_WALLCLOCK_TIME='00:30:00'
+./xmlchange STOP_N='5',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
+./xmlchange JOB_WALLCLOCK_TIME='04:00:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE
 

@@ -7,6 +7,8 @@
 
 #include <Kokkos_Core.hpp>
 
+#include <ekat_assert.hpp>
+
 #include <limits>
 #include <cmath>
 #include <string>
@@ -112,14 +114,31 @@ void KesslerMicrophysicsFunctions<S,D>::kessler_run(
   // Vertical direction
   const int lyr_step = (lyr_surf <= lyr_toa) ? 1 : -1;
 
-  // Level ranges (0-based inclusive)
+  // Level range (0-based inclusive)
   const int kmin = (lyr_step > 0) ? lyr_surf : lyr_toa;
   const int kmax = (lyr_step > 0) ? lyr_toa  : lyr_surf;
 
-  // Range for the sedimentation inner loop: all levels except lyr_toa
-  const int kmin_sed = (lyr_step > 0) ? lyr_surf       : lyr_toa + 1;
-  const int kmax_sed = (lyr_step > 0) ? lyr_toa - 1    : lyr_surf;
-  const int nk_sed   = kmax_sed - kmin_sed + 1; // nz-1
+  // ---------------------------------------------------------------
+  // Scratch views: sized (no-op if already sized) and owned by the
+  // caller so no device allocation happens on this call.
+  // ---------------------------------------------------------------
+  workspace.init(ncols, nz);
+  const auto& r            = workspace.r;
+  const auto& rhalf        = workspace.rhalf;
+  const auto& velqr        = workspace.velqr;
+  const auto& sed          = workspace.sed;
+  const auto& pc           = workspace.pc;
+  const auto& dt0          = workspace.dt0;
+  const auto& mask         = workspace.mask;
+  const auto& time_counter = workspace.time_counter;
+  const auto& precl_acc    = workspace.precl_acc;
+
+  // Layout-aware flattening of the (col,level) loop: pick whichever
+  // traversal keeps consecutive thread indices contiguous in memory for
+  // the view's actual layout (col-fastest for LayoutLeft, as Kokkos
+  // defaults to on GPU; level-fastest for LayoutRight, the CPU default).
+  const bool col_fastest =
+    std::is_same<typename view_2d<Scalar>::array_layout, Kokkos::LayoutLeft>::value;
 
   const int nlev_packs = ekat::npack<Pack>(nz);
 
@@ -159,7 +178,9 @@ void KesslerMicrophysicsFunctions<S,D>::kessler_run(
   const auto rhalf_s     = ekat::scalarize(rhalf); // TEMPORARY DEBUG
 
   // ---------------------------------------------------------------
-  // Kernel 1: initialise derived constants and terminal fall speed
+  // Kernel 2: derived constants + terminal fall speed, with the
+  // initial CFL min-reduction for dt0 folded in via atomic_min
+  // (replaces a separate TeamPolicy reduction kernel).
   // ---------------------------------------------------------------
   Kokkos::parallel_for("kessler_init_fields",
     Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nlev_packs),
@@ -193,12 +214,26 @@ void KesslerMicrophysicsFunctions<S,D>::kessler_run(
   Kokkos::fence();
 
   // ---------------------------------------------------------------
-  // Kernel 2: compute initial sub-cycling time step dt0 via CFL
-  //           (min reduction over levels within each column)
-  //           and initialise per-column bookkeeping scalars.
+  // Guard against a pathologically small CFL-limited initial sub-cycle
+  // step (mirrors the Fortran "bad time splitting" check, which errors
+  // out here rather than entering the sub-cycle loop). Left unchecked,
+  // a column with dt0 this small would need an enormous number of
+  // sub-cycle iterations to reach dt, effectively hanging the run
+  // instead of failing cleanly. This is the one host sync kessler_run
+  // needs before the loop, so it's also the last point where a fence
+  // would otherwise have been needed.
   // ---------------------------------------------------------------
-  using TeamPol    = Kokkos::TeamPolicy<typename KT::ExeSpace>;
-  using MemberType = typename TeamPol::member_type;
+  {
+    using MinLocReducer = Kokkos::MinLoc<Scalar, int>;
+    typename MinLocReducer::value_type minloc_result;
+    Kokkos::parallel_reduce("kessler_check_dt0",
+      Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols),
+      KOKKOS_LAMBDA(const int col, typename MinLocReducer::value_type& lminloc) {
+        if (dt0(col) < lminloc.val) {
+          lminloc.val = dt0(col);
+          lminloc.loc = col;
+        }
+      }, MinLocReducer(minloc_result));
 
   Kokkos::parallel_for("kessler_init_dt0",
     TeamPol(ncols, Kokkos::AUTO),
@@ -274,11 +309,12 @@ void KesslerMicrophysicsFunctions<S,D>::kessler_run(
 
   // ---------------------------------------------------------------
   // Sub-cycling while loop
-  // Host drives the loop; convergence checked via parallel_reduce.
   // ---------------------------------------------------------------
+  constexpr int CHECK_INTERVAL = 4; // convergence sync frequency
   bool all_converged = false;
   int n_iter = 0;
   while (!all_converged) {
+    ++iter;
 
     // -- Step 1: accumulate precipitation (weighted by sub-cycle dt) --
     Kokkos::parallel_for("kessler_precl_accum",

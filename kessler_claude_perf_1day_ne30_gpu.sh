@@ -54,7 +54,7 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange NTHRDS=1
 ./xmlchange NGPUS_PER_NODE=4
 ./xmlchange GPU_TYPE=a100 # NVIDIA A100 GPUs in Derecho
-./xmlchange OPENACC_GPU_OFFLOAD=TRUE # TRUE for with OpenACC 
+./xmlchange OPENACC_GPU_OFFLOAD=FALSE # TRUE for with OpenACC - not applicable here. 
 ./xmlchange OPENMP_GPU_OFFLOAD=FALSE
 ./xmlchange KOKKOS_GPU_OFFLOAD=TRUE
 ./xmlchange OVERSUBSCRIBE_GPU=FALSE

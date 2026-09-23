@@ -1,6 +1,6 @@
 %YAML 1.1
 ---
-filename_prefix: langOpComp_kessler_perf_nsteps.scream.phys.h
+filename_prefix: Fortran_vs_cpp_kessler_perf_nsteps.scream.phys.h
 Averaging Type: Instant
 Max Snapshots Per File: 500
 averaging_type: instant
@@ -15,14 +15,14 @@ fields:
     - T_mid
     - T_mid_tend
     - T_mid_prev
-    # - p_int
+    - p_int
     - qv 
     - qc
     - qr
     - phis
     - st_energy
-    # - pk
-    # - theta
+    - pk
+    - theta
     - relhum 
     - precl
     # - RelativeHumidity

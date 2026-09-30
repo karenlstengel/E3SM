@@ -68,6 +68,7 @@ cd $CASE_SCRIPTS_DIR
 # ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM_claude/E3SM/output_control_IC.yml
 ./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/FKESSLER_NE30NP4.cam.i.moist_baroclinic_wave_dcmip2016.nc
 ./atmchange enable_fine_grain_timers=false
+./atmchange mac_aero_mic::number_of_subcycles=1 # ne30np4 default is 12; call Kessler once per step like ne16/ne60
 
 # use below to match to stormspeed
 ./atmchange ctl_nl::dt_tracer_factor=6
@@ -98,6 +99,7 @@ fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
 ./xmlchange STOP_N='1',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
+./xmlchange REST_OPTION=never # perf runs: no restart files (only the 10-day runs write output)
 ./xmlchange JOB_WALLCLOCK_TIME='01:00:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE

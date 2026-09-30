@@ -102,7 +102,8 @@ fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
 ./xmlchange STOP_N='5',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
-./xmlchange JOB_WALLCLOCK_TIME='04:00:00'
+./xmlchange REST_OPTION=never # perf runs: no restart files (only the 10-day runs write output)
+./xmlchange JOB_WALLCLOCK_TIME='08:00:00' # Fortran/JAX ne60 5-day CPU runs take ~6.5 h
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE
 

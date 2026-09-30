@@ -102,6 +102,7 @@ fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
 ./xmlchange STOP_N='1',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
+./xmlchange REST_OPTION=never # perf runs: no restart files (only the 10-day runs write output)
 ./xmlchange JOB_WALLCLOCK_TIME='02:30:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE

@@ -1,4 +1,5 @@
 #!/bin/bash
+# Generated from GK_perf_utils/CPP_1day_gpu.template.sh (ne30np4) with STOP_N=10 plus the output_control_JAX.yml field output.
 
 date
 
@@ -9,22 +10,24 @@ scratch=/glade/derecho/scratch/$user/E3SM
 ####################################################################
 # Machine, compset, etc.
 ####################################################################
-CCSMROOT=${scratch}/E3SM
+CCSMROOT=$scratch/E3SM # C++ (Kokkos) Kessler branch (ren/kessler-claude)
+# CCSMROOT=/glade/derecho/scratch/$user/E3SM/E3SM
 COMPSET=F2000-SCREAMv1-KESSLER
-RESOLUTION=ne30_ne30 #ne30pg2_ne30pg2,ne4pg2_ne4pg2
+RESOLUTION=ne30_ne30
 DYCORE=theta-l_kokkos
 MACH=derecho
 MYCOMPILER=nvidiagpu
 QUEUE_NAME=main
 
 # CASE_NAME="${COMPSET}.${RESOLUTION}.${MACH}.${MYCOMPILER}.${DYCORE}"
-CASE_NAME="CPP_ne30np4_10day_gpu"
+CASE_NAME="CPP_ne30np4_10day_gpu" #"CPP_ne30np4_1day_gpu"
 CASE_ROOT="$scratch/e3sm_test/JAX_v_Fortran_perf/${CASE_NAME}"
 CASE_SCRIPTS_DIR=${CASE_ROOT}/case
 CASE_BUILD_DIR=${CASE_ROOT}/build
 CASE_RUN_DIR=${CASE_ROOT}/run
 CASE_ARCHIVE_DIR=${CASE_ROOT}/archive
 export NETCDF_PATH=$NETCDF
+export KESSLER_PERF_LOG_PATH=${CASE_SCRIPTS_DIR}/kessler_perf_log.csv # read by the Fortran/JAX branches only
 
 ####################################################################
 # Create a new case 
@@ -53,7 +56,7 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange NTHRDS=1
 ./xmlchange NGPUS_PER_NODE=4
 ./xmlchange GPU_TYPE=a100 # NVIDIA A100 GPUs in Derecho
-./xmlchange OPENACC_GPU_OFFLOAD=FALSE # TRUE for with OpenACC - not applicable here. 
+./xmlchange OPENACC_GPU_OFFLOAD=FALSE # OpenACC is only used by the Fortran Kessler
 ./xmlchange OPENMP_GPU_OFFLOAD=FALSE
 ./xmlchange KOKKOS_GPU_OFFLOAD=TRUE
 ./xmlchange OVERSUBSCRIBE_GPU=FALSE
@@ -70,16 +73,28 @@ cd $CASE_SCRIPTS_DIR
 ./atmchange atm_log_level=info #debug
 # ./atmchange physics::atm_procs_list=mac_aero_mic # this removes the rrtmgp physics
 # ./atmchange mac_aero_mic::atm_procs_list=kessler #kessler
-# ./atmchange save_field_manager_content=true
-./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control_JAX.yml
+# ./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control_IC.yml
+./atmchange output_yaml_files+=/glade/derecho/scratch/kstengel/E3SM/E3SM/output_control_JAX.yml # 10-day runs only: per-step field output for the error comparison
 ./atmchange initial_conditions::filename=/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/FKESSLER_NE30NP4.cam.i.moist_baroclinic_wave_dcmip2016.nc
 ./atmchange enable_fine_grain_timers=false
+./atmchange mac_aero_mic::number_of_subcycles=1 # call Kessler once per step (ne30np4 default is 12)
 
-# use below to match to stormspeed
+# Dycore substep settings, matched to the StormSPEED run that produced this
+# resolution's IC file (its actual atm_in), not the ne30np4 values this
+# template used to hardcode. se_tstep/se_nsplit must satisfy
+# dtime/(dt_max_factor*se_nsplit) == se_tstep exactly (dtime = 86400/ATM_NCPL,
+# dt_max_factor = max(dt_remap_factor,dt_tracer_factor)) or EAMxx's HOMME
+# dycore aborts with "timestep_make_parameters_consistent: divisibility error"
+# at runtime, same as CAM-SE/StormSPEED.
+./atmchange ctl_nl::dt_remap_factor=2
 ./atmchange ctl_nl::dt_tracer_factor=6
+./atmchange ctl_nl::hypervis_subcycle=1
 ./atmchange ctl_nl::hypervis_subcycle_q=6
+./atmchange ctl_nl::nu_top=250000.0
 ./atmchange ctl_nl::se_ftype=2
-./atmchange ctl_nl::se_nsplit=2
+./atmchange ctl_nl::se_ne=30
+./atmchange ctl_nl::se_nsplit=1
+./atmchange ctl_nl::se_tstep=300
 ./atmchange ctl_nl::statefreq=488
 ./atmchange ctl_nl::transport_alg=12
 
@@ -91,7 +106,7 @@ cd $CASE_SCRIPTS_DIR
 # ####################################################################
 # Run E3SM
 # ####################################################################
-cd $CASE_SCRIPTS_DIR
+# cd $CASE_SCRIPTS_DIR
 
 ./xmlchange RUN_TYPE="startup"
 if [[ $COMPSET == *"F20TR"* ]]; then
@@ -103,7 +118,8 @@ else
 fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
-./xmlchange STOP_N='10',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
+./xmlchange STOP_N='10',STOP_OPTION='ndays'
+if [ 10 -lt 10 ]; then ./xmlchange REST_OPTION=never; fi # perf runs: no restart files (only the 10-day runs write output)
 ./xmlchange JOB_WALLCLOCK_TIME='07:00:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE

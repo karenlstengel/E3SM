@@ -54,7 +54,7 @@ cd $CASE_SCRIPTS_DIR
 ./xmlchange NTHRDS=1
 ./xmlchange NGPUS_PER_NODE=4
 ./xmlchange GPU_TYPE=a100 # NVIDIA A100 GPUs in Derecho
-./xmlchange OPENACC_GPU_OFFLOAD=TRUE # TRUE for with OpenACC 
+./xmlchange OPENACC_GPU_OFFLOAD=FALSE # OpenACC is only used by the Fortran Kessler
 ./xmlchange OPENMP_GPU_OFFLOAD=FALSE
 ./xmlchange KOKKOS_GPU_OFFLOAD=TRUE
 ./xmlchange OVERSUBSCRIBE_GPU=FALSE
@@ -79,6 +79,7 @@ cd $CASE_SCRIPTS_DIR
 # use below to match to stormspeed
 ./atmchange ctl_nl::dt_remap_factor=2
 ./atmchange ctl_nl::dt_tracer_factor=6
+./atmchange ctl_nl::hypervis_subcycle=1 # same at every resolution for the perf comparison
 ./atmchange ctl_nl::hypervis_subcycle_q=3
 ./atmchange ctl_nl::nu_top=250000.0
 ./atmchange ctl_nl::se_ftype=2
@@ -109,6 +110,7 @@ fi
 ./xmlchange RESUBMIT='0'
 ./xmlchange CONTINUE_RUN='FALSE'
 ./xmlchange STOP_N='5',STOP_OPTION='ndays' # note that we need to run this for 10 days to see anything interesting
+./xmlchange REST_OPTION=never # perf runs: no restart files (only the 10-day runs write output)
 ./xmlchange JOB_WALLCLOCK_TIME='04:00:00'
 ./xmlchange JOB_QUEUE=$QUEUE_NAME
 ./xmlchange BUDGETS=TRUE

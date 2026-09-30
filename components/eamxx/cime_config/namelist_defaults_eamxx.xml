@@ -272,8 +272,8 @@ be lost if SCREAM_HACK_XML is not enabled.
     <!-- Kessler Microphysics -->
     <kessler inherit="atm_proc_base">
       <py_module_name type="string" doc="Name of the Python module for Kessler microphysics">kessler</py_module_name>
-      <py_module_path type="string" doc="Path to the Python module for Kessler microphysics">/glade/derecho/scratch/kstengel/E3SM/E3SM/components/eamxx/src/physics/kessler/</py_module_path>
-      <py_backend type="string" doc="Python backend for Kessler microphysics">device</py_backend>
+      <py_module_path type="string" doc="Path to the Python module for Kessler microphysics">/glade/derecho/scratch/kstengel/E3SM_claude/E3SM/components/eamxx/src/physics/kessler</py_module_path>
+      <py_backend type="string" doc="Python backend for Kessler microphysics">host</py_backend>
     </kessler>
 
     <!-- ZM deep convection -->
@@ -951,8 +951,9 @@ be lost if SCREAM_HACK_XML is not enabled.
     <se_topology COMPSET=".*DP-EAMxx">plane</se_topology>
     <se_tstep type="real" constraints="gt 0">UNSET</se_tstep>
     <se_tstep hgrid="ne4np4">600</se_tstep>
+    <se_tstep hgrid="ne16np4">300</se_tstep>
     <se_tstep hgrid="ne30np4">300</se_tstep>
-    <se_tstep hgrid="ne32np4">300</se_tstep>
+    <se_tstep hgrid="ne60np4">200</se_tstep>
     <se_tstep hgrid="ne64np4">150</se_tstep>
     <se_tstep hgrid="ne128np4">75</se_tstep>
     <se_tstep hgrid="ne120np4">75</se_tstep>

@@ -68,7 +68,9 @@ void KesslerMicrophysics::create_requests () //set_grids(const std::shared_ptr<c
 
   // Layout for 3D (2d horiz X 1d vertical) variable defined at mid-level and interfaces
   FieldLayout scalar3d_layout_mid { {ShortFieldTagsNames::COL,ShortFieldTagsNames::LEV}, {m_num_cols,m_num_levs} };
- 
+  // Layout for 3D interface variables (num_levs+1 levels), e.g. z_int
+  FieldLayout scalar3d_layout_int = m_grid->get_3d_scalar_layout(ShortFieldTagsNames::ILEV);
+
   // Fields to use for Kessler microphysics
 
   // From Field Manager 
@@ -119,7 +121,7 @@ void KesslerMicrophysics::create_requests () //set_grids(const std::shared_ptr<c
   }
 
   add_field<Computed>("z_mid",  scalar3d_layout_mid, m, grid_name, pack_size);
-  add_field<Computed>("z_int",  scalar3d_layout_mid, m, grid_name, pack_size);
+  add_field<Computed>("z_int",  scalar3d_layout_int, m, grid_name, pack_size);
 
 }
 

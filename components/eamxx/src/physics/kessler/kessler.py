@@ -196,9 +196,24 @@ def update(ncol, nz, dt, zm, pk, theta, phis, temp, temp_prev, temp_tend, st_ene
         except Exception:
             pass
 
+    # Apply the temperature tendency (CAM-SIMA's apply_tendency_of_air_temperature):
+    # kessler_update_run only accumulates ttend_t, and none of the kessler_update
+    # phases write temp. Done before timestep_final, which computes st_energy
+    # from temp. temp_prev_d/ttend_t_d come back in temp's (ncol, nz) layout.
+    # HOMME derives its FT forcing from the change in T_mid across physics, so
+    # this is what delivers Kessler's heating to the dycore. Same label as the
+    # Fortran bridge's kessler_apply_T_tend step.
+    _t0 = time.perf_counter()
+    temp_new_d = temp_prev_d + ttend_t_d * dt
+    if _log_perf_call is not None:
+        try:
+            _log_perf_call("kessler_apply_T_tend", ncol, nz, dt, time.perf_counter() - _t0)
+        except Exception:
+            pass
+
     _t0 = time.perf_counter()
     st_energy_d, e3, gravit = kessler_update_timestep_final_bridge_device(
-        nz=nz, cpair=cpair, temp=temp_d, zm=zm_d, phis=phis_d,
+        nz=nz, cpair=cpair, temp=temp_new_d, zm=zm_d, phis=phis_d,
         st_energy=zeros_d, errflg=0, gravit=gravit)
     if _log_perf_call is not None:
         try:
@@ -207,15 +222,16 @@ def update(ncol, nz, dt, zm, pk, theta, phis, temp, temp_prev, temp_tend, st_ene
             pass
 
     # ONE batched D2H fetch for all three phases' outputs and errflg scalars.
-    temp_prev_out, temp_tend_out, st_energy_out, e1, e2, e3 = jax.device_get(
-        (temp_prev_d, ttend_t_d, st_energy_d, e1, e2, e3))
+    temp_out, temp_prev_out, temp_tend_out, st_energy_out, e1, e2, e3 = jax.device_get(
+        (temp_new_d, temp_prev_d, ttend_t_d, st_energy_d, e1, e2, e3))
 
     errflg = max(int(e1), int(e2), int(e3))
     errmsg = "" if errflg == 0 else "kessler_update: bad time splitting"
 
-    # temp_prev/temp_tend/st_energy are zero-copy views into EAMxx's field
+    # temp/temp_prev/temp_tend/st_energy are zero-copy views into EAMxx's field
     # buffers (same as run()'s writeback) -- results must be written back
     # in place for them to reach EAMxx.
+    temp[...] = temp_out
     temp_prev[...] = temp_prev_out
     temp_tend[...] = temp_tend_out
     st_energy[...] = st_energy_out

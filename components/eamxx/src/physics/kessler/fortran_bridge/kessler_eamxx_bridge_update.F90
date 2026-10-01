@@ -82,8 +82,15 @@ subroutine kessler_eamxx_bridge_update_c( ncol, nz, dt, pk, theta, temp_prev, te
 
   integer(kind=8) :: count_start, count_end, count_rate
   real(kind_phys) :: elapsed
+  integer         :: i, klev
 
   ! Call the Kessler update Functions
+  ! kessler_update_run only accumulates temp_tend; none of the kessler_update
+  ! routines write temp. In CAM-SIMA, apply_tendency_of_air_temperature applies
+  ! the tendency, so it's done here between kessler_update_run and
+  ! kessler_update_timestep_final (which computes st_energy from temp). The
+  ! updated temp is copied back to T_mid by the caller, and HOMME derives its
+  ! FT forcing from the change in T_mid across physics.
   #if defined(EAMXX_ENABLE_GPU) && defined(EAMXX_ENABLE_OPENACC)
     call system_clock(count_start, count_rate)
     call kessler_update_timestep_init(ncol, nz, temp, temp_prev, temp_tend, errmsg, errflg)
@@ -96,6 +103,17 @@ subroutine kessler_eamxx_bridge_update_c( ncol, nz, dt, pk, theta, temp_prev, te
     call system_clock(count_end)
     elapsed = real(count_end - count_start, kind_phys) / real(count_rate, kind_phys)
     call log_call('kessler_update_run', ncol, nz, dt, elapsed)
+
+    call system_clock(count_start, count_rate)
+    !$acc parallel loop collapse(2) deviceptr(temp, temp_prev, temp_tend)
+    do klev = 1, nz
+       do i = 1, ncol
+          temp(i,klev) = temp_prev(i,klev) + temp_tend(i,klev) * dt
+       end do
+    end do
+    call system_clock(count_end)
+    elapsed = real(count_end - count_start, kind_phys) / real(count_rate, kind_phys)
+    call log_call('kessler_apply_T_tend', ncol, nz, dt, elapsed)
 
     call system_clock(count_start, count_rate)
     call kessler_update_timestep_final(nz, ncol, temp, z_mid, phis, st_energy, errflg, errmsg)
@@ -114,6 +132,12 @@ subroutine kessler_eamxx_bridge_update_c( ncol, nz, dt, pk, theta, temp_prev, te
     call system_clock(count_end)
     elapsed = real(count_end - count_start, kind_phys) / real(count_rate, kind_phys)
     call log_call('kessler_update_run', ncol, nz, dt, elapsed)
+
+    call system_clock(count_start, count_rate)
+    temp(:ncol,:nz) = temp_prev(:ncol,:nz) + temp_tend(:ncol,:nz) * dt
+    call system_clock(count_end)
+    elapsed = real(count_end - count_start, kind_phys) / real(count_rate, kind_phys)
+    call log_call('kessler_apply_T_tend', ncol, nz, dt, elapsed)
 
     call system_clock(count_start, count_rate)
     call kessler_update_timestep_final(nz, temp, z_mid, phis, st_energy, errflg, errmsg)

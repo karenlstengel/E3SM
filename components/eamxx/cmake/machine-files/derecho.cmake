@@ -20,6 +20,24 @@ set(EKAT_MPI_EXTRA_ARGS "${EKAT_MPI_EXTRA_ARGS} --gpus-per-task=1" CACHE STRING 
 #option(Kokkos_ARCH_AMPERE80 "" ON)
 set(CMAKE_CXX_FLAGS "-DTHRUST_IGNORE_CUB_VERSION_CHECK" CACHE STRING "" FORCE)
 
+# Numerics flags shared with the StormSPEED (CESM nvhpc) builds, so the two models
+# are compiled the same way: -O2 -Mnofma -Mflushz -Kieee. They have to be set here:
+# CMAKE_BUILD_TYPE=TRUE above means no CMAKE_<LANG>_FLAGS_RELEASE reach EAMxx targets
+# (NVHPC then defaults to -O1), and the line above replaces all CIME C++ macro flags.
+# On GPU, C++ goes through nvcc_wrapper, which passes -O2 to nvcc and the -M/-K flags
+# to the host compiler (nvc++); --fmad=false turns off FMA in the CUDA kernels too
+# (FMA is nvcc's default for device code).
+if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "NVHPC")
+  set(EAMXX_NUMERICS_FLAGS "-O2 -Mnofma -Mflushz -Kieee")
+  if (USE_CUDA)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EAMXX_NUMERICS_FLAGS} --fmad=false" CACHE STRING "" FORCE)
+  else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EAMXX_NUMERICS_FLAGS}" CACHE STRING "" FORCE)
+  endif()
+  string(APPEND CMAKE_C_FLAGS " ${EAMXX_NUMERICS_FLAGS}")
+  string(APPEND CMAKE_Fortran_FLAGS " ${EAMXX_NUMERICS_FLAGS}")
+endif()
+
 #message(STATUS "pm-cpu CMAKE_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID} CMAKE_Fortran_COMPILER_VERSION=${CMAKE_Fortran_COMPILER_VERSION}")
 if ("${PROJECT_NAME}" STREQUAL "E3SM")
   if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")

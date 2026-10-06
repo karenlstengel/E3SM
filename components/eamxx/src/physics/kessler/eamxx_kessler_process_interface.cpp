@@ -334,19 +334,25 @@ void KesslerMicrophysics::run_impl (const double dt )
   // Apply that tendency to get the updated T_mid: T_mid_prev + ttend*dt is
   // algebraically theta*exner, but going through the tendency (rather than
   // recomputing theta*exner directly) keeps T_mid consistent with the
-  // T_mid_tend diagnostic above and is what the rest of the AD reads.
-  // start_timer("EAMxx::kessler::run::kessler_apply_T_tend");
-  // {
-  //   const Real dt_r = Real(dt);
-  //   Kokkos::parallel_for("kessler_apply_T_tend",
-  //     Kokkos::MDRangePolicy<KMF::KT::ExeSpace, Kokkos::Rank<2>>(
-  //       {0, 0}, {ncols, nlevs}),
-  //     KOKKOS_LAMBDA(const int col, const int k) {
-  //       ekat::scalarize(T_mid_upd)(col, k) = t_prev(col, k) + t_tend(col, k) * dt_r;
-  //     });
-  //   Kokkos::fence();
-  // }
-  // stop_timer("EAMxx::kessler::run::kessler_apply_T_tend");
+  // T_mid_tend diagnostic above. None of the kessler_update_* routines write
+  // T_mid (in CAM-SIMA, apply_tendency_of_air_temperature does), and HOMME
+  // derives its FT forcing from the change in T_mid across physics -- not
+  // from T_mid_tend -- so without this Kessler's latent heating is dropped.
+  // Must run before kessler_update_timestep_final, which computes st_energy
+  // from T_mid.
+  start_timer("EAMxx::kessler::run::kessler_apply_T_tend");
+  {
+    const Real dt_r = Real(dt);
+    Kokkos::parallel_for("kessler_apply_T_tend",
+      KT::RangePolicy(0, ncols * nlev_packs),
+      KOKKOS_LAMBDA(const int idx) {
+        const int icol = idx / nlev_packs;
+        const int kp   = idx % nlev_packs;
+        T_mid(icol, kp) = T_mid_prev(icol, kp) + T_mid_tend(icol, kp) * dt_r;
+      });
+    Kokkos::fence();
+  }
+  stop_timer("EAMxx::kessler::run::kessler_apply_T_tend");
 
   start_timer("EAMxx::kessler::run::kessler_update_timestep_final");
   KMF::kessler_update_timestep_final(ncols, nlevs, gravity,

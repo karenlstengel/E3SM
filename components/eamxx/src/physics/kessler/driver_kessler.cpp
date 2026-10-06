@@ -21,6 +21,16 @@
  * in the result. The device run is also compared against the same code
  * instantiated on the host.
  *
+ * The device run is also repeated with qv/qc/qr passed the way EAMxx
+ * passes them: as slices of one bundled (ncol, 4, npack) tracers array
+ * ordered [qv, qr, qi, qc] (ekat::subview_1, what Field::get_view returns
+ * for a tracer subfield), so each has column stride 4*npack instead of
+ * npack. A kernel that ekat::scalarize()s one of these views -- which
+ * drops the stride -- reads other tracers/columns. That was the
+ * CPP_ne30np4_10day precl bug: the state was right, but precl came from
+ * the wrong memory. Use --rain for this check to mean anything: with no
+ * rain, surface qr is 0 everywhere and a misread precl is still 0.
+ *
  * Checks applied to every run:
  *   - outputs finite; qv/qc/qr/precl non-negative
  *   - sub-cycling converged: mask == 0, time_counter == dt in every column
@@ -39,12 +49,15 @@
  *     sub-cycles grow that to ~1e-9 relative on near-zero qc/qr)
  *   - managed vs carved workspace (bit-for-bit)
  *   - poisoned with --poison-val vs poisoned with NaN (bit-for-bit)
+ *   - strided tracers vs contiguous qv/qc/qr (bit-for-bit)
  * Exit code 0 only if everything passes.
  *
  * How to read the result:
  *   - device fails, host passes          -> bug in kessler_run's device path
  *   - carved fails, managed passes       -> Workspace carving/aliasing bug
  *   - poison comparison differs          -> kessler_run reads uninitialised scratch
+ *   - strided comparison differs         -> kessler_run ignores a tracer view's
+ *                                           stride (e.g. scalarizes qv/qc/qr)
  *   - everything passes here, but the
  *     model still fails                  -> the scratch is being clobbered or
  *                                           mis-set outside kessler_run
@@ -58,6 +71,7 @@
 #include "kessler_functions_impl.hpp"  // needed for non-GPU / RDC builds
 
 #include <Kokkos_Core.hpp>
+#include <ekat_subview_utils.hpp>
 #include <mpi.h>
 
 #include <algorithm>
@@ -95,6 +109,7 @@ struct Options {
   bool poison     = true;
   Real poison_val = 6966.7; // value seen in mask in the failed GPU run
   bool rain       = false;  // add cloud/rain so sedimentation sub-cycles
+  bool strided    = true;   // also run with qv/qc/qr as strided tracer slices
 };
 
 void usage () {
@@ -112,7 +127,10 @@ void usage () {
     "  --rain            add cloud water and rain so sedimentation sub-cycles\n"
     "                    (note: the TEMPORARY 'n_iter < 10' limit in\n"
     "                    kessler_run will trip if more than 10 sub-cycles\n"
-    "                    are needed)\n");
+    "                    are needed)\n"
+    "  --no-strided      skip the run with qv/qc/qr as strided slices of a\n"
+    "                    tracers array (EAMxx's layout; combine with --rain,\n"
+    "                    or a precl misread is invisible)\n");
 }
 
 bool parse (int argc, char** argv, Options& opt) {
@@ -137,6 +155,7 @@ bool parse (int argc, char** argv, Options& opt) {
     else if (a == "--no-poison")   opt.poison     = false;
     else if (a == "--poison-val")  opt.poison_val = std::atof(next());
     else if (a == "--rain")        opt.rain       = true;
+    else if (a == "--no-strided")  opt.strided    = false;
     else if (a.rfind("--kokkos", 0) == 0) { /* handled by Kokkos */ }
     else { std::printf("Unknown option: %s\n", a.c_str()); usage(); std::exit(2); }
   }
@@ -322,7 +341,7 @@ struct RunResult {
 template <typename KMF>
 RunResult run_case (const std::string& label, const Options& opt,
                     const Profile& prof, const bool carved,
-                    const Real poison_val) {
+                    const Real poison_val, const bool strided = false) {
   const int ncols = opt.ncols, nz = opt.nz;
 
   RunResult res;
@@ -338,6 +357,25 @@ RunResult run_case (const std::string& label, const Options& opt,
   auto relhum = make_2d<KMF>("relhum", std::vector<Real>(size_t(ncols) * nz, 0.0), ncols, nz);
   RView1d<KMF> precl("precl", ncols);
 
+  // Strided mode: qv/qc/qr become slices of one (ncols, 4, npack) tracers
+  // array ordered [qv, qr, qi, qc], like EAMxx's tracer bundle, so each has
+  // column stride 4*npack. qi stays zero. Results are copied back into the
+  // contiguous views afterwards (to_vec scalarizes, which needs contiguity).
+  using Pack = typename KMF::Pack;
+  using TracersView = Kokkos::View<Pack***, Kokkos::LayoutRight, typename KMF::Device>;
+  TracersView tracers;
+  PView2d<KMF> qv_in = qv, qc_in = qc, qr_in = qr;
+  if (strided) {
+    tracers = TracersView("tracers", ncols, 4, ekat::npack<Pack>(nz));
+    Kokkos::deep_copy(tracers, Pack(0));
+    Kokkos::deep_copy(Kokkos::subview(tracers, Kokkos::ALL, 0, Kokkos::ALL), qv);
+    Kokkos::deep_copy(Kokkos::subview(tracers, Kokkos::ALL, 1, Kokkos::ALL), qr);
+    Kokkos::deep_copy(Kokkos::subview(tracers, Kokkos::ALL, 3, Kokkos::ALL), qc);
+    qv_in = ekat::subview_1(tracers, 0);
+    qr_in = ekat::subview_1(tracers, 1);
+    qc_in = ekat::subview_1(tracers, 3);
+  }
+
   auto wsh = make_workspace<KMF>(carved, ncols, nz);
   if (opt.poison) poison_workspace<KMF>(wsh.ws, poison_val);
 
@@ -351,21 +389,30 @@ RunResult run_case (const std::string& label, const Options& opt,
   const Real cpair    = PC::Cpair.value;
   const Real rair     = PC::Rair.value;
 
-  std::printf("\n=== %s: %d step(s), ncols=%d nz=%d dt=%g, workspace=%s%s\n",
+  std::printf("\n=== %s: %d step(s), ncols=%d nz=%d dt=%g, workspace=%s%s%s\n",
               label.c_str(), opt.nsteps, ncols, nz, double(opt.dt),
               carved ? "carved" : "managed",
-              opt.poison ? (", poisoned with " + std::to_string(poison_val)).c_str() : "");
+              opt.poison ? (", poisoned with " + std::to_string(poison_val)).c_str() : "",
+              strided ? (", q* = tracer slices, column stride " +
+                         std::to_string(qr_in.stride(0)) + " (contiguous: " +
+                         std::to_string(qr.stride(0)) + ")").c_str() : "");
   try {
     for (int s = 0; s < opt.nsteps; ++s) {
       KMF::kessler_run(ncols, nz, opt.dt, lyr_surf, lyr_toa,
                        rhoqr, latvap, pref, cpair, rair,
-                       rho, z_mid, pk, theta, qv, qc, qr,
+                       rho, z_mid, pk, theta, qv_in, qc_in, qr_in,
                        precl, relhum, wsh.ws);
       Kokkos::fence();
     }
   } catch (const std::exception& e) {
     res.threw = true;
     res.err   = e.what();
+  }
+
+  if (strided) {
+    Kokkos::deep_copy(qv, Kokkos::subview(tracers, Kokkos::ALL, 0, Kokkos::ALL));
+    Kokkos::deep_copy(qr, Kokkos::subview(tracers, Kokkos::ALL, 1, Kokkos::ALL));
+    Kokkos::deep_copy(qc, Kokkos::subview(tracers, Kokkos::ALL, 3, Kokkos::ALL));
   }
 
   res.theta        = to_vec<KMF>(theta, nz);
@@ -581,6 +628,11 @@ int main (int argc, char** argv)
     // read of scratch kessler_run did not initialise changes the answer.
     if (opt.poison)   runs.push_back(run_case<KMF_D>("device/nan-poison", opt, prof, ws_carved, nan));
     if (opt.host_ref) runs.push_back(run_case<KMF_H>("host/managed",   opt, prof, false, opt.poison_val));
+    // Same device run with qv/qc/qr as strided slices of a tracers array
+    // (EAMxx's layout): any kernel that drops a tracer view's stride
+    // changes the answer.
+    if (opt.strided)  runs.push_back(run_case<KMF_D>("device/strided-tracers", opt, prof,
+                                                     ws_carved, opt.poison_val, true));
 
     auto find = [&runs](const std::string& label) -> const RunResult* {
       for (const auto& r : runs) if (r.label == label) return &r;
@@ -596,6 +648,7 @@ int main (int argc, char** argv)
     const RunResult* managed = find("device/managed");
     const RunResult* carved  = find("device/carved");
     const RunResult* nanrun  = find("device/nan-poison");
+    const RunResult* strided = find("device/strided-tracers");
     for (const auto* r : {managed, carved}) {
       if (host && r) all_ok = compare(*r, *host, Real(1e-8), Real(1e-14)) && all_ok;
     }
@@ -603,6 +656,10 @@ int main (int argc, char** argv)
     if (nanrun) {
       const RunResult* same_ws = ws_carved ? carved : managed;
       all_ok = compare(*same_ws, *nanrun, Real(0), Real(0)) && all_ok;
+    }
+    if (strided) {
+      const RunResult* same_ws = ws_carved ? carved : managed;
+      all_ok = compare(*same_ws, *strided, Real(0), Real(0)) && all_ok;
     }
 
     std::printf("\ndriver_kessler: %s\n", all_ok ? "ALL PASS" : "FAILURES (see above)");

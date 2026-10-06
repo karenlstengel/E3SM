@@ -131,9 +131,20 @@ void KesslerMicrophysicsFunctions<S,D>::kessler_run(
   // Scalarized (zero-copy, flat per-scalar-level) views for the
   // handful of operations that are irregular (CFL reductions) or
   // inherently single-level (surface/TOA boundary terms).
+  //
+  // ekat::scalarize rebuilds a rank-2 view with the default LayoutRight
+  // stride (extent(1)*Pack::n) and drops any stride the input carries, so
+  // it is only valid for contiguous views. qr is NOT scalarized: in EAMxx
+  // it is a subfield of the bundled "tracers" field (ncol x ntracers x
+  // nlev), so its column stride is ntracers*nlev, and a scalarized qr reads
+  // other tracers/columns. Single-level qr values are read through the
+  // packed view instead: qr(col, k / Pack::n)[k % Pack::n].
+  EKAT_REQUIRE_MSG(rho.span_is_contiguous() && z_mid.span_is_contiguous() &&
+                   velqr.span_is_contiguous() && sed.span_is_contiguous(),
+    "Error! KESSLER: kessler_run scalarizes rho, z_mid, velqr, and sed, "
+    "which requires contiguous views.\n");
   const auto rho_s   = ekat::scalarize(rho);
   const auto z_s     = ekat::scalarize(z_mid);
-  const auto qr_s    = ekat::scalarize(qr);
   const auto velqr_s = ekat::scalarize(velqr);
   const auto sed_s   = ekat::scalarize(sed);
 
@@ -238,7 +249,8 @@ void KesslerMicrophysicsFunctions<S,D>::kessler_run(
     Kokkos::parallel_for("kessler_precl_accum",
       Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols),
       KOKKOS_LAMBDA(const int col) {
-        const Scalar p_val = rho_s(col, lyr_surf) * qr_s(col, lyr_surf) *
+        const Scalar qr_surf = qr(col, lyr_surf / Pack::n)[lyr_surf % Pack::n];
+        const Scalar p_val = rho_s(col, lyr_surf) * qr_surf *
                              velqr_s(col, lyr_surf) / rhoqr;
         precl(col)     = p_val;
         precl_acc(col) += mask(col) * p_val * dt0(col);
@@ -290,7 +302,8 @@ void KesslerMicrophysicsFunctions<S,D>::kessler_run(
       Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols),
       KOKKOS_LAMBDA(const int col) {
         const int kbelow = lyr_toa - lyr_step;
-        sed_s(col, lyr_toa) = -dt0(col) * qr_s(col, lyr_toa) *
+        const Scalar qr_toa = qr(col, lyr_toa / Pack::n)[lyr_toa % Pack::n];
+        sed_s(col, lyr_toa) = -dt0(col) * qr_toa *
           velqr_s(col, lyr_toa) /
           (Real(0.5) * (z_s(col, lyr_toa) - z_s(col, kbelow)));
       });

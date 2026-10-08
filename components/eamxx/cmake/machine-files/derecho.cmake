@@ -24,15 +24,19 @@ set(CMAKE_CXX_FLAGS "-DTHRUST_IGNORE_CUB_VERSION_CHECK" CACHE STRING "" FORCE)
 # are compiled the same way: -O2 -Mnofma -Mflushz -Kieee. They have to be set here:
 # CMAKE_BUILD_TYPE=TRUE above means no CMAKE_<LANG>_FLAGS_RELEASE reach EAMxx targets
 # (NVHPC then defaults to -O1), and the line above replaces all CIME C++ macro flags.
-# On GPU, C++ goes through nvcc_wrapper, which passes -O2 to nvcc and the -M/-K flags
-# to the host compiler (nvc++); --fmad=false turns off FMA in the CUDA kernels too
-# (FMA is nvcc's default for device code).
+# On GPU, Kokkos-dependent C++ goes through nvcc_wrapper, which passes -O2 to nvcc and
+# the -M/-K flags to the host compiler (nvc++). All other C++ (incl. CMake try_compile
+# checks such as FindMPI) goes straight to nvc++, which rejects nvcc-only flags, so
+# --fmad=false (turns off FMA in the CUDA kernels; FMA is nvcc's default for device
+# code) is attached to Kokkos::kokkoscore, next to Kokkos' own nvcc-only flags.
 if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "NVHPC")
   set(EAMXX_NUMERICS_FLAGS "-O2 -Mnofma -Mflushz -Kieee")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EAMXX_NUMERICS_FLAGS}" CACHE STRING "" FORCE)
   if (USE_CUDA)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EAMXX_NUMERICS_FLAGS} --fmad=false" CACHE STRING "" FORCE)
-  else()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EAMXX_NUMERICS_FLAGS}" CACHE STRING "" FORCE)
+    if (NOT TARGET Kokkos::kokkoscore)
+      message(FATAL_ERROR "derecho.cmake: Kokkos::kokkoscore not found; cannot apply --fmad=false to CUDA kernels")
+    endif()
+    target_compile_options(Kokkos::kokkoscore INTERFACE $<$<COMPILE_LANGUAGE:CXX>:--fmad=false>)
   endif()
   string(APPEND CMAKE_C_FLAGS " ${EAMXX_NUMERICS_FLAGS}")
   string(APPEND CMAKE_Fortran_FLAGS " ${EAMXX_NUMERICS_FLAGS}")

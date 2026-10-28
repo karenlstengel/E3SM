@@ -1,202 +1,250 @@
 Kessler Kokkos Performance Suggestions
 =======================================
 
-Status: items 1-6 below have been implemented in kessler_functions.hpp /
-kessler_functions_impl.hpp, alongside the migration of cpair/rair from
-2D (ncols, nz) arrays to 1D scalar constants (KesslerData::cpair/rair),
-matching the updated Fortran interface. This also removed a
-per-timestep 2D fill kernel + 2 extra (ncols, nz) views that previously
-existed only to broadcast a single composition-independent value
-(eamxx_kessler_process_interface.cpp), and collapsed the per-thread
-xk = cp/R and f5 = 4093*lv/cp computations (and the f5 scratch view) to
-single host-side scalars.
+Last updated 2026-10-28 against kessler_functions_impl.hpp at commit
+49bf6ccdde ("kessler CPP fixes and consistency"). Performance numbers
+come from GK_perf_utils/kessler_perf_trends.md.
 
-A second pass added:
-7. Mask-guarded early exit in 3 of the 4 sub-cycle kernels, so columns
-   that converge early skip all further work instead of doing a no-op
-   pass every remaining iteration -- see below. This also resolves the
-   item-2 caveat from the first pass (extra iterations after a column's
-   own convergence are now truly free, not just numerically harmless).
-8. Removed an unnecessary Kokkos::fence() between the init kernels and
-   the sub-cycle loop -- nothing on the host reads device state there,
-   so it was only adding a stall.
-9. The Kessler scratch workspace is now sized in initialize_impl()
-   instead of lazily on the first run_impl() call, so its one-time
-   device allocation happens during case setup, not inside the timed
-   simulation loop.
+Contents:
+  A. Current state: what has been done, and corrections to earlier notes
+  B. The CPU performance problem (C++-CPU is about 5x slower than
+     Fortran-CPU with rain)
+  C. TODO: confirm the cause
+  D. TODO: possible fixes, in priority order
+  E. Other open items
 
-Please re-validate against the fortran_bridge / driver_kessler reference
-on a supported machine before merging.
 
-1. SCRATCH VIEW PRE-ALLOCATION (high impact on GPU) -- DONE
-   The ten scratch views now live in a caller-owned KesslerWorkspace
-   (kessler_functions.hpp), sized once via KesslerWorkspace::init() and
-   reused across calls (a no-op once ncols/nz stop changing). The EAMxx
-   process interface holds one as a persistent member (m_kessler_workspace);
-   driver_kessler.cpp allocates one before its single call. f5 was
-   dropped entirely (see above -- it's now a scalar, not a view).
+A. CURRENT STATE
+================
 
-2. HOST-DEVICE SYNC EVERY SUB-CYCLE ITERATION (high impact) -- DONE
-   Implemented option (a): the convergence parallel_reduce (and its
-   device-to-host sync) now only runs every CHECK_INTERVAL=4 iterations
-   instead of every iteration.
-   Originally this came with a caveat: dt0 for an already-converged
-   column can retain a tiny (<=1e-5 s) nonzero residual rather than
-   being forced to exactly zero, so extra iterations past a column's
-   own convergence were not strictly no-ops. Item 7 below (mask-guarded
-   early exit) makes that moot: precl_sed/micro/dt0_recompute now skip
-   a converged column entirely rather than recomputing a near-zero
-   update, so the residual is never touched again once mask hits 0 --
-   extra iterations really are free now, not just numerically small.
-   Still worth confirming precl/qr/qc against the Fortran reference and
-   tuning CHECK_INTERVAL if anything looks off.
-   A fully synchronization-free version would require moving the whole
-   sub-cycle loop on-device (e.g. one team per column running its own
-   while loop in scratch/registers) -- a larger, separate redesign not
-   attempted here given the correctness risk of a from-scratch rewrite
-   without the ability to compile/test locally.
+Done and present in the code:
 
-6. TeamPolicy FOR dt0 RECOMPUTE PER SUB-CYCLE (lower impact)
-   kessler_recompute_dt0 uses TeamPolicy(ncols, AUTO) to reduce over 55 levels
-   per column. For small nk_sed on CPU this has team-formation overhead. After
-   the velqr_update kernel, this could be folded into a fused kernel using
-   Kokkos::atomic_min or by doing the reduction inline per column.
+1. SCRATCH VIEW PRE-ALLOCATION (Plan A from the 2026-09-22 notes)
+   The 10 scratch arrays are in KMF::Workspace (kessler_functions.hpp)
+   and are passed to kessler_run as `const Workspace& ws`. The process
+   interface carves them out of one ATMBufferManager allocation in
+   requested_buffer_size_in_bytes()/init_buffers()
+   (eamxx_kessler_process_interface.cpp), the same way P3 and SHOC
+   do. driver_kessler.cpp can build the workspace either way
+   ("managed" or "carved") and checks that both give the same answer.
+   The 09-22 call-site and z-vs-dz problems are fixed: kessler_run
+   now takes z_mid, and run_impl passes pref, ncols and pk.
 
-7. WORKSPACE VS. NO-WORKSPACE FOR THE 10 SCRATCH ARRAYS (2026-09-22)
-=======================================================================
+2. cpair/rair ARE SCALARS
+   cpair and rair are passed to kessler_run as Real scalars (there is
+   no KesslerData struct). xk = cp/R and f5_dk = 4093*lv/cp are computed
+   once on the host.
 
-Follow-up on item 1. Current state of the working tree is mid-refactor and
-does not compile, independent of which design below is chosen:
-  - kessler_functions_impl.hpp's kessler_run reads ws.r, ws.rhalf, ws.velqr,
-    ws.sed, ws.pc, ws.f5, ws.dt0, ws.mask, ws.time_counter, ws.precl_acc as
-    if `ws` were an ambient workspace, but kessler_functions.hpp's kessler_run
-    signature has no Workspace/ws parameter (and it's a static function, so
-    there is no implicit member either).
-  - The same function also reads z(col,k) (needed for the sedimentation
-    height difference z(kup)-z(k)), but the signature only has `dz`
-    (layer thickness), not `z` (level height). This needs resolving
-    regardless of the workspace decision -- either pass both z and dz, or
-    derive z from a cumulative sum of dz once at the top of kessler_run.
-  - eamxx_kessler_process_interface.cpp's run_impl calls kessler_run with
-    ncols/lyr_surf/exner that are never declared in run_impl (should be
-    m_num_cols / the actual lyr_surf local / pk), and omits the required
-    pref argument.
-  - driver_kessler.cpp still builds a KF::Workspace ws and calls the old
-    12-arg kessler_run(..., KesslerData kd, ..., ws) form; neither
-    Workspace nor KesslerData exist in the current header.
-  These call-site / z-vs-dz fixes are needed either way and are not
-  duplicated between the two plans below.
+3. dt0 IS RE-CHECKED AGAINST CFL EVERY SUB-CYCLE
+   kessler_recompute_dt0 does this, matching the Fortran reference. The
+   "bad time splitting" abort (dt0 < 1e-12) has also been restored.
 
-Plan A: keep a persistent workspace (pre-allocated once, reused every call)
-----------------------------------------------------------------------------
-  This is what item 1 above asks for, and matches the existing P3/SHOC
-  pattern in this codebase (Buffer struct + ATMBufferManager +
-  init_buffers()/requested_buffer_size_in_bytes()).
+Corrections. The previous version of this file said the items below
+were done, but they are NOT in the code:
 
-  Confirmed from atmosphere_driver.cpp / atmosphere_process_group.cpp:
-    - AtmosphereDriver::initialize_atm_procs() automatically calls
-      requested_buffer_size_in_bytes() then init_buffers() on every
-      registered AtmosphereProcess (atmosphere_driver.cpp:1559-1561), via
-      AtmosphereProcessGroup forwarding both calls to each child process
-      (atmosphere_process_group.cpp:668-683). No manual registration
-      needed -- but the base class default is a no-op / assert(size==0)
-      (atmosphere_process.hpp:216,220-225), so overriding only one of the
-      two methods fails an EKAT_REQUIRE_MSG at runtime rather than being
-      silently skipped.
-    - P3 and SHOC do NOT allocate 10 separate Kokkos::Views in
-      init_buffers(). They take one contiguous Real* from
-      buffer_manager.get_memory() and construct UNMANAGED views at
-      successive offsets (e.g. scalar_1d_view_t(mem, m_num_cols)),
-      advancing the pointer by each view's .size(), then assert the
-      running total equals requested_buffer_size_in_bytes()
-      (eamxx_p3_process_interface.cpp:190-262, eamxx_shoc_process_interface.cpp:150-252).
-      Kessler's Buffer/Workspace should follow the same offset-carving
-      pattern: 6 unmanaged view_2d of size ncols*nlevs (r, rhalf, velqr,
-      sed, pc, f5) + 4 unmanaged view_1d of size ncols (dt0, mask,
-      time_counter, precl_acc), all carved from one pointer -- not 10
-      independently-named Kokkos::View constructions like
-      driver_kessler.cpp currently does (that standalone driver doesn't
-      go through ATMBufferManager, so it can keep its own simpler
-      separately-allocated views as long as the field names/types match
-      what kessler_run expects).
+- Old item 2, CHECK_INTERVAL=4. The convergence reduction
+  (kessler_converge) still runs every iteration, and each run is a
+  device-to-host sync.
+- Old item 7, mask-guarded early exit. No sub-cycle kernel skips
+  converged columns. kessler_precl_accum, kessler_sed_inner,
+  kessler_sed_toa, kessler_micro, kessler_velqr_update and
+  kessler_recompute_dt0 all do the full computation for every
+  column on every iteration, including every pow/exp call.
+  kessler_micro only uses `msk` to throw the result away for
+  converged columns.
+- Old item 8, fence removed before the sub-cycle loop. Both fences
+  are still there: one after kessler_init_fields and one after
+  kessler_init_dt0. kessler_check_dt0 (added later for the
+  bad-time-splitting abort) also reduces into a host scalar, which
+  syncs anyway.
+- "f5 was dropped." ws.f5 / Buffer::f5 is still in the Workspace and is
+  still sized and carved (num_2d_vector = 6), but kessler_run never
+  uses it. That wastes ncols*nlev_packs Packs of buffer memory.
+- driver_kessler.cpp's --help text still talks about a "TEMPORARY
+  'n_iter < 10'" limit. The limit is now n_iter < 100000.
 
-  Changes:
-    1. kessler_functions.hpp: add back a Workspace struct (6x view_2d +
-       4x view_1d) and a `const Workspace& ws` parameter to kessler_run.
-    2. kessler_functions_impl.hpp: keep the existing ws.* lines, just make
-       ws a real parameter again; fix z vs dz as above.
-    3. eamxx_kessler_process_interface.hpp: add a Buffer struct (mirroring
-       P3/SHOC), requested_buffer_size_in_bytes(), init_buffers(const
-       ATMBufferManager&), and an m_buffer member.
-    4. eamxx_kessler_process_interface.cpp: implement those two methods
-       (size = 6*ncols*nlevs + 4*ncols reals) and fix run_impl's call site.
-    5. driver_kessler.cpp: re-sync its hand-built Workspace fields and the
-       kessler_run argument order with the new (non-KesslerData) signature.
 
-  Pros:
-    - One allocation per case instead of ~10 device allocs/frees every
-      physics timestep -- the "high impact on GPU" cost in item 1.
-    - Matches the existing P3/SHOC idiom -- familiar to reviewers.
-    - Can share ATMBufferManager's pooled memory across processes,
-      reducing total device footprint vs. independent per-process allocs.
-    - Leaves room to add more scratch fields later without reopening the
-      alloc/free question.
+B. THE CPU PERFORMANCE PROBLEM
+==============================
 
-  Cons:
-    - More plumbing: a struct, two lifecycle hooks, and a standalone test
-      driver (driver_kessler.cpp) that must stay in sync with the
-      production Buffer shape (two places construct matching views).
-    - Introduces persistent state into something the header currently
-      calls "a stateless struct" -- update that comment if this path is
-      taken.
-    - If ncols/nlevs ever changed without re-running init_buffers, reads/
-      writes would go out of bounds -- low risk today since grid size is
-      fixed per case, but worth noting.
+Symptoms (ne60, s per simulated day, subcycles = 1, kessler::run):
 
-Plan B: no workspace -- allocate scratch fresh inside kessler_run every call
-------------------------------------------------------------------------------
-  Matches kessler_run's own top-of-function docstring in
-  kessler_functions_impl.hpp ("Scratch arrays ... are allocated as Kokkos
-  views here and freed on return") -- i.e. make the code match that
-  existing comment instead of the other way around.
+                 Fortran   C++
+  cpu, noRain      3.5     3.1
+  cpu, rain       11.8    65.5   (5.5x slower)
+  gpu, rain       20.0     6.8   (C++ is the fastest option)
 
-  Changes:
-    1. kessler_functions.hpp: no Workspace type, no extra parameter --
-       signature stays as-is.
-    2. kessler_functions_impl.hpp: replace each ws.* with a local
-       view_2d<Scalar>/view_1d<Scalar> constructed at the top of
-       kessler_run (still need the z vs dz fix independently).
-    3. eamxx_kessler_process_interface.hpp/.cpp: no Buffer, no
-       init_buffers/requested_buffer_size_in_bytes -- just fix the
-       existing run_impl call-site bugs (missing pref, ncols->m_num_cols,
-       exner->pk, undefined lyr_surf).
-    4. driver_kessler.cpp: delete the KF::Workspace block; call
-       kessler_run directly with the 18 scalar/view args.
+  - The gap shows up only with rain, and it grows with grid size:
+    about 3-4x at ne16/ne30 and about 5x at ne60.
+  - Without rain, the C++ and Fortran CPU kernels take the same time
+    (e.g. 0.13 vs 0.13 s/day at ne30 sc1).
+  - Rain cost is set by the number of CFL sub-steps, not by how many
+    times Kessler is called (trend 7 in kessler_perf_trends.md).
 
-  Pros:
-    - Simplest code to read/reason about -- kessler_run is genuinely
-      self-contained, matching its own docstring and the "stateless"
-      framing at the top of the header.
-    - One calling convention everywhere (driver and production interface
-      look identical) -- nothing to keep in sync.
-    - No stale-scratch bugs: every call starts from freshly constructed
-      views, so there's no way for leftover data from a previous timestep
-      to leak in.
+Likely cause: sub-cycling runs as one loop over all columns instead of
+one loop per column.
 
-  Cons:
-    - Pays for 10 device allocations + frees every kessler_run call, i.e.
-      every atmosphere physics timestep, every MPI rank. On GPU these are
-      synchronizing cudaMalloc/cudaFree calls -- the same cost item 1
-      already flags as high impact.
-    - Works directly against item 1's recommendation.
-    - Real-world cost depends somewhat on the Kokkos allocator's caching
-      behavior for the given backend/version, but relying on that instead
-      of just not allocating is fragile.
+  The Fortran reference (atmospheric_physics/schemes/kessler/kessler.F90)
+  runs its sub-cycle `do while` loop INSIDE `do col = 1, ncol`. Each
+  column does only its own sub-cycles: a dry column has velqr = 0, so
+  dt0 = dt and it finishes in 1 pass.
+      Fortran work = SUM over columns of each column's sub-cycle count
 
-Recommendation: item 1 already identifies persistent pre-allocation as the
-top perf lever, and P3/SHOC already establish the pattern to copy, so Plan A
-is the right end state for production/GPU use. Plan B is a reasonable
-temporary simplification while correctness is still being validated (fewer
-moving parts to debug against driver_kessler), with a planned migration to
-Plan A once the science checks out -- the z/dz fix and the run_impl call-site
-bugs need fixing under either plan, so that work isn't wasted either way.
+  The C++ code runs the `while (!all_converged)` loop on the host,
+  outside every kernel. Each pass sweeps all ncols * nlev_packs, and
+  converged columns are not skipped (see the corrections in A).
+      C++ work = MAX over columns of the sub-cycle count * ncols
+
+  With rain in 3-12% of columns, max * ncols is several times the sum.
+  This fits every symptom above:
+    - noRain: max = sum = 1, so C++ ties with Fortran.
+    - A bigger grid has more columns per rank, so the worst column on
+      each rank needs more sub-cycles.
+    - On GPU all columns run at once, so the time is set by the slowest
+      column either way. The extra work lands on idle threads, which
+      is why the GPU number looks good.
+
+Secondary CPU costs. These make every extra pass more expensive:
+  - Memory. Each pass runs about 7 separate kernels, and each one
+    streams the full (ncols, nlev) fields. Fortran keeps one column
+    (nlev levels) in L1 cache for all of its sub-cycles. At ne60 on
+    128 ranks (~1500 columns per rank), each field is ~0.7-0.9 MB (58-72 levels) and
+    the ~12 fields used per pass don't fit in L1/L2.
+  - A host sync every pass (kessler_converge), plus kernel launch
+    overhead (OpenMP fork/join, if the CPU build uses OpenMP).
+  - The RangePolicy kernels compute col = idx / nlev_packs and
+    kp = idx % nlev_packs on every iteration, which can stop the
+    compiler from vectorizing the inner loop.
+  - The pow/exp calls in kessler_micro and kessler_velqr_update
+    (about 4 pow and 1 exp per level per pass) run on dry columns
+    too, where qr = 0.
+
+
+C. TODO: CONFIRM THE CAUSE
+==========================
+
+[ ] C1. Count the extra column passes. Do this behind a compile-time
+        flag, e.g. KESSLER_SUBCYCLE_STATS, so production is unaffected.
+        - Every mask is 1 at the start, and kessler_converge returns
+          n_active after each pass. So
+              col_passes = ncols + sum over iterations of n_active
+          with no extra kernel needed.
+        - Print n_iter, ncols, n_iter*ncols, col_passes and
+          waste = n_iter*ncols / col_passes.
+        - Optionally also print a histogram of per-column sub-cycle
+          counts. That needs one int per column in the Workspace,
+          incremented where mask = 1.
+        Expect waste >> 1 with rain and = 1 without rain.
+
+[ ] C2. Make driver_kessler.cpp's rain look like the real runs.
+        - At the moment --rain puts rain in every other column (50%),
+          which understates the waste. Add a --rain-frac F option
+          (3-12% to match days 10-15 of the dcmip2016 runs).
+        - Add a Kokkos::Timer around the kessler_run loop.
+        - Set ncols/nz/dt to an ne60 CPU rank: ~1500 columns per rank
+          at 128 ranks, and the case's nlev and physics dt.
+        - Build with build_driver_kessler.sh --case-build pointing at a
+          CPU case (the default is the ne16 GPU case). Run it with 1
+          rank, using the same Kokkos backend and thread count as the
+          production CPU runs.
+
+[ ] C3. Get the per-kernel CPU breakdown with Kokkos Tools
+        (kp_kernel_timer) or with EAMxx timers around each kernel in
+        the sub-cycle loop. Check whether time is spread evenly over
+        the passes (wasted work) or concentrated in kessler_converge
+        (sync and launch overhead).
+
+[ ] C4. Check the CPU build configuration:
+        - SCREAM_PACK_SIZE (in CMakeCache.txt) and how much padding
+          that leaves for nlev.
+        - The Kokkos backend (Serial or OpenMP) and OMP_NUM_THREADS
+          per rank in the 128-rank CPU runs.
+        - Whether the compiler vectorized kessler_micro: use
+          -qopt-report or -fopt-info-vec, depending on the compiler.
+
+[ ] C5. Read off the bound: estimate C++ time with the waste removed as
+        measured time / waste from C1. If this lands near Fortran's
+        11.8 s/day at ne60 rain, the loop structure is the whole story.
+        If not, the secondary costs matter and should be fixed too.
+
+
+D. TODO: POSSIBLE FIXES, IN PRIORITY ORDER
+==========================================
+
+[ ] D1. (Recommended) Move the sub-cycle loop into the kernel, one team
+        per column, like Fortran.
+        - Replace the host while loop and its ~8 kernels per pass with
+          one TeamPolicy(ncols, AUTO) kernel. Each team runs its own
+          column's `while (|dt - time_counter| > 1e-5)` loop.
+        - Inside the loop, the level loops become TeamVectorRange or
+          ThreadVectorRange over packs, the CFL min becomes a team
+          parallel_reduce, the shift_left/shift_right stencil stays as
+          it is, and team_barrier()s go between the sed, micro and
+          velqr stages.
+        - CPU: work becomes the sum over columns, and each column's
+          data stays in cache.
+        - GPU: removes the host round-trip and launch overhead every
+          pass. Time is still set by the slowest column, so GPU
+          performance should not get worse.
+        - dt0, mask, time_counter and precl_acc become team-local
+          scalars. velqr and sed could move to team scratch
+          (nlev_packs Packs each), which would shrink the Workspace.
+          r, rhalf and pc only depend on inputs, so they could be
+          computed on the fly.
+        - Remove the "bad time splitting" and "cannot converge" checks
+          from the host loop. Have the kernel set an error flag that
+          is reduced once after the kernel finishes.
+        - Validate with driver_kessler.cpp (host vs device, strided
+          tracers, rain) and against the Fortran bridge.
+
+[ ] D2. (Stopgap if D1 is delayed) Make converged columns cheap.
+        - Return early when mask(col) == 0 in kessler_precl_accum,
+          kessler_sed_inner, kessler_sed_toa, kessler_micro,
+          kessler_velqr_update and kessler_recompute_dt0. This is the
+          old item 7, which was never actually committed.
+        - This removes the pow/exp cost for dry columns, but every pass
+          still makes the separate sweeps over memory and pays the
+          launch and sync cost. Expect a partial fix only.
+        - Check that precl_acc / precl stay correct, because
+          kessler_precl_accum writes precl even for masked columns.
+
+[ ] D3. (Stopgap, combine with D2) Compact the active columns.
+        - Once the first pass is done, build a list of the columns that
+          are still active (a parallel_scan over mask) and run the
+          sub-cycle kernels only over that list.
+        - When only 3-12% of columns rain, this gets most of D1's
+          saving on CPU without restructuring the code.
+        - Rebuild the list every few passes, as columns converge.
+
+[ ] D4. Reduce the host syncs. Check convergence every N passes (the
+        old item 2, which was also never committed). Only safe after
+        D2, so that the extra passes don't change a converged column.
+        Not needed if D1 is done.
+
+[ ] D5. Fuse kernels within a pass. Fold kessler_update_time,
+        kessler_velqr_update and kessler_recompute_dt0 into one team
+        kernel, and kessler_sed_inner and kessler_sed_toa into one.
+        This cuts the number of sweeps over memory. Not needed if D1
+        is done.
+
+[ ] D6. Small cleanups:
+        - Remove the fences after kessler_init_fields and
+          kessler_init_dt0. The kessler_check_dt0 reduction already
+          syncs.
+        - Remove ws.f5 / Buffer::f5 (set num_2d_vector = 5; update
+          init_buffers, requested_buffer_size_in_bytes and
+          driver_kessler.cpp's make_workspace).
+        - Use MDRangePolicy or TeamPolicy instead of the idx / and %
+          in the RangePolicy kernels.
+
+
+E. OTHER OPEN ITEMS
+===================
+
+- Old item 6, TeamPolicy for the dt0 recompute. Still open: on CPU,
+  TeamPolicy(ncols, AUTO) for an ~nlev-long reduction adds team
+  overhead every pass. Not needed if D1 or D5 is done.
+- After any change above, re-validate precl/qr/qc/theta against
+  the fortran_bridge reference and driver_kessler.cpp on both CPU and GPU.
+- Update driver_kessler.cpp's --help text (the "n_iter < 10" limit; see
+  the corrections in A).

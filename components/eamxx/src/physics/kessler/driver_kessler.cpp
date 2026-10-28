@@ -52,6 +52,20 @@
  *   - strided tracers vs contiguous qv/qc/qr (bit-for-bit)
  * Exit code 0 only if everything passes.
  *
+ * Performance (see performance_suggestions.md, sections C and D):
+ *   --impl prod|hostloop|both selects the production kessler_run (one
+ *   team per column, item D1), the previous host-driven sub-cycle loop
+ *   kept in driver_kessler_hostloop.hpp, or both. With both, every run is
+ *   done for each, and prod is compared to hostloop bit for bit. --repeat/--warmup time repeated calls on the same input
+ *   (the state is restored, untimed, before each repeat), --kernel-timers
+ *   adds a per-kernel breakdown (C3), and the hostloop runs print the
+ *   per-column sub-cycle counts, i.e. how much work the host loop
+ *   wasted (C1).
+ *   --rain-frac sets the fraction of rainy columns (C2); --grid sets
+ *   ncols/nz/dt to one rank of a production case. Typical use:
+ *     OMP_NUM_THREADS=1 ./driver_kessler_cpu --perf --grid ne16-cpu --rain-frac 0.08
+ *     ./driver_kessler_gpu --perf --grid ne16-gpu --rain-frac 0.08
+ *
  * How to read the result:
  *   - device fails, host passes          -> bug in kessler_run's device path
  *   - carved fails, managed passes       -> Workspace carving/aliasing bug
@@ -69,6 +83,7 @@
 
 #include "kessler_functions.hpp"
 #include "kessler_functions_impl.hpp"  // needed for non-GPU / RDC builds
+#include "driver_kessler_hostloop.hpp"
 
 #include <Kokkos_Core.hpp>
 #include <ekat_subview_utils.hpp>
@@ -76,10 +91,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <limits>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -108,8 +125,15 @@ struct Options {
   bool host_ref   = true;
   bool poison     = true;
   Real poison_val = 6966.7; // value seen in mask in the failed GPU run
-  bool rain       = false;  // add cloud/rain so sedimentation sub-cycles
+  Real rain_frac  = 0;      // fraction of columns with cloud/rain (sub-cycles)
   bool strided    = true;   // also run with qv/qc/qr as strided tracer slices
+  bool prod       = true;   // production KMF::kessler_run
+  bool hostloop   = false;  // kessler_driver::kessler_run_hostloop (old kessler_run)
+  int  repeat     = 1;      // timed repeats of the nsteps calls
+  int  warmup     = 0;      // untimed repeats before those
+  bool kernel_timers = false;
+
+  bool rain () const { return rain_frac > 0; }
 };
 
 void usage () {
@@ -118,19 +142,40 @@ void usage () {
     "  --ncols N         number of columns (default 3433)\n"
     "  --nz N            number of levels (default 58)\n"
     "  --dt S            physics time step in seconds (default 1800)\n"
+    "  --grid G          ncols/nz/dt of one rank of a production case:\n"
+    "                      ne16-cpu: 108 cols (13826 / 128 ranks), 58 levs, 1800 s\n"
+    "                      ne16-gpu: 3457 cols (13826 / 4 ranks), 58 levs, 1800 s\n"
+    "                      ne60-cpu: 1519 cols (194402 / 128 ranks), 58 levs, 1800 s\n"
+    "                      ne60-gpu: 48601 cols (194402 / 4 ranks), 58 levs, 1800 s\n"
     "  --nsteps N        repeated kessler_run calls (default 1)\n"
     "  --ws MODE         workspace: managed | carved | both (default both)\n"
     "  --no-host-ref     skip the host reference run\n"
+    "  --host-ref        do the host reference run (undoes --perf's --no-host-ref)\n"
     "  --no-poison       do not pre-fill the workspace with garbage (also skips\n"
     "                    the NaN-poison comparison run)\n"
     "  --poison-val X    garbage value for the workspace (default 6966.7)\n"
-    "  --rain            add cloud water and rain so sedimentation sub-cycles\n"
-    "                    (note: the TEMPORARY 'n_iter < 10' limit in\n"
-    "                    kessler_run will trip if more than 10 sub-cycles\n"
-    "                    are needed)\n"
+    "  --rain            same as --rain-frac 0.5\n"
+    "  --rain-frac F     put cloud water and rain in a fraction F of the columns\n"
+    "                    (spread evenly, each with its own rain amount) so\n"
+    "                    sedimentation sub-cycles; 0.03-0.12 matches days 10-15\n"
+    "                    of the dcmip2016 runs. kessler_run aborts after 100000\n"
+    "                    sub-cycles.\n"
     "  --no-strided      skip the run with qv/qc/qr as strided slices of a\n"
     "                    tracers array (EAMxx's layout; combine with --rain,\n"
-    "                    or a precl misread is invisible)\n");
+    "                    or a precl misread is invisible)\n"
+    "  --impl I          prod | hostloop | both (default prod): production\n"
+    "                    kessler_run, the previous host-loop version in\n"
+    "                    driver_kessler_hostloop.hpp, or both (compared bit\n"
+    "                    for bit)\n"
+    "  --repeat N        time N repeats of the nsteps calls, restoring the\n"
+    "                    input state before each (default 1)\n"
+    "  --warmup N        untimed repeats before the timed ones (default 0)\n"
+    "  --kernel-timers   per-kernel time breakdown of the timed repeats. Fences\n"
+    "                    after every kernel, so on GPU take the total time from\n"
+    "                    a run without it.\n"
+    "  --perf            timing setup: --ws managed --no-poison --no-strided\n"
+    "                    --no-host-ref --impl both --repeat 5 --warmup 1\n"
+    "                    (options after it override it)\n");
 }
 
 bool parse (int argc, char** argv, Options& opt) {
@@ -151,11 +196,36 @@ bool parse (int argc, char** argv, Options& opt) {
       opt.carved  = (m == "carved"  || m == "both");
       if (!opt.managed && !opt.carved) { usage(); std::exit(2); }
     }
+    else if (a == "--grid") {
+      const std::string g = next();
+      if      (g == "ne16-cpu") { opt.ncols = 108;  opt.nz = 58; opt.dt = 1800.0; }
+      else if (g == "ne16-gpu") { opt.ncols = 3457; opt.nz = 58; opt.dt = 1800.0; }
+      else if (g == "ne60-cpu") { opt.ncols = 1519; opt.nz = 58; opt.dt = 1800.0; }
+      else if (g == "ne60-gpu") { opt.ncols = 48601; opt.nz = 58; opt.dt = 1800.0; }
+      else { std::printf("Unknown grid: %s\n", g.c_str()); usage(); std::exit(2); }
+    }
     else if (a == "--no-host-ref") opt.host_ref   = false;
+    else if (a == "--host-ref")    opt.host_ref   = true;
     else if (a == "--no-poison")   opt.poison     = false;
     else if (a == "--poison-val")  opt.poison_val = std::atof(next());
-    else if (a == "--rain")        opt.rain       = true;
+    else if (a == "--rain")        opt.rain_frac  = 0.5;
+    else if (a == "--rain-frac")   opt.rain_frac  = std::atof(next());
     else if (a == "--no-strided")  opt.strided    = false;
+    else if (a == "--impl") {
+      const std::string m = next();
+      opt.prod = (m == "prod" || m == "both");
+      opt.hostloop = (m == "hostloop" || m == "both");
+      if (!opt.prod && !opt.hostloop) { usage(); std::exit(2); }
+    }
+    else if (a == "--repeat")      opt.repeat     = std::max(1, std::atoi(next()));
+    else if (a == "--warmup")      opt.warmup     = std::max(0, std::atoi(next()));
+    else if (a == "--kernel-timers") opt.kernel_timers = true;
+    else if (a == "--perf") {
+      opt.managed = true;  opt.carved = false;
+      opt.poison  = false; opt.strided = false; opt.host_ref = false;
+      opt.prod    = true;  opt.hostloop = true;
+      opt.repeat  = 5;     opt.warmup = 1;
+    }
     else if (a.rfind("--kokkos", 0) == 0) { /* handled by Kokkos */ }
     else { std::printf("Unknown option: %s\n", a.c_str()); usage(); std::exit(2); }
   }
@@ -167,6 +237,7 @@ bool parse (int argc, char** argv, Options& opt) {
 // ---------------------------------------------------------------------------
 struct Profile {
   std::vector<Real> rho, z_mid, pk, theta, qv, qc, qr;
+  std::vector<char> rainy;  // per column
 };
 
 Profile build_profile (const Options& opt) {
@@ -189,9 +260,20 @@ Profile build_profile (const Options& opt) {
     z_int[k] = ztop * std::pow(frac, 1.6);
   }
 
+  // A fraction rain_frac of the columns is rainy, spread evenly (column c
+  // is rainy when floor((c+1)*F) > floor(c*F)). Each rainy column gets its
+  // own rain/cloud amount, log-uniform in [0.25, 2] x the base amount, so
+  // the per-column sub-cycle counts vary the way they do in the model.
+  p.rainy.assign(ncols, 0);
+  for (int c = 0; c < ncols; ++c) {
+    p.rainy[c] = std::floor((c + 1) * opt.rain_frac) > std::floor(c * opt.rain_frac);
+  }
+
   for (int c = 0; c < ncols; ++c) {
     const Real two_pi = 6.283185307179586;
     const Real pert = std::sin(two_pi * c / std::max(ncols, 1));
+    const Real u    = std::fmod(c * 0.6180339887498949, 1.0);
+    const Real amp  = 0.25 * std::pow(8.0, u);
     for (int k = 0; k < nz; ++k) {
       const size_t i = size_t(c) * nz + k;
       const Real z   = 0.5 * (z_int[k] + z_int[k + 1]);
@@ -209,9 +291,9 @@ Profile build_profile (const Options& opt) {
       p.theta[i] = T / pk;
       p.qv[i]    = std::max(rh * qvs, 1.0e-12);
 
-      if (opt.rain && (c % 2 == 0)) {
-        if (z > 2000.0 && z < 6000.0) p.qc[i] = 1.0e-3;
-        if (z > 1000.0 && z < 4000.0) p.qr[i] = 5.0e-4;
+      if (p.rainy[c]) {
+        if (z > 2000.0 && z < 6000.0) p.qc[i] = amp * 1.0e-3;
+        if (z > 1000.0 && z < 4000.0) p.qr[i] = amp * 5.0e-4;
       }
     }
   }
@@ -329,23 +411,104 @@ void poison_workspace (const typename KMF::Workspace& ws, const Real val) {
 }
 
 // ---------------------------------------------------------------------------
+// Per-kernel timers, through Kokkos' tool callbacks (no Kokkos Tools library
+// needed). Kernels are launched one at a time from the host, so one open
+// slot is enough. The end callback fences, so asynchronous (GPU) kernels are
+// timed to completion.
+// ---------------------------------------------------------------------------
+struct KernelTimes {
+  bool on = false;
+  std::string open_name;
+  Kokkos::Timer open_timer;
+  std::map<std::string, std::pair<double, long>> acc;  // name -> (seconds, count)
+};
+KernelTimes& ktimes () { static KernelTimes k; return k; }
+
+void kt_begin (const char* name, const uint32_t, uint64_t* kid) {
+  auto& k = ktimes();
+  *kid = 0;
+  k.open_name = name;
+  k.open_timer.reset();
+}
+void kt_end (const uint64_t) {
+  Kokkos::fence();
+  auto& k = ktimes();
+  if (!k.on) return;
+  auto& e = k.acc[k.open_name];
+  e.first += k.open_timer.seconds();
+  ++e.second;
+}
+void install_kernel_timers () {
+  Kokkos::Tools::Experimental::set_begin_parallel_for_callback(kt_begin);
+  Kokkos::Tools::Experimental::set_end_parallel_for_callback(kt_end);
+  Kokkos::Tools::Experimental::set_begin_parallel_reduce_callback(kt_begin);
+  Kokkos::Tools::Experimental::set_end_parallel_reduce_callback(kt_end);
+}
+
+// ---------------------------------------------------------------------------
 // One kessler_run experiment
 // ---------------------------------------------------------------------------
+enum class Impl { prod, hostloop };
+const char* impl_name (const Impl i) { return i == Impl::prod ? "prod" : "hostloop"; }
+
 struct RunResult {
   std::string label;
   bool threw = false;
   std::string err;
   std::vector<Real> theta, qv, qc, qr, relhum, precl, mask, time_counter;
+  std::vector<double> times;  // seconds per kessler_run call, per timed repeat
+  std::map<std::string, std::pair<double, long>> kernels;  // --kernel-timers
 };
 
+// Per-column sub-cycle counts (sorted) from the host loop's active-column
+// count after each pass: n_active[i] columns needed more than i+1 passes.
+std::vector<int> passes_from_active (const int ncols, const std::vector<int>& n_active) {
+  std::vector<int> npass;
+  int prev = ncols;
+  for (size_t i = 0; i < n_active.size(); ++i) {
+    npass.insert(npass.end(), prev - n_active[i], int(i) + 1);
+    prev = n_active[i];
+  }
+  return npass;
+}
+
+// Sub-cycle passes per column for one call (C1). The host loop swept every
+// column max(npass) times; prod does sum(npass) column-passes.
+void report_passes (const int step, const std::vector<int>& npass, const bool histogram) {
+  const int ncols = npass.size();
+  long sum = 0; int mx = 0;
+  for (int n : npass) { sum += n; mx = std::max(mx, n); }
+  std::printf("  sub-cycles, step %d: max %d, mean %.2f; column-passes "
+              "hostloop %ld, prod %ld, hostloop/prod %.2f\n",
+              step, mx, double(sum) / std::max(ncols, 1), long(mx) * ncols, sum,
+              double(mx) * ncols / std::max(sum, 1L));
+  if (!histogram) return;
+  // Buckets 1, 2-4, 5-16, 17-64, ... (powers of 4).
+  std::vector<int> cnt;
+  for (int n : npass) {
+    int b = 0;
+    for (long hi = 1; n > hi; hi *= 4) ++b;
+    if (b >= int(cnt.size())) cnt.resize(b + 1, 0);
+    ++cnt[b];
+  }
+  std::printf("  columns by sub-cycle count:");
+  long lo = 1, hi = 1;
+  for (size_t b = 0; b < cnt.size(); ++b) {
+    if (cnt[b]) std::printf("  [%ld-%ld] %d", lo, hi, cnt[b]);
+    lo = hi + 1; hi *= 4;
+  }
+  std::printf("\n");
+}
+
 template <typename KMF>
-RunResult run_case (const std::string& label, const Options& opt,
+RunResult run_case (const Impl impl, const std::string& run_label, const Options& opt,
                     const Profile& prof, const bool carved,
                     const Real poison_val, const bool strided = false) {
   const int ncols = opt.ncols, nz = opt.nz;
 
   RunResult res;
-  res.label = label;
+  res.label = std::string(impl_name(impl)) + ":" + run_label;
+  const std::string& label = res.label;
 
   auto rho    = make_2d<KMF>("rho",    prof.rho,   ncols, nz);
   auto z_mid  = make_2d<KMF>("z_mid",  prof.z_mid, ncols, nz);
@@ -376,8 +539,21 @@ RunResult run_case (const std::string& label, const Options& opt,
     qc_in = ekat::subview_1(tracers, 3);
   }
 
+  // Initial state, restored (untimed) before every repeat.
+  auto theta0 = make_2d<KMF>("theta0", prof.theta, ncols, nz);
+  auto qv0    = make_2d<KMF>("qv0",    prof.qv,    ncols, nz);
+  auto qc0    = make_2d<KMF>("qc0",    prof.qc,    ncols, nz);
+  auto qr0    = make_2d<KMF>("qr0",    prof.qr,    ncols, nz);
+  auto restore = [&]() {
+    Kokkos::deep_copy(theta, theta0);
+    Kokkos::deep_copy(qv_in, qv0);
+    Kokkos::deep_copy(qc_in, qc0);
+    Kokkos::deep_copy(qr_in, qr0);
+  };
+
+  std::vector<int> n_active;  // hostloop: active columns after each pass
+
   auto wsh = make_workspace<KMF>(carved, ncols, nz);
-  if (opt.poison) poison_workspace<KMF>(wsh.ws, poison_val);
 
   // Same arguments the process interface passes (see
   // eamxx_kessler_process_interface.cpp): top-down levels, pref in hPa.
@@ -389,25 +565,52 @@ RunResult run_case (const std::string& label, const Options& opt,
   const Real cpair    = PC::Cpair.value;
   const Real rair     = PC::Rair.value;
 
-  std::printf("\n=== %s: %d step(s), ncols=%d nz=%d dt=%g, workspace=%s%s%s\n",
-              label.c_str(), opt.nsteps, ncols, nz, double(opt.dt),
+  std::printf("\n=== %s: %d step(s) x %d repeat(s) (+%d warmup), ncols=%d nz=%d dt=%g, "
+              "workspace=%s%s%s\n",
+              label.c_str(), opt.nsteps, opt.repeat, opt.warmup, ncols, nz, double(opt.dt),
               carved ? "carved" : "managed",
               opt.poison ? (", poisoned with " + std::to_string(poison_val)).c_str() : "",
               strided ? (", q* = tracer slices, column stride " +
                          std::to_string(qr_in.stride(0)) + " (contiguous: " +
                          std::to_string(qr.stride(0)) + ")").c_str() : "");
+  auto& kt = ktimes();
+  kt.acc.clear();
   try {
-    for (int s = 0; s < opt.nsteps; ++s) {
-      KMF::kessler_run(ncols, nz, opt.dt, lyr_surf, lyr_toa,
-                       rhoqr, latvap, pref, cpair, rair,
-                       rho, z_mid, pk, theta, qv_in, qc_in, qr_in,
-                       precl, relhum, wsh.ws);
+    for (int rep = 0; rep < opt.warmup + opt.repeat; ++rep) {
+      const bool timed = rep >= opt.warmup;
+      restore();
+      if (opt.poison) poison_workspace<KMF>(wsh.ws, poison_val);
       Kokkos::fence();
+      double t = 0;
+      for (int s = 0; s < opt.nsteps; ++s) {
+        kt.on = timed && opt.kernel_timers;
+        Kokkos::Timer timer;
+        if (impl == Impl::prod) {
+          KMF::kessler_run(ncols, nz, opt.dt, lyr_surf, lyr_toa,
+                           rhoqr, latvap, pref, cpair, rair,
+                           rho, z_mid, pk, theta, qv_in, qc_in, qr_in,
+                           precl, relhum, wsh.ws);
+        } else {
+          kessler_driver::kessler_run_hostloop<KMF>(ncols, nz, opt.dt, lyr_surf, lyr_toa,
+                           rhoqr, latvap, pref, cpair, rair,
+                           rho, z_mid, pk, theta, qv_in, qc_in, qr_in,
+                           precl, relhum, wsh.ws, &n_active);
+        }
+        Kokkos::fence();
+        t += timer.seconds();
+        kt.on = false;
+        if (impl == Impl::hostloop && rep == 0 && opt.rain()) {
+          report_passes(s, passes_from_active(ncols, n_active), s == 0);
+        }
+      }
+      if (timed) res.times.push_back(t / opt.nsteps);
     }
   } catch (const std::exception& e) {
+    kt.on = false;
     res.threw = true;
     res.err   = e.what();
   }
+  res.kernels = kt.acc;
 
   if (strided) {
     Kokkos::deep_copy(qv, Kokkos::subview(tracers, Kokkos::ALL, 0, Kokkos::ALL));
@@ -518,7 +721,7 @@ bool check_result (const RunResult& r, const Options& opt, const Profile& prof) 
     report("relhum", worst <= Real(1e-10), fmt("max rel err vs host formula = %.3e", double(worst)));
   }
 
-  if (!opt.rain) {
+  if (!opt.rain()) {
     // 5a. Known answer: cloud-free, subsaturated columns are a no-op.
     int n_theta = 0, n_qv = 0, n_cond = 0, n_precl = 0;
     for (size_t i = 0; i < r.theta.size(); ++i) {
@@ -537,7 +740,7 @@ bool check_result (const RunResult& r, const Options& opt, const Profile& prof) 
     int wet_dry = 0, dry_wet = 0;
     Real min_wet = std::numeric_limits<Real>::max();
     for (int c = 0; c < ncols; ++c) {
-      const bool rainy = (c % 2 == 0);
+      const bool rainy = prof.rainy[c];
       if (rainy) {
         min_wet = std::min(min_wet, r.precl[c]);
         if (opt.nsteps == 1 && !(r.precl[c] > 0)) ++wet_dry;
@@ -612,27 +815,43 @@ int main (int argc, char** argv)
       return 0;
     }
 
-    std::printf("driver_kessler: device exec space = %s, host exec space = %s, Pack::n = %d\n",
+    std::printf("driver_kessler: device exec space = %s (concurrency %d), host exec space = %s, "
+                "Pack::n = %d\n",
                 Kokkos::DefaultExecutionSpace::name(),
+                int(Kokkos::DefaultExecutionSpace().concurrency()),
                 Kokkos::DefaultHostExecutionSpace::name(), int(KMF_D::Pack::n));
 
+    if (opt.kernel_timers) install_kernel_timers();
+
     const Profile prof = build_profile(opt);
+    {
+      int n_rainy = 0;
+      for (char r : prof.rainy) n_rainy += r;
+      std::printf("driver_kessler: %d of %d columns rainy (--rain-frac %g)\n",
+                  n_rainy, opt.ncols, double(opt.rain_frac));
+    }
 
     const Real nan = std::numeric_limits<Real>::quiet_NaN();
     const bool ws_carved = !opt.managed;  // workspace mode for the NaN run
 
+    std::vector<Impl> impls;
+    if (opt.prod) impls.push_back(Impl::prod);
+    if (opt.hostloop) impls.push_back(Impl::hostloop);
+
     std::vector<RunResult> runs;
-    if (opt.managed)  runs.push_back(run_case<KMF_D>("device/managed", opt, prof, false, opt.poison_val));
-    if (opt.carved)   runs.push_back(run_case<KMF_D>("device/carved",  opt, prof, true,  opt.poison_val));
-    // Same device run with the scratch pre-filled with NaN instead: any
-    // read of scratch kessler_run did not initialise changes the answer.
-    if (opt.poison)   runs.push_back(run_case<KMF_D>("device/nan-poison", opt, prof, ws_carved, nan));
-    if (opt.host_ref) runs.push_back(run_case<KMF_H>("host/managed",   opt, prof, false, opt.poison_val));
-    // Same device run with qv/qc/qr as strided slices of a tracers array
-    // (EAMxx's layout): any kernel that drops a tracer view's stride
-    // changes the answer.
-    if (opt.strided)  runs.push_back(run_case<KMF_D>("device/strided-tracers", opt, prof,
-                                                     ws_carved, opt.poison_val, true));
+    for (const Impl im : impls) {
+      if (opt.managed)  runs.push_back(run_case<KMF_D>(im, "device/managed", opt, prof, false, opt.poison_val));
+      if (opt.carved)   runs.push_back(run_case<KMF_D>(im, "device/carved",  opt, prof, true,  opt.poison_val));
+      // Same device run with the scratch pre-filled with NaN instead: any
+      // read of scratch kessler_run did not initialise changes the answer.
+      if (opt.poison)   runs.push_back(run_case<KMF_D>(im, "device/nan-poison", opt, prof, ws_carved, nan));
+      if (opt.host_ref) runs.push_back(run_case<KMF_H>(im, "host/managed",   opt, prof, false, opt.poison_val));
+      // Same device run with qv/qc/qr as strided slices of a tracers array
+      // (EAMxx's layout): any kernel that drops a tracer view's stride
+      // changes the answer.
+      if (opt.strided)  runs.push_back(run_case<KMF_D>(im, "device/strided-tracers", opt, prof,
+                                                       ws_carved, opt.poison_val, true));
+    }
 
     auto find = [&runs](const std::string& label) -> const RunResult* {
       for (const auto& r : runs) if (r.label == label) return &r;
@@ -644,22 +863,74 @@ int main (int argc, char** argv)
 
     // Device vs host should agree to round-off; managed vs carved and
     // garbage- vs NaN-poisoned exactly.
-    const RunResult* host    = find("host/managed");
-    const RunResult* managed = find("device/managed");
-    const RunResult* carved  = find("device/carved");
-    const RunResult* nanrun  = find("device/nan-poison");
-    const RunResult* strided = find("device/strided-tracers");
-    for (const auto* r : {managed, carved}) {
-      if (host && r) all_ok = compare(*r, *host, Real(1e-8), Real(1e-14)) && all_ok;
+    for (const Impl im : impls) {
+      const std::string p = std::string(impl_name(im)) + ":";
+      const RunResult* host    = find(p + "host/managed");
+      const RunResult* managed = find(p + "device/managed");
+      const RunResult* carved  = find(p + "device/carved");
+      const RunResult* nanrun  = find(p + "device/nan-poison");
+      const RunResult* strided = find(p + "device/strided-tracers");
+      for (const auto* r : {managed, carved}) {
+        if (host && r) all_ok = compare(*r, *host, Real(1e-8), Real(1e-14)) && all_ok;
+      }
+      if (managed && carved) all_ok = compare(*managed, *carved, Real(0), Real(0)) && all_ok;
+      if (nanrun) {
+        const RunResult* same_ws = ws_carved ? carved : managed;
+        all_ok = compare(*same_ws, *nanrun, Real(0), Real(0)) && all_ok;
+      }
+      if (strided) {
+        const RunResult* same_ws = ws_carved ? carved : managed;
+        all_ok = compare(*same_ws, *strided, Real(0), Real(0)) && all_ok;
+      }
     }
-    if (managed && carved) all_ok = compare(*managed, *carved, Real(0), Real(0)) && all_ok;
-    if (nanrun) {
-      const RunResult* same_ws = ws_carved ? carved : managed;
-      all_ok = compare(*same_ws, *nanrun, Real(0), Real(0)) && all_ok;
+    // prod does the same arithmetic per column as the old host loop, so the
+    // two should match bit for bit on the same backend.
+    if (opt.prod && opt.hostloop) {
+      for (const auto& r : runs) {
+        if (r.label.rfind("prod:", 0) != 0) continue;
+        const RunResult* hl = find("hostloop:" + r.label.substr(5));
+        if (hl) all_ok = compare(r, *hl, Real(0), Real(0)) && all_ok;
+      }
     }
-    if (strided) {
-      const RunResult* same_ws = ws_carved ? carved : managed;
-      all_ok = compare(*same_ws, *strided, Real(0), Real(0)) && all_ok;
+
+    // Timing summary: seconds per kessler_run call over the timed repeats.
+    std::printf("\n--- timing (s per kessler_run call, %d timed repeat(s) x %d step(s), "
+                "%d warmup)\n", opt.repeat, opt.nsteps, opt.warmup);
+    std::printf("  %-32s %12s %12s %12s %14s\n", "run", "min", "mean", "max", "hostloop/this");
+    for (const auto& r : runs) {
+      if (r.threw || r.times.empty()) continue;
+      const double mn = *std::min_element(r.times.begin(), r.times.end());
+      const double mx = *std::max_element(r.times.begin(), r.times.end());
+      double mean = 0; for (double t : r.times) mean += t; mean /= r.times.size();
+      std::string speedup = "";
+      if (r.label.rfind("prod:", 0) == 0) {
+        const RunResult* pr = find("hostloop:" + r.label.substr(5));
+        if (pr && !pr->times.empty()) {
+          char buf[32];
+          std::snprintf(buf, sizeof(buf), "%.2fx",
+                        *std::min_element(pr->times.begin(), pr->times.end()) / mn);
+          speedup = buf;
+        }
+      }
+      std::printf("  %-32s %12.4e %12.4e %12.4e %14s\n", r.label.c_str(), mn, mean, mx,
+                  speedup.c_str());
+    }
+    if (opt.kernel_timers) {
+      for (const auto& r : runs) {
+        if (r.kernels.empty()) continue;
+        double total = 0;
+        for (const auto& k : r.kernels) total += k.second.first;
+        std::printf("\n--- kernels: %s (summed over timed repeats; fenced)\n", r.label.c_str());
+        std::vector<std::pair<std::string, std::pair<double, long>>> ks(r.kernels.begin(),
+                                                                        r.kernels.end());
+        std::sort(ks.begin(), ks.end(),
+                  [](const auto& a, const auto& b) { return a.second.first > b.second.first; });
+        for (const auto& k : ks) {
+          std::printf("  %-28s %10.4e s %6.1f%%  %9ld calls  %10.3e s/call\n", k.first.c_str(),
+                      k.second.first, 100 * k.second.first / std::max(total, 1e-300),
+                      k.second.second, k.second.first / std::max(k.second.second, 1L));
+        }
+      }
     }
 
     std::printf("\ndriver_kessler: %s\n", all_ok ? "ALL PASS" : "FAILURES (see above)");

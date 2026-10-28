@@ -1,157 +1,298 @@
-# EAMxx Kessler Bridge 
+# EAMxx Kessler Microphysics (C++/Kokkos)
 
-## Background: 
+The Kessler (1969) warm-rain microphysics scheme as an EAMxx atmosphere
+process (`kessler`), implemented in C++ with Kokkos so the same source runs
+on CPU and GPU. It is a port of the CCPP/CAM-SIMA Fortran scheme in
+[ESCOMP/atmospheric_physics](https://github.com/ESCOMP/atmospheric_physics),
+`schemes/kessler/kessler.F90` and `kessler_update.F90`.
 
-See `components/eam/src/physics/crm/pam/external/physics/micro/kessler/Microphysics.h` for background information on EAM implementation. 
+The scheme has three moisture categories: water vapor (`qv`), cloud water
+(`qc`, moves with the flow) and rain water (`qr`, falls relative to the
+air). It does autoconversion, collection, evaporation and saturation
+adjustment, plus rain sedimentation sub-cycled to satisfy the CFL condition.
+References: Kessler (1969); Soong & Ogura (1973); Klemp & Wilhelmson (1978),
+J. Atmos. Sci. 35, 1070-1096; Durran & Klemp (1983), Mon. Wea. Rev. 111,
+2341-2361.
 
-Non-CAM Fortran version of code (with C bindings) found in: `components/eam/src/physics/crm/pam/external/physics/micro/kessler/kessler.f90`
+Other implementations of the same scheme live on other branches of this
+fork, so they can be compared against this one:
 
-CAM Fortran routines are in: [this repo](https://github.com/ESCOMP/atmospheric_physics)
+| branch                | implementation                                                    |
+|-----------------------|-------------------------------------------------------------------|
+| `ren/kessler-claude`  | this directory: C++/Kokkos                                        |
+| `ren/kessler-bridge`  | the Fortran scheme called from EAMxx through a C++/Fortran bridge (`fortran_bridge/`) |
+| `ren/kessler-JAX`     | a Python/JAX version called from EAMxx                            |
 
-We are using the Kessler provided in: [atmospheric_physics](git@github.com:ESCOMP/atmospheric_physics.git). 
+Performance work, results and open items are tracked in
+[performance_suggestions.md](performance_suggestions.md).
 
-Note that additional initial conditions files might need to be downloaded from https://web.lcrc.anl.gov/public/e3sm/inputdata/atm/scream/init/. 
+## Files
 
-## Design & Code Layout
+| file | contents |
+|------|----------|
+| `eamxx_kessler_process_interface.hpp/.cpp` | `KesslerMicrophysics`, the EAMxx `AtmosphereProcess`: field requests, buffer setup, pre/post-processing around `kessler_run` |
+| `kessler_functions.hpp` | `KesslerMicrophysicsFunctions<Scalar, Device>` (KMF): types, the `Workspace` struct, function declarations |
+| `kessler_functions_impl.hpp` | implementations: `kessler_run` and the three `kessler_update_*` functions |
+| `eti/kessler.cpp` | explicit template instantiation for CPU builds and GPU builds with relocatable device code (see CMakeLists.txt) |
+| `CMakeLists.txt` | the `kessler` library; defines `EAMXX_HAS_KESSLER`, which registers the process in `physics/register_physics.hpp` |
+| `driver_kessler.cpp` | standalone test and benchmark driver for `kessler_run` (not built by CMake; see [Standalone driver](#standalone-driver)) |
+| `driver_kessler_hostloop.hpp` | the previous, host-loop version of `kessler_run`, kept as a reference for the driver |
+| `build_driver_kessler.sh` | builds the driver against an existing case build |
+| `performance_suggestions.md` | performance history, results, translation guide, open items |
+| `fortran_bridge/` | Fortran bridge sources. Not compiled on this branch; used on `ren/kessler-bridge` |
 
-The Kessler suite is in `atmospheric_physics/schemes/kessler`. 
+## The `kessler` atmosphere process
 
-List of parameters: 
+`KesslerMicrophysics` runs on the `physics` grid (the GLL dynamics grid for
+this compset). Levels are top-down, as everywhere in EAMxx: index 0 is the
+model top, `nlev-1` the surface.
 
-Kessler.F90:
-kessler_init(real lv_in, real pref_in, real rhoqr_in, char* errmsg, int errflg) {r,r,r,w,w}  
-kessler_run(int ncol, int nz, real dt, int lyr_surf, int lyr_toa, real cpair, real rair, real rho, real z, &
-        real pk, real theta, real qv, real qc, real qr, real precl, real relhum, char* scheme_name, char* errmsg, int errflg) {r,r,r,r,r,r,r,r,r,r,u,u,u,u,w,w,w,w,w}  
+Fields:
 
-Kessler_update.F90:
+| field | role | units | notes |
+|-------|------|-------|-------|
+| `T_mid` | updated | K | latent heating applied through `T_mid_tend` |
+| `p_mid`, `pseudo_density` | required | Pa | |
+| `qv`, `qc`, `qr`, `qi` (tracers) | updated | kg/kg | mixing ratios wrt dry air; `qi` is only checked, Kessler has no ice |
+| `phis` | updated | m2/s2 | surface geopotential (0 for this compset) |
+| `rho`, `dz`, `pk`, `theta` | computed | kg/m3, m, -, K | derived in pre-processing |
+| `z_mid`, `z_int` | computed | m | heights above the surface |
+| `precl` | computed | m/s | surface rain rate, averaged over the step |
+| `relhum` | computed | % | |
+| `T_mid_prev`, `T_mid_tend`, `st_energy` | computed | K, K/s, J/kg | `kessler_update` bookkeeping; `st_energy` is dry static energy |
+| `vapor_flux`, `water_flux`, `ice_flux`, `heat_flux` | computed | | only when the energy fixer is on; set to 0 |
 
-kessler_update_init(real gravit_in, char* errmsg, int errflg) {r, w, w}  
-kessler_update_timestep_init(real temp, real temp_prev, real ttend_t, char* errmsg, int errflg) {r,w,w,w,w}  
-kessler_update_run(int nz, int ncol, real dt, real theta, real exner, real temp_prev, real ttend_t, char* errmsg, int errflg) {r,r,r,r,r,r,u,w,w}  
-kessler_update_timestep_final(int nz, real cpair, real temp, real zm, real phis, real st_energy, char* errmsg, int errflg) {r,r,r,r,r,w,w,w}  
+What `run_impl` does each call, in order (each step has an EAMxx timer
+under `EAMxx::kessler::run::`):
 
+1. `preprocess`: `pk` = Exner function, `theta` from `T_mid`, `dz` from
+   `pseudo_density`, and `rho = pseudo_density / (g * dz)`; then `z_int`
+   and `z_mid` from `dz` (a team-level scan from the surface).
+2. `kessler_update_timestep_init`: save `T_mid` in `T_mid_prev`, zero
+   `T_mid_tend`.
+3. `kessler_run`: the microphysics; updates `theta`, `qv`, `qc`, `qr`,
+   and computes `precl` and `relhum`.
+4. `kessler_update_run`: `T_mid_tend += (theta * pk - T_mid_prev) / dt`.
+5. `kessler_apply_T_tend`: `T_mid = T_mid_prev + T_mid_tend * dt`. HOMME
+   takes its forcing from the change in `T_mid` across physics, so without
+   this step the latent heating would be lost.
+6. `kessler_update_timestep_final`: `st_energy = cp * T_mid + g * z_mid + phis`.
 
-## GPU stuff
+Range checks registered in `initialize_impl` run as pre/postconditions on
+every call: `T_mid` in [100, 500] K and `qv` in [1e-13, 0.2] (invariants);
+`qc`, `qr`, `qi` in [0, 0.1] and `precl` >= 0 (postconditions). They can be
+turned off with `kessler::enable_precondition_checks` /
+`enable_postcondition_checks`; at ne16 on GPU they cost more than
+`kessler_run` itself (performance_suggestions.md, section I).
 
-### Implementation Notes
+Constants come from `scream::physics::Constants`: `pref = P0/100` (hPa),
+`latvap`, `rhoqr = RHOW`, `gravit`, `Cpair`, `Rair`.
 
-1. For the Fortran link to work, you must add both the C++ side and Fortran side field variables to the `ATMBufferManager` with `Packagename::init_buffers(const ATMBufferManager &buffer_manager)` and `Packagename::requested_buffer_size_in_bytes()` (see the main interface C++ file).
-2. It seems like a good idea to create structs for passing input fields, output fields, and (if needed) parameters/etc. Note that this requires each member of the struct that is a field to be defined for both the C++ side (usually with `Spack` and Kokkos views) and the Fortran side (_unmanaged_ view of type `Real` in the same dimensions as the C++ version UNLESS WE ARE USING OPENACC THEN WE USE MANAGED VIEWS WITH `Real`???). 
-3. You should create a transpose function for converting between the Fortran and C++ fields. See `transpose()` in the `packagename_functions.hpp` file. 
-4. I _think_ you can only pass to Fortran the `get_field_out("fieldname").get_view<Spack**>().data()` object into the C to Fortran binding. 
+## C++/Kokkos implementation of `kessler_run`
 
-### GPU vs. CPU performance 
+`kessler_run(ncols, nz, dt, lyr_surf, lyr_toa, rhoqr, lv, pref, cpair, rair,
+rho, z_mid, pk, theta, qv, qc, qr, precl, relhum, ws)` in
+`kessler_functions_impl.hpp`.
 
-## Misc notes
+**One kernel, one team per column.** Each column runs its own sub-cycle
+loop and does only as many passes as its own CFL limit needs, like the
+Fortran, whose `do while` sits inside `do col`. A dry column finishes in one
+pass. Inside a team:
 
-Example OpenACC Fortran loop. Recall that it is more efficient to loop over `k` first in fortran 
+- Initialisation over all levels: `r = 0.001*rho`, `rhalf = sqrt(rho_surf/rho)`,
+  `pc = 3.8 / (pk^(cp/R) * pref)`, `qr = max(qr, 0)`, terminal fall speed
+  `velqr`. Then the first sub-cycle step `dt0 = min(dt, min over levels of
+  0.8*dz/velqr)`.
+- Each pass: accumulate surface precipitation; sedimentation for all levels
+  (no flux into the top level); barrier; microphysics (autoconversion and
+  collection, saturation adjustment, evaporation) fused with the new fall
+  speed and its CFL limit; advance time; recompute `dt0`; barrier. The CFL
+  limit is re-checked every pass, as in the Fortran.
+- After the loop: relative humidity, `precl = accumulated / dt`.
 
-```fortran
-    !$acc parallel deviceptr(p_mid) 
-    !$acc loop gang vector collapse(2) reduction(max:p_mid_max)
-    do k = 1,pver
-        do i = 1,ncol
-            p_mid(i,k) = p_mid(i,k) * 2.0
-        end do
-    end do
-    p_mid_max = MAXVAL(p_mid)
-    !$acc end parallel
+Implementation details:
+
+- Level loops are `TeamVectorRange` over packs (`ekat::Pack`, size
+  `SCREAM_PACK_SIZE`); math is Pack-aware (`ekat::pow/exp/sqrt/max/min`).
+  The vertical neighbour for sedimentation and the CFL limit, which may sit
+  in the next pack, comes from `ekat::shift_left/shift_right`.
+- Team size from `ekat::TeamPolicyFactory::get_default_team_policy(ncols,
+  nlev_packs)`, as in P3/SHOC: 1 thread per team on CPU; on GPU nlev_packs
+  rounded up to a multiple of 32, capped at 128 (64 for 58 levels).
+- The sub-cycle state (`dt0`, elapsed time, accumulated precipitation, pass
+  count, error code) is team-local; every thread keeps an identical copy.
+- Padding lanes (when `nz` is not a multiple of the pack size) and the
+  excluded boundary level are given safe inputs before any division or pow,
+  so floating-point-exception builds do not trap.
+- `qr` (and the other tracers) are slices of EAMxx's bundled tracer field,
+  so they are strided. They are never `scalarize`d; single levels are read
+  as `qr(col, k / Pack::n)[k % Pack::n]`. Only `rho`, `z_mid` and `velqr`
+  are scalarized, and their contiguity is checked.
+- Errors: a column whose first `dt0` is below 1e-12 ("bad time splitting",
+  as in the Fortran), or that cannot finish (`dt0 <= 0`, or 100000 passes),
+  stores an error code; after the kernel one reduction on the host throws
+  the matching message.
+- `lyr_surf`/`lyr_toa` are 0-based; the process passes `nlev-1` and 0.
+
+**Workspace.** Scratch arrays are passed in as `KMF::Workspace`: per level
+`r`, `rhalf`, `velqr`, `sed`, `pc`, `f5` (`f5` is unused), and per column
+`dt0`, `mask`, `time_counter`, `precl_acc` (written at the end: the final
+step, the error code, the elapsed time and the accumulated precipitation).
+The process carves them from one `ATMBufferManager` allocation in
+`requested_buffer_size_in_bytes()` / `init_buffers()`, like P3 and SHOC.
+
+**History.** The first port ran the sub-cycle loop on the host, sweeping all
+columns with about nine kernels per pass until the slowest column was done.
+That did `max(passes) * ncols` work instead of `sum(passes)`, which made the
+CPU build 3-5.5x slower than Fortran with rain. The current version gives
+bit-identical answers; in model runs with rain, `kessler::run` on the
+slowest rank is 3-5x faster on CPU and 2.5-14x faster on GPU (performance_suggestions.md, sections B-D and G-H). The old
+version is kept in `driver_kessler_hostloop.hpp`.
+
+`kessler_update_timestep_init`, `kessler_update_run` and
+`kessler_update_timestep_final` are the `kessler_update.F90` routines
+(steps 2, 4 and 6 above).
+
+## The Kessler compset
+
+`F2000-SCREAMv1-KESSLER`
+(`2000_SCREAM%KESSLER-noAero_SLND_SICE_SOCN_SROF_SGLC_SWAV`, in
+`components/eamxx/cime_config/config_compsets.xml`): EAMxx with the HOMME
+dycore and stub land, ice, ocean, river, glacier and wave components.
+For `SCREAM%KESSLER`, `namelist_defaults_eamxx.xml` and
+`config_component.xml` set:
+
+- `physics` = `mac_aero_mic`, and `mac_aero_mic` = `kessler`: Kessler is the
+  only physics. No radiation, turbulence or aerosols.
+- `mac_aero_mic::number_of_subcycles`: Kessler calls per physics step. The
+  default depends on the grid (e.g. 12 at ne30np4); the perf cases set 1
+  or 4 with `atmchange`.
+- No topography: `topography_filename` unset, `phis = 0`.
+- Zero aerosol fields, and zero values for surface fields that EAMxx's
+  surface exporter needs to exist (`precip_*_surf_mass`, `sfc_flux_*`).
+- `SCREAM_CMAKE_OPTIONS = "SCREAM_NP 4 SCREAM_NUM_VERTICAL_LEV 58 SCREAM_NUM_TRACERS 10"`.
+
+The user-mods directory
+`components/eamxx/cime_config/testdefs/testmods_dirs/eamxx/L58-kessler`
+sets 58 levels in `SCREAM_CMAKE_OPTIONS` and aquaplanet-style coupler
+settings (fixed orbit with zero eccentricity/obliquity, constant zenith
+angle 42.05 deg, zero albedos).
+
+Initial conditions are DCMIP2016 moist baroclinic wave states
+(`FKESSLER_<grid>[_dayNN].cam.i.moist_baroclinic_wave_dcmip2016.nc`), set
+with `atmchange initial_conditions::filename=...`. The derecho perf cases use
+day-10 (raining) and day-1 (no rain) states from
+`/glade/derecho/scratch/kstengel/inputdata/atm/scream/init/`. Other EAMxx
+initial-condition files can be downloaded from
+https://web.lcrc.anl.gov/public/e3sm/inputdata/atm/scream/init/.
+
+## Building and running
+
+### A case
+
+On derecho, from `cime/scripts`:
+
+```bash
+./create_newcase --case <case> --compset F2000-SCREAMv1-KESSLER --res ne16_ne16 \
+    --machine derecho --compiler nvidia --project <project> \
+    --user-mods-dir <E3SM>/components/eamxx/cime_config/testdefs/testmods_dirs/eamxx/L58-kessler
+cd <case>
+./xmlchange DEBUG=FALSE,NTASKS=128,NTHRDS=1,ROOTPE=0
+./case.setup
+./xmlchange CAM_TARGET=theta-l_kokkos
+./case.build
 ```
 
+For GPU, use `--compiler nvidiagpu` and, before `case.setup`:
 
-# Analytic conditions & test setup
+```bash
+./xmlchange NTASKS=4,NGPUS_PER_NODE=4,GPU_TYPE=a100
+./xmlchange KOKKOS_GPU_OFFLOAD=TRUE,OPENACC_GPU_OFFLOAD=FALSE,OPENMP_GPU_OFFLOAD=FALSE,OVERSUBSCRIBE_GPU=FALSE
+```
 
-StormSPEED uses https://github.com/ESCOMP/CAM/blob/cam_development/src/dynamics/tests/initial_conditions/ic_baroclinic.F90 c/o Jesse N. This sets: 
+What the derecho builds come out as:
 
-requires: vcoord,latvals, lonvals, z_int, 
-- U: wind at all levels, u
-- V: wind at all levels, v
-- T: temperature at all levels (T_mid?)
-- PS: surface pressure
-- PHIS: phis (surface geopotential)
-- Q: [qv, qr, qc, qi] need to check on order here
-- can use to save z_mid and p_mid too I think
+| | CPU (`nvidia`) | GPU (`nvidiagpu`) |
+|-|----------------|-------------------|
+| Kokkos backend | Serial (one rank per core, `NTHRDS=1`) | CUDA, sm_80 (A100) |
+| `SCREAM_PACK_SIZE` | 16 (58 levels = 4 packs) | 1 |
+| ranks per node | 128 | 4 (one per GPU) |
+| C++ flags | `-O2 -Mnofma -Mflushz -Kieee` | same, plus `--fmad=false` on CUDA kernels |
 
-The other option is: https://github.com/ESCOMP/CAM/tree/cam_development/src/dynamics/tests c/o Jesse N.
+The flags come from `components/eamxx/cmake/machine-files/derecho.cmake`.
+They turn off fused multiply-add, so C++, Fortran and JAX builds can be
+compared bit for bit. On CPU and RDC GPU builds, `kessler_functions_impl.hpp`
+is compiled once in `eti/kessler.cpp`; on other GPU builds
+`kessler_functions.hpp` includes it in every file that uses it.
 
-Need to implement the baroclinic conditions in EAMxx. Question - what do we do about the aquaplanet? Do we use aquaplanet in StormSPEED? 
-Below I added how to change to 58 levels to match StormSPEED but we should be able to swap the vertical levels files for 72 or 58 between the two models directly. 
+Runtime settings used by the perf cases: `./xmlchange ATM_NCPL=48` (30 min
+physics step), and with `./atmchange`: `ctl_nl::se_ftype=2`, `transport_alg=12`, `statefreq=488`,
+`dt_remap_factor=2`, `dt_tracer_factor=6`, `hypervis_subcycle=1`,
+`nu_top=2.5e5`, and per grid:
 
-## TO DO
+| grid | `se_tstep` | `se_nsplit` | `hypervis_subcycle_q` |
+|------|-----------:|------------:|----------------------:|
+| ne16np4 | 300 | 1 | 3 |
+| ne30np4 | 300 | 1 | 6 |
+| ne60np4 | 150 | 2 | 6 |
 
-1. In the namelists.xml we need to add something like `initial_conditions_analytic` to use instead of `initial_conditions_filename`. should contain a string to specify name of analytical function we are using ex:
-    ```xml
-        <initial_conditions>
-            <analytic type="array(string)">UNSET</analytic>
-            <analytic>"ic_baroclinic"</analytic>
-        </initial_conditions>
-    ```
-For Kessler, we probably want to make a COMPSET with `nlev=58`. Also need to set the vertical coordinates to match StormSPEED with: 
-    ```xml
-    <!-- Grids manager specs -->
-    <grids_manager>
-        <type>homme</type>
-        <physics_grid_type>gll</physics_grid_type>
-        <physics_grid_type hgrid=".*pg2">pg2</physics_grid_type>
-        <physics_grid_rebalance>none</physics_grid_rebalance>
-        <dynamics_namelist_file_name>./data/namelist.nl</dynamics_namelist_file_name>
-        <vertical_coordinate_filename type="file">UNSET</vertical_coordinate_filename>
-        <vertical_coordinate_filename nlev="58">/glade/campaign/cesm/cesmdata/inputdata/atm/cam/inic/cam_vcoords_L58_c250227.nc</vertical_coordinate_filename>
-        ...
-    </grids_manager>
-    ```
-and in case script we probably want to have `./create_newcase --case ${CASE_NAME} .... --user-mods-dir ${CCSMROOT}/components/eamxx//cime_config/testdefs/testmods_dirs/eamxx/output/preset/2 ${CCSMROOT}/components/eamxx//cime_config/testdefs/testmods_dirs/eamxx/L58`
+### Derecho perf workflow
 
-where `${CCSMROOT}/components/eamxx//cime_config/testdefs/testmods_dirs/eamxx/L58/shell_comands` contains 
-```./xmlchange SCREAM_CMAKE_OPTIONS="`./xmlquery -value SCREAM_CMAKE_OPTIONS | sed 's/SCREAM_NUM_VERTICAL_LEV [0-9][0-9]*/SCREAM_NUM_VERTICAL_LEV 72/'`"```
+The C++/Fortran/JAX performance comparison uses scripts outside this
+repository, in `/glade/derecho/scratch/kstengel/GK_perf_utils/workflow/`:
 
-2. in `/glade/derecho/scratch/kstengel/E3SM/E3SM/components/eamxx/src/control/atmosphere_driver.cpp::create_grids()` line 281 add something like:
-    ```cpp
-    else if (ic_pl.isParameter("analytic")) {
-        // Initial run, if ICs are an analytic function, pass the name.
-        auto ic_analytic = ic_pl.get<std::string>("analytic");
-        gm_params.set("ic_analytic", ic_analytic);
-        m_atm_params.sublist("provenance").set("initial_conditions_analytic",ic_analytic);
-    }
-    ```
-    and line 1255 something like:
-    ```cpp
-    // If analytic is specified, compute initial conditions on all grids
-    if (ic_pl.isParameter("analytic")) {
-        // Now loop over all grids, and load from file the needed fields on each grid (if any).
-        const auto& ic_analytic = ic_pl.get<std::string>("analytic");
-        m_atm_logger->info("    [EAMxx] IC analytic type: " + ic_analytic);
+- `build.sh <impl> <hw>` builds one executable per implementation and
+  hardware into `e3sm_test/builds/<impl>_<hw>_<commit>[-dirty<hash>]/`.
+  Builds are tagged by commit and uncommitted diff, so older run cases keep
+  their executable, and `builds/<impl>_<hw>` points at the newest.
+- `run.py` creates run cases that point `EXEROOT` at those builds (no
+  compiling), sets the runtime settings above and records each case in a
+  manifest.
+- `interactive/` holds scripts for building and running small cases inside
+  an interactive GPU job, and for comparing old and new builds.
 
-        for (const auto& it : m_grids_manager->get_repo()) {
-        const auto& grid = it.second;
-        const auto& grid_name = grid->name();
+How to use them, and the results, are in performance_suggestions.md
+(sections F-H).
 
-        if (ic_fields_names[grid_name].size()==0) continue;
+### Standalone driver
 
-        std::vector<Field> ic_fields;
-        for (const auto& fn : ic_fields_names[grid_name]) {
-            ic_fields.push_back(m_field_mgr->get_field(fn,grid_name));
-        }
-        
-        // Call the analytic function. I think this should go to a switch statement to call the correct analytic function but should check with EAMxx team about how they would want this setup
-        set_fields_analytic(ic_fields,grid,ic_analytic);
+`driver_kessler.cpp` runs `kessler_run` outside EAMxx on synthetic columns
+shaped like one rank of a production case, checks the results and times it.
+It is not part of the CMake build; `build_driver_kessler.sh` compiles it with
+the Kokkos/EKAT install and flags of an existing case build:
 
-        // I don't think we need to worry about IOP enabled options since we should just do the computation at the lat/lon column in the grid
-        
-        for (auto& f : ic_fields) {
-            f.get_header().get_tracking().update_time_stamp(m_current_ts);
-        }
-        }
-    }
-    ```
+```bash
+source <case>/.env_mach_specific.sh
+./build_driver_kessler.sh --case-build <EXEROOT> --out ./driver_kessler_cpu
+OMP_NUM_THREADS=1 ./driver_kessler_cpu --grid ne16-cpu --rain-frac 0.08 --impl both
+./driver_kessler_cpu --perf --grid ne16-cpu --rain-frac 0.08 --kernel-timers
+./driver_kessler_cpu --help
+```
 
-3. compute the analytical initial conditions. see `/glade/derecho/scratch/kstengel/E3SM/E3SM/components/eamxx/src/share/io/scorpio_input.cpp`. 
+It checks device vs host results, managed vs carved Workspace, garbage- vs
+NaN-filled scratch, strided vs contiguous tracers, latent-heat balance,
+`relhum`, and the expected rain pattern. `--impl both` also compares the
+current `kessler_run` with the old host-loop version bit for bit. Build and
+run it on a compute node (an interactive GPU job runs both the CPU and the
+GPU binary).
 
-## Field perturbation
+## Validation
 
-### StormSPEED: 
-???
+- Standalone: all driver checks pass on CPU and GPU, and the current
+  `kessler_run` matches the previous version bit for bit
+  (performance_suggestions.md, D1 and F).
+- Model: runs with the current code match the previous C++ build bit for
+  bit in HOMME's global state statistics (`homme_atm.log`), rain and no
+  rain: ne16, ne30 and ne60 on CPU and GPU, 1 and 4 subcycles, 1 and 5
+  days (48 cases; performance_suggestions.md, G and H).
+- Still open: a direct comparison of `precl`/`qr`/`qc`/`theta` with the
+  Fortran reference (`fortran_bridge`, branch `ren/kessler-bridge`).
 
-### EAMxx:
+## Status and open items
 
-Should be able to do automatically with the `perturbed_fields` and corresponding fields in the namelists.xml options. 
+- The team-per-column `kessler_run` is not committed yet (branch
+  `ren/kessler-claude`).
+- `Workspace::f5` / `Buffer::f5` is allocated but unused; `dt0`,
+  `time_counter` and `precl_acc` no longer need to be global arrays.
+- Remaining costs and possible improvements: performance_suggestions.md,
+  section I. A checklist for future Fortran-to-Kokkos ports is in section 0.

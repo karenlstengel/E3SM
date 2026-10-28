@@ -75,7 +75,7 @@ EOF
   KSRC=$RECON/$KREL
   # Quoted includes search the including file's directory first, so the
   # driver must sit next to the reconstructed headers to pick them up.
-  cp "$HERE/driver_kessler.cpp" "$KSRC/"
+  cp "$HERE/driver_kessler.cpp" "$HERE"/driver_kessler_*.hpp "$KSRC/"
 fi
 DRIVER_CPP=$KSRC/driver_kessler.cpp
 echo "Kessler source: $KSRC"

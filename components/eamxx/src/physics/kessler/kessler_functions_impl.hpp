@@ -24,46 +24,57 @@ namespace kessler {
  * condition for sedimentation.
  *
  * Strategy:
- *  - Scratch arrays (r, rhalf, velqr, sed, pc, f5, dt0, mask,
+ *  - One kernel, one team per column. Each column runs its own
+ *    sub-cycle loop and does only as many passes as its own CFL limit
+ *    needs, like the reference Fortran `kessler_run` (module `kessler`,
+ *    atmospheric_physics), whose `do while` sits inside `do col`. A dry
+ *    column finishes in one pass. (The previous version drove the loop
+ *    from the host, so every column was swept as many times as the
+ *    worst column needed, with ~9 kernel launches and a host sync per
+ *    pass: 10-30x more work on CPU with a few percent of the columns
+ *    raining. See performance_suggestions.md, item D1.)
+ *  - Each column's `dt0` is re-checked against the CFL condition every
+ *    sub-cycle (using the just-updated rain fall speed), exactly as the
+ *    reference Fortran and its JAX translation
+ *    (`kessler_jax/kessler_run.py`) do -- not computed once up front.
+ *  - Level loops are TeamVectorRange over packs. Per pass: accumulate
+ *    precipitation; sedimentation (all levels, lyr_toa included);
+ *    barrier; microphysics fused with the fall-speed update and the
+ *    CFL min (velqr and the CFL limit of pack kp depend only on qr of
+ *    pack kp); time update; barrier.
+ *  - The sub-cycle state (dt0, elapsed time, accumulated precipitation,
+ *    pass count, error code) is team-local. Every thread keeps an
+ *    identical copy, since every input to it is team-wide (the CFL min
+ *    comes from a team reduction), so no broadcast is needed. The final
+ *    values are written to ws.dt0 / ws.time_counter / ws.precl_acc, and
+ *    ws.mask gets the column's error code (0 = converged). The host
+ *    checks the codes once, after the kernel.
+ *  - Scratch arrays (r, rhalf, velqr, sed, pc, dt0, mask,
  *    time_counter, precl_acc) live in the caller-owned Workspace `ws`
- *    (see kessler_functions.hpp), persistent across calls instead of
- *    allocated and freed here every time (see Buffer/init_buffers in
- *    eamxx_kessler_process_interface.hpp/.cpp for how the production
- *    caller carves them from one ATMBufferManager allocation, mirroring
- *    the P3/SHOC Buffer pattern).
- *  - Per-(col,level) fields, including the 6 Workspace 2D scratch
- *    arrays, are Pack-typed and operated on Pack-wide using ekat's
- *    Pack-aware math (ekat::exp/pow/sqrt/max/min, not std::, which has
- *    no Pack overloads) -- the same idiom SHOC uses throughout (e.g.
- *    shoc_assumed_pdf_impl.hpp).
- *  - Sedimentation needs the scalar neighbor level (k +/- lyr_step),
- *    which generally falls in an adjacent Pack, not the current one.
- *    That neighbor is assembled via ekat::shift_left/shift_right, the
- *    same mechanism P3's calc_first_order_upwind_step uses for its own
- *    vertical upwind stencil (p3_upwind_impl.hpp).
- *  - A handful of per-level operations are irregular (the CFL-limited
- *    dt0 reductions) or inherently single-level (the lyr_surf/lyr_toa
- *    boundary terms); these use ekat::scalarize() views instead of
- *    fighting Pack lanes for a reduction, matching how P3's own
- *    generalized_sedimentation uses scalarize() for its precip
- *    accumulation.
+ *    (see kessler_functions.hpp), persistent across calls (see
+ *    Buffer/init_buffers in eamxx_kessler_process_interface.hpp/.cpp
+ *    for how the production caller carves them from one ATMBufferManager
+ *    allocation, mirroring the P3/SHOC Buffer pattern). ws.f5 is unused.
+ *  - Per-(col,level) fields are Pack-typed and operated on Pack-wide
+ *    using ekat's Pack-aware math (ekat::exp/pow/sqrt/max/min) -- the
+ *    same idiom SHOC uses throughout (e.g. shoc_assumed_pdf_impl.hpp).
+ *  - Sedimentation and the CFL limit need the scalar neighbor level
+ *    (k + lyr_step), which generally falls in an adjacent Pack. That
+ *    neighbor is assembled via ekat::shift_left/shift_right, the same
+ *    mechanism P3's calc_first_order_upwind_step uses for its own
+ *    vertical upwind stencil (p3_upwind_impl.hpp). The single-level
+ *    surface/TOA terms read scalarized views.
  *  - Levels beyond nz within the last Pack (padding, when nz is not a
- *    multiple of Pack::n) and, in the sedimentation kernel, the single
- *    level nearest lyr_toa, are excluded via an in-range Mask. Inputs
- *    that would otherwise divide by zero or hit a pow() domain error on
+ *    multiple of Pack::n) and, for sedimentation, the single level
+ *    nearest lyr_toa, are excluded via an in-range Mask. Inputs that
+ *    would otherwise divide by zero or hit a pow() domain error on
  *    excluded lanes are clamped to a safe placeholder before the op
  *    runs -- the computation itself must not trap under this codebase's
  *    fpe build, even though the result there is never read back out.
- *  - The sub-cycling while loop runs on the host; each iteration
- *    dispatches device kernels and then checks convergence via a
- *    device-to-host reduction. Each column's `dt0` is re-checked
- *    against the CFL condition every sub-cycle (using the just-
- *    updated rain fall speed), exactly as the reference Fortran
- *    `kessler_run` (module `kessler`, atmospheric_physics) and its
- *    JAX translation (`kessler_jax/kessler_run.py`) do -- not
- *    computed once up front. This matters: if the fall speed grows
- *    during the timestep, a `dt0` fixed from the initial fall speed
- *    would violate CFL for later sub-steps.
+ *  - Team size comes from ekat::TeamPolicyFactory, as in P3/SHOC: one
+ *    thread per team on CPU, and on GPU nlev_packs rounded up to a
+ *    multiple of the warp size (64 for 58 levels; measured 1.3x faster
+ *    than Kokkos::AUTO at ne60).
  *  - Convention: lyr_surf and lyr_toa are 0-based C++ indices.
  *    lyr_step = +1 if lyr_surf <= lyr_toa, -1 otherwise. EAMxx orders
  *    levels top-down, so the production caller passes
@@ -104,12 +115,19 @@ void KesslerMicrophysicsFunctions<S,D>::kessler_run(
   const int kmin = (lyr_step > 0) ? lyr_surf : lyr_toa;
   const int kmax = (lyr_step > 0) ? lyr_toa  : lyr_surf;
 
-  // Range for the sedimentation inner loop: all levels except lyr_toa
+  // Range for the sedimentation stencil: all levels except lyr_toa
   const int kmin_sed = (lyr_step > 0) ? lyr_surf       : lyr_toa + 1;
   const int kmax_sed = (lyr_step > 0) ? lyr_toa - 1    : lyr_surf;
-  const int nk_sed   = kmax_sed - kmin_sed + 1; // nz-1
+  const int kbelow   = lyr_toa - lyr_step;
 
   const int nlev_packs = ekat::npack<Pack>(nz);
+  const int kp_surf = lyr_surf / Pack::n, ks_surf = lyr_surf % Pack::n;
+  const int kp_toa  = lyr_toa  / Pack::n, ks_toa  = lyr_toa  % Pack::n;
+
+  // Per-column sub-cycle limit and error codes returned in ws.mask
+  const int max_pass      = 100000;
+  const int err_bad_split = 2;  // initial dt0 < 1e-12
+  const int err_no_conv   = 3;  // dt0 <= 0 while active, or max_pass hit
 
   // ---------------------------------------------------------------
   // Workspace scratch: persistent, caller-owned (see Workspace in
@@ -120,17 +138,13 @@ void KesslerMicrophysicsFunctions<S,D>::kessler_run(
   const view_2d<Pack>& velqr = ws.velqr;
   const view_2d<Pack>& sed   = ws.sed;
   const view_2d<Pack>& pc    = ws.pc;
-  // ws.f5 is sized/carved as part of the Workspace but unused by the
-  // current algorithm -- the f5 Durran & Klemp coefficient below is a
-  // scalar constant, not a per-level field.
-  const view_1d<Scalar>& dt0          = ws.dt0;
+  const view_1d<Scalar>& dt0_out      = ws.dt0;
   const view_1d<Scalar>& mask         = ws.mask;
   const view_1d<Scalar>& time_counter = ws.time_counter;
   const view_1d<Scalar>& precl_acc    = ws.precl_acc;
 
   // Scalarized (zero-copy, flat per-scalar-level) views for the
-  // handful of operations that are irregular (CFL reductions) or
-  // inherently single-level (surface/TOA boundary terms).
+  // single-level surface/TOA terms.
   //
   // ekat::scalarize rebuilds a rank-2 view with the default LayoutRight
   // stride (extent(1)*Pack::n) and drops any stride the input carries, so
@@ -140,335 +154,244 @@ void KesslerMicrophysicsFunctions<S,D>::kessler_run(
   // other tracers/columns. Single-level qr values are read through the
   // packed view instead: qr(col, k / Pack::n)[k % Pack::n].
   EKAT_REQUIRE_MSG(rho.span_is_contiguous() && z_mid.span_is_contiguous() &&
-                   velqr.span_is_contiguous() && sed.span_is_contiguous(),
-    "Error! KESSLER: kessler_run scalarizes rho, z_mid, velqr, and sed, "
+                   velqr.span_is_contiguous(),
+    "Error! KESSLER: kessler_run scalarizes rho, z_mid and velqr, "
     "which requires contiguous views.\n");
   const auto rho_s   = ekat::scalarize(rho);
   const auto z_s     = ekat::scalarize(z_mid);
   const auto velqr_s = ekat::scalarize(velqr);
-  const auto sed_s   = ekat::scalarize(sed);
 
-  // ---------------------------------------------------------------
-  // Kernel 1: initialise derived constants and terminal fall speed
-  // ---------------------------------------------------------------
-  Kokkos::parallel_for("kessler_init_fields",
-    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nlev_packs),
-    KOKKOS_LAMBDA(const int idx) {
-      const int col = idx / nlev_packs;
-      const int kp  = idx % nlev_packs;
+  using TPF = ekat::TeamPolicyFactory<typename KT::ExeSpace>;
+  const auto policy = TPF::get_default_team_policy(ncols, nlev_packs);
 
-      const auto level = ekat::range<IntPack>(kp * Pack::n);
-      const auto valid  = (level >= kmin) && (level <= kmax);
-
-      // Guard denominators/bases so invalid (padding or out-of-range)
-      // lanes never hit a division-by-zero or a pow() domain error --
-      // their results are never read downstream, but the computation
-      // itself must not trap under the fpe build.
-      Pack rho_kp = rho(col, kp);
-      rho_kp.set(!valid, Real(1));
-      Pack pk_kp = pk(col, kp);
-      pk_kp.set(!valid, Real(1));
-
-      const Scalar rho_surf = rho_s(col, lyr_surf);
-
-      r(col, kp)     = Real(0.001) * rho_kp;          // g/cm^3
-      rhalf(col, kp) = ekat::sqrt(rho_surf / rho_kp);
-      pc(col, kp)    = Real(3.8) / (ekat::pow(pk_kp, xk) * pref);
-      // Guard against round-off negative qr before computing velqr
-      qr(col, kp)    = ekat::max(qr(col, kp), Real(0));
-      velqr(col, kp) = Real(36.34) * rhalf(col, kp) *
-                       ekat::pow(qr(col, kp) * r(col, kp), Real(0.1364));
-    });
-  Kokkos::fence();
-
-  // ---------------------------------------------------------------
-  // Kernel 2: compute initial sub-cycling time step dt0 via CFL
-  //           (min reduction over levels within each column)
-  //           and initialise per-column bookkeeping scalars.
-  // ---------------------------------------------------------------
-  using TeamPol    = Kokkos::TeamPolicy<typename KT::ExeSpace>;
-  using MemberType = typename TeamPol::member_type;
-
-  Kokkos::parallel_for("kessler_init_dt0",
-    TeamPol(ncols, Kokkos::AUTO),
+  Kokkos::parallel_for("kessler_run", policy,
     KOKKOS_LAMBDA(const MemberType& team) {
       const int col = team.league_rank();
 
-      // Min CFL dt across all interior levels
-      Scalar dtmin;
-      Kokkos::parallel_reduce(
-        Kokkos::TeamThreadRange(team, nk_sed),
-        [&](const int idx, Scalar& lmin) {
-          const int k = kmin_sed + idx;
-          if (Kokkos::abs(velqr_s(col, k)) > Real(1e-12)) {
-            const Scalar dzk = z_s(col, k + lyr_step) - z_s(col, k);
-            lmin = Kokkos::min(lmin, Real(0.8) * dzk / velqr_s(col, k));
-          }
-        },
-        Kokkos::Min<Scalar>(dtmin));
-
-      Kokkos::single(Kokkos::PerTeam(team), [&]() {
-        dt0(col)          = Kokkos::min(dt, dtmin);
-        mask(col)         = Real(1);
-        time_counter(col) = Real(0);
-        precl_acc(col)    = Real(0);
-        precl(col)        = Real(0);
-      });
-    });
-
-  Kokkos::fence();
-
-  // ---------------------------------------------------------------
-  // Guard against a degenerate initial CFL time step. Mirrors the
-  // reference Fortran kessler_run's "bad time splitting" abort
-  // (kessler.F90: `if (dt0 < 1e-12) then errflg = 1; return`), which
-  // the original port of this routine omitted, allowing a column
-  // with a pathologically small CFL-limited dt0 to silently subcycle
-  // instead of failing loudly.
-  // ---------------------------------------------------------------
-  Scalar dt0_min = std::numeric_limits<Scalar>::max();
-  Kokkos::parallel_reduce("kessler_check_dt0",
-    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols),
-    KOKKOS_LAMBDA (const int col, Scalar& lmin) {
-      lmin = Kokkos::min(lmin, dt0(col));
-    },
-    Kokkos::Min<Scalar>(dt0_min));
-  EKAT_REQUIRE_MSG(dt0_min >= Real(1e-12),
-    "Error! KESSLER: bad time splitting (dt = " + std::to_string(dt) +
-    ", dt0 = " + std::to_string(dt0_min) + ").\n");
-
-  // ---------------------------------------------------------------
-  // Sub-cycling while loop
-  // Host drives the loop; convergence checked via parallel_reduce.
-  // ---------------------------------------------------------------
-  bool all_converged = false;
-  int n_iter = 0;
-  while (!all_converged) {
-
-    // -- Step 1: accumulate precipitation (weighted by sub-cycle dt) --
-    Kokkos::parallel_for("kessler_precl_accum",
-      Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols),
-      KOKKOS_LAMBDA(const int col) {
-        const Scalar qr_surf = qr(col, lyr_surf / Pack::n)[lyr_surf % Pack::n];
-        const Scalar p_val = rho_s(col, lyr_surf) * qr_surf *
-                             velqr_s(col, lyr_surf) / rhoqr;
-        precl(col)     = p_val;
-        precl_acc(col) += mask(col) * p_val * dt0(col);
-      });
-
-    // -- Step 2: sedimentation for all levels except lyr_toa --
-    Kokkos::parallel_for("kessler_sed_inner",
-      Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nlev_packs),
-      KOKKOS_LAMBDA(const int idx) {
-        const int col = idx / nlev_packs;
-        const int kp  = idx % nlev_packs;
-
+      // Neighbour pack in the lyr_step direction, clamped at the array
+      // edge. The lane(s) that would genuinely need an out-of-domain
+      // neighbour are always ones the in-range masks exclude
+      // (kmin_sed/kmax_sed stop one level short of lyr_toa), so the
+      // clamped, otherwise-unused value is never read.
+      auto kp_nbr = [&](const int kp) {
+        return (lyr_step > 0) ? ((kp + 1 < nlev_packs) ? kp + 1 : kp)
+                              : ((kp > 0) ? kp - 1 : kp);
+      };
+      // Level k + lyr_step for every lane of p, given the neighbour pack.
+      auto shift_up = [&](const Pack& nbr, const Pack& p) {
+        return (lyr_step > 0) ? ekat::shift_left(nbr, p) : ekat::shift_right(nbr, p);
+      };
+      auto sed_valid = [&](const int kp) {
         const auto level = ekat::range<IntPack>(kp * Pack::n);
-        const auto valid  = (level >= kmin_sed) && (level <= kmax_sed);
-
-        const Pack rqv_k = r(col, kp) * qr(col, kp) * velqr(col, kp);
-        const Pack z_k   = z_mid(col, kp);
-
-        // Neighbor pack in the array-index direction lyr_step points.
-        // Clamped at the pack-array edge; the lane(s) that would
-        // genuinely need an out-of-domain neighbor are always the
-        // ones `valid` excludes (kmin_sed/kmax_sed already stop one
-        // level short of lyr_toa by construction), so the clamped,
-        // otherwise-unused value is never read.
-        Pack rqv_up, z_up;
-        if (lyr_step > 0) {
-          const int kp_nbr = (kp + 1 < nlev_packs) ? kp + 1 : kp;
-          const Pack rqv_next = r(col, kp_nbr) * qr(col, kp_nbr) * velqr(col, kp_nbr);
-          rqv_up = ekat::shift_left(rqv_next, rqv_k);
-          z_up   = ekat::shift_left(z_mid(col, kp_nbr), z_k);
-        } else {
-          const int kp_nbr = (kp > 0) ? kp - 1 : kp;
-          const Pack rqv_prev = r(col, kp_nbr) * qr(col, kp_nbr) * velqr(col, kp_nbr);
-          rqv_up = ekat::shift_right(rqv_prev, rqv_k);
-          z_up   = ekat::shift_right(z_mid(col, kp_nbr), z_k);
+        return (level >= kmin_sed) && (level <= kmax_sed);
+      };
+      // CFL-limited time step 0.8*dz/velqr, min over the sedimenting
+      // lanes of pack kp with non-negligible fall speed.
+      auto cfl_min = [&](const int kp, const Pack& v, Scalar& lmin) {
+        const Pack z_k = z_mid(col, kp);
+        const Pack dz  = shift_up(z_mid(col, kp_nbr(kp)), z_k) - z_k;
+        const auto m   = sed_valid(kp) && (ekat::abs(v) > Real(1e-12));
+        ekat_masked_loop_no_vec(m, s) {
+          lmin = Kokkos::min(lmin, Real(0.8) * dz[s] / v[s]);
         }
+      };
 
-        Pack dz_up = z_up - z_k;
-        dz_up.set(!valid, Real(1)); // guard div-by-zero on excluded lanes
-
-        Pack r_k_g = r(col, kp);
-        r_k_g.set(!valid, Real(1));
-
-        sed(col, kp) = dt0(col) * (rqv_up - rqv_k) / (r_k_g * dz_up);
-      });
-
-    // -- Step 3: sedimentation at lyr_toa (no flux from above) --
-    Kokkos::parallel_for("kessler_sed_toa",
-      Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols),
-      KOKKOS_LAMBDA(const int col) {
-        const int kbelow = lyr_toa - lyr_step;
-        const Scalar qr_toa = qr(col, lyr_toa / Pack::n)[lyr_toa % Pack::n];
-        sed_s(col, lyr_toa) = -dt0(col) * qr_toa *
-          velqr_s(col, lyr_toa) /
-          (Real(0.5) * (z_s(col, lyr_toa) - z_s(col, kbelow)));
-      });
-
-    // -- Step 4: microphysics adjustments (autoconversion, collection,
-    //            evaporation, saturation adjustment) --
-    Kokkos::parallel_for("kessler_micro",
-      Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nlev_packs),
-      KOKKOS_LAMBDA(const int idx) {
-        const int col = idx / nlev_packs;
-        const int kp  = idx % nlev_packs;
-
+      // -------------------------------------------------------------
+      // Derived constants and initial terminal fall speed
+      // -------------------------------------------------------------
+      Kokkos::parallel_for(Kokkos::TeamVectorRange(team, nlev_packs), [&](const int kp) {
         const auto level = ekat::range<IntPack>(kp * Pack::n);
-        const auto valid  = (level >= kmin) && (level <= kmax);
+        const auto valid = (level >= kmin) && (level <= kmax);
 
-        const Pack msk  = mask(col);
-        const Pack dt0c = dt0(col);
-
-        // pk's padding lanes are only ever multiplied elsewhere, but
-        // here they're also a denominator (theta update below), so
-        // guard them the same way kernel 1 does.
+        // Guard denominators/bases so invalid (padding or out-of-range)
+        // lanes never hit a division-by-zero or a pow() domain error --
+        // their results are never read downstream, but the computation
+        // itself must not trap under the fpe build.
+        Pack rho_kp = rho(col, kp);
+        rho_kp.set(!valid, Real(1));
         Pack pk_kp = pk(col, kp);
         pk_kp.set(!valid, Real(1));
 
-        // Autoconversion + collection (Klemp & Wilhelmson 1978, Eq 2.13a,b)
-        // Semi-implicit treatment of the collection term.
-        const Pack qrprod =
-          qc(col, kp) -
-          (qc(col, kp) - dt0c *
-            ekat::max(Real(0.001) * (qc(col, kp) - Real(0.001)),
-                      Real(0))) /
-          (Real(1) + dt0c * Real(2.2) *
-           ekat::pow(qr(col, kp), Real(0.875)));
-        // Guard with msk: once a column has converged (elapsed time
-        // reached dt), it must not be perturbed further by leftover
-        // sub-cycle iterations still running for other columns --
-        // matching the Fortran, where each column's do-while loop
-        // exits independently and nothing more happens to it.
-        qc(col, kp) = msk * ekat::max(qc(col, kp) - qrprod, Real(0))
-                    + (Real(1) - msk) * qc(col, kp);
-        qr(col, kp) = msk * ekat::max(qr(col, kp) + qrprod + sed(col, kp), Real(0))
-                    + (Real(1) - msk) * qr(col, kp);
+        const Scalar rho_surf = rho_s(col, lyr_surf);
 
-        // Saturation mixing ratio via Teten's formula
-        // (Klemp & Wilhelmson 1978, Eq 2.11)
-        const Pack T_pi = pk_kp * theta(col, kp); // temperature = pi*theta
-        const Pack qvs  = pc(col, kp) *
-          ekat::exp(f2x * (T_pi - Real(273)) / (T_pi - Real(36)));
-
-        // Condensation rate (Durran & Klemp 1983, Eq A13-A14)
-        const Pack dT_pi_36 = T_pi - Real(36);
-        const Pack prod = (qv(col, kp) - qvs) /
-          (Real(1) + qvs * f5_dk / (dT_pi_36 * dT_pi_36));
-
-        // Evaporation rate (Klemp & Wilhelmson 1978, Eq 2.14a,b)
-        // dim(qvs, qv) = max(qvs - qv, 0): evaporation only in subsaturated air
-        const Pack rqr = r(col, kp) * qr(col, kp);
-        const Pack A = dt0c *
-          ((Real(1.6) + Real(124.9) * ekat::pow(rqr, Real(0.2046))) *
-           ekat::pow(rqr, Real(0.525)) /
-           (Real(2550000) * pc(col, kp) / (Real(3.8) * qvs) +
-            Real(540000))) *
-          (ekat::max(qvs - qv(col, kp), Real(0)) / (r(col, kp) * qvs));
-        const Pack B   = ekat::max(-prod - qc(col, kp), Real(0));
-        const Pack ern = ekat::min(A, ekat::min(B, qr(col, kp)));
-
-        // Saturation adjustment (Durran & Klemp 1983, Eq A1-A4)
-        // Applied only to non-converged columns via mask.
-        const Pack prod_adj = ekat::max(prod, -qc(col, kp));
-        theta(col, kp) += msk * (lv / (cpair * pk_kp) *
-                                (prod_adj - ern));
-        qv(col, kp) = msk * ekat::max(qv(col, kp) - prod_adj + ern, Real(0))
-                    + (Real(1) - msk) * qv(col, kp);
-        qc(col, kp) += msk * prod_adj;
-        qr(col, kp) = msk * ekat::max(qr(col, kp) - ern, Real(0))
-                    + (Real(1) - msk) * qr(col, kp);
-      });
-
-    // -- Step 5: advance elapsed time and update mask / dt0 --
-    Kokkos::parallel_for("kessler_update_time",
-      Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols),
-      KOKKOS_LAMBDA(const int col) {
-        time_counter(col) += mask(col) * dt0(col);
-        dt0(col) = Kokkos::max(dt - time_counter(col), Real(0));
-        mask(col) = (Kokkos::abs(dt - time_counter(col)) > Real(1e-5))
-                      ? Real(1) : Real(0);
-      });
-
-    // -- Step 6: recompute terminal fall speed with updated qr --
-    Kokkos::parallel_for("kessler_velqr_update",
-      Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nlev_packs),
-      KOKKOS_LAMBDA(const int idx) {
-        const int col = idx / nlev_packs;
-        const int kp  = idx % nlev_packs;
+        r(col, kp)     = Real(0.001) * rho_kp;          // g/cm^3
+        rhalf(col, kp) = ekat::sqrt(rho_surf / rho_kp);
+        pc(col, kp)    = Real(3.8) / (ekat::pow(pk_kp, xk) * pref);
+        // Guard against round-off negative qr before computing velqr
+        qr(col, kp)    = ekat::max(qr(col, kp), Real(0));
         velqr(col, kp) = Real(36.34) * rhalf(col, kp) *
-                        ekat::pow(qr(col, kp) * r(col, kp), Real(0.1364));
+                         ekat::pow(qr(col, kp) * r(col, kp), Real(0.1364));
       });
+      team.team_barrier();
 
-    // -- Step 7: recompute dt0 with updated velqr (CFL constraint) --
-    Kokkos::parallel_for("kessler_recompute_dt0",
-      TeamPol(ncols, Kokkos::AUTO),
-      KOKKOS_LAMBDA(const MemberType& team) {
-        const int col = team.league_rank();
+      // -------------------------------------------------------------
+      // Initial sub-cycling time step dt0 via CFL
+      // -------------------------------------------------------------
+      Scalar dt0;
+      {
         Scalar dtmin;
-        Kokkos::parallel_reduce(
-          Kokkos::TeamThreadRange(team, nk_sed),
-          [&](const int idx, Scalar& lmin) {
-            const int k = kmin_sed + idx;
-            if (Kokkos::abs(velqr_s(col, k)) > Real(1e-12)) {
-              const Scalar dzk = z_s(col, k + lyr_step) - z_s(col, k);
-              lmin = Kokkos::min(lmin, Real(0.8) * dzk / velqr_s(col, k));
-            }
+        Kokkos::parallel_reduce(Kokkos::TeamVectorRange(team, nlev_packs),
+          [&](const int kp, Scalar& lmin) { cfl_min(kp, velqr(col, kp), lmin); },
+          Kokkos::Min<Scalar>(dtmin));
+        dt0 = Kokkos::min(dt, dtmin);
+      }
+
+      // Team-local sub-cycle state (identical in every thread).
+      // A degenerate initial dt0 mirrors the reference Fortran's "bad
+      // time splitting" abort (kessler.F90: `if (dt0 < 1e-12) then
+      // errflg = 1; return`).
+      int    err    = (dt0 < Real(1e-12)) ? err_bad_split : 0;
+      bool   active = (err == 0);
+      Scalar tc     = 0;  // elapsed time
+      Scalar pacc   = 0;  // precipitation accumulated over sub-cycles
+      int    n      = 0;  // passes done
+
+      while (active) {
+        // -- accumulate precipitation (weighted by sub-cycle dt) --
+        const Scalar qr_surf = qr(col, kp_surf)[ks_surf];
+        const Scalar p_val = rho_s(col, lyr_surf) * qr_surf *
+                             velqr_s(col, lyr_surf) / rhoqr;
+        pacc += p_val * dt0;
+
+        // -- sedimentation; at lyr_toa there is no flux from above --
+        Kokkos::parallel_for(Kokkos::TeamVectorRange(team, nlev_packs), [&](const int kp) {
+          const auto valid = sed_valid(kp);
+          const int  kq    = kp_nbr(kp);
+
+          const Pack rqv_k  = r(col, kp) * qr(col, kp) * velqr(col, kp);
+          const Pack z_k    = z_mid(col, kp);
+          const Pack rqv_up = shift_up(r(col, kq) * qr(col, kq) * velqr(col, kq), rqv_k);
+          const Pack z_up   = shift_up(z_mid(col, kq), z_k);
+
+          Pack dz_up = z_up - z_k;
+          dz_up.set(!valid, Real(1)); // guard div-by-zero on excluded lanes
+          Pack r_k_g = r(col, kp);
+          r_k_g.set(!valid, Real(1));
+
+          Pack s = dt0 * (rqv_up - rqv_k) / (r_k_g * dz_up);
+          if (kp == kp_toa) {
+            const Scalar qr_toa = qr(col, kp_toa)[ks_toa];
+            s[ks_toa] = -dt0 * qr_toa * velqr_s(col, lyr_toa) /
+                        (Real(0.5) * (z_s(col, lyr_toa) - z_s(col, kbelow)));
+          }
+          sed(col, kp) = s;
+        });
+        team.team_barrier();
+
+        // -- microphysics adjustments (autoconversion, collection,
+        //    evaporation, saturation adjustment), then the new terminal
+        //    fall speed and its CFL limit --
+        Scalar dtmin;
+        Kokkos::parallel_reduce(Kokkos::TeamVectorRange(team, nlev_packs),
+          [&](const int kp, Scalar& lmin) {
+            const auto level = ekat::range<IntPack>(kp * Pack::n);
+            const auto valid = (level >= kmin) && (level <= kmax);
+
+            // pk's padding lanes are a denominator in the theta update
+            // below, so guard them as in the initialisation.
+            Pack pk_kp = pk(col, kp);
+            pk_kp.set(!valid, Real(1));
+
+            // Autoconversion + collection (Klemp & Wilhelmson 1978,
+            // Eq 2.13a,b). Semi-implicit treatment of the collection term.
+            const Pack qrprod =
+              qc(col, kp) -
+              (qc(col, kp) - dt0 *
+                ekat::max(Real(0.001) * (qc(col, kp) - Real(0.001)), Real(0))) /
+              (Real(1) + dt0 * Real(2.2) * ekat::pow(qr(col, kp), Real(0.875)));
+            qc(col, kp) = ekat::max(qc(col, kp) - qrprod, Real(0));
+            qr(col, kp) = ekat::max(qr(col, kp) + qrprod + sed(col, kp), Real(0));
+
+            // Saturation mixing ratio via Teten's formula
+            // (Klemp & Wilhelmson 1978, Eq 2.11)
+            const Pack T_pi = pk_kp * theta(col, kp); // temperature = pi*theta
+            const Pack qvs  = pc(col, kp) *
+              ekat::exp(f2x * (T_pi - Real(273)) / (T_pi - Real(36)));
+
+            // Condensation rate (Durran & Klemp 1983, Eq A13-A14)
+            const Pack dT_pi_36 = T_pi - Real(36);
+            const Pack prod = (qv(col, kp) - qvs) /
+              (Real(1) + qvs * f5_dk / (dT_pi_36 * dT_pi_36));
+
+            // Evaporation rate (Klemp & Wilhelmson 1978, Eq 2.14a,b)
+            // dim(qvs, qv) = max(qvs - qv, 0): evaporation only in subsaturated air
+            const Pack rqr = r(col, kp) * qr(col, kp);
+            const Pack A = dt0 *
+              ((Real(1.6) + Real(124.9) * ekat::pow(rqr, Real(0.2046))) *
+               ekat::pow(rqr, Real(0.525)) /
+               (Real(2550000) * pc(col, kp) / (Real(3.8) * qvs) + Real(540000))) *
+              (ekat::max(qvs - qv(col, kp), Real(0)) / (r(col, kp) * qvs));
+            const Pack B   = ekat::max(-prod - qc(col, kp), Real(0));
+            const Pack ern = ekat::min(A, ekat::min(B, qr(col, kp)));
+
+            // Saturation adjustment (Durran & Klemp 1983, Eq A1-A4)
+            const Pack prod_adj = ekat::max(prod, -qc(col, kp));
+            theta(col, kp) += lv / (cpair * pk_kp) * (prod_adj - ern);
+            qv(col, kp) = ekat::max(qv(col, kp) - prod_adj + ern, Real(0));
+            qc(col, kp) += prod_adj;
+            qr(col, kp) = ekat::max(qr(col, kp) - ern, Real(0));
+
+            // Terminal fall speed with the updated qr, and its CFL limit
+            const Pack v = Real(36.34) * rhalf(col, kp) *
+                           ekat::pow(qr(col, kp) * r(col, kp), Real(0.1364));
+            velqr(col, kp) = v;
+            cfl_min(kp, v, lmin);
           },
           Kokkos::Min<Scalar>(dtmin));
-        Kokkos::single(Kokkos::PerTeam(team), [&]() {
-          dt0(col) = Kokkos::min(dt0(col), dtmin);
-        });
+
+        // -- advance elapsed time, then re-check dt0 against CFL --
+        tc += dt0;
+        dt0 = Kokkos::max(dt - tc, Real(0));
+        active = Kokkos::abs(dt - tc) > Real(1e-5);
+        dt0 = Kokkos::min(dt0, dtmin);
+        ++n;
+        // An active column whose sub-cycle step is non-positive can
+        // never reach dt, and would spin forever.
+        if (active && (!(dt0 > Real(0)) || n >= max_pass)) {
+          err = err_no_conv;
+          active = false;
+        }
+        team.team_barrier();
+      }
+
+      // -------------------------------------------------------------
+      // Diagnostic: relative humidity
+      // -------------------------------------------------------------
+      Kokkos::parallel_for(Kokkos::TeamVectorRange(team, nlev_packs), [&](const int kp) {
+        const Pack T_pi = pk(col, kp) * theta(col, kp);
+        const Pack qvs  = pc(col, kp) *
+          ekat::exp(f2x * (T_pi - Real(273)) / (T_pi - Real(36)));
+        relhum(col, kp) = qv(col, kp) / qvs * Real(100);
       });
 
-    // -- Step 8: check convergence (returns to host) --
-    // Also count active columns whose sub-cycle step is non-positive:
-    // those can never reach dt, and the loop would spin forever.
-    int n_active = 0;
-    int n_stuck  = 0;
-    Kokkos::parallel_reduce("kessler_converge",
-      Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols),
-      KOKKOS_LAMBDA(const int col, int& cnt, int& stuck) {
-        if (mask(col) != Real(0)) {
-          ++cnt;
-          if (!(dt0(col) > Real(0))) ++stuck;
-        }
-      }, n_active, n_stuck);
-    all_converged = (n_active == 0);
-
-    ++n_iter;
-    EKAT_REQUIRE_MSG(n_stuck == 0 && n_iter < 100000,
-      "Error! KESSLER: sub-cycling cannot converge (iter = " +
-      std::to_string(n_iter) + ", active cols = " + std::to_string(n_active) +
-      ", cols with dt0 <= 0 = " + std::to_string(n_stuck) + ").\n");
-
-  } // while (!all_converged)
+      // Average precipitation rate over the full time step, and the
+      // final sub-cycle state.
+      Kokkos::single(Kokkos::PerTeam(team), [&]() {
+        precl(col)        = pacc / dt;
+        precl_acc(col)    = pacc;
+        dt0_out(col)      = dt0;
+        time_counter(col) = tc;
+        mask(col)         = Real(err);
+      });
+    });
 
   // ---------------------------------------------------------------
-  // Finalise: average precipitation rate over the full time step
+  // Error check, once per call (returns to host)
   // ---------------------------------------------------------------
-  Kokkos::parallel_for("kessler_precl_final",
+  int n_bad_split = 0;
+  int n_no_conv   = 0;
+  Kokkos::parallel_reduce("kessler_run_check",
     Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols),
-    KOKKOS_LAMBDA(const int col) {
-      precl(col) = precl_acc(col) / dt;
-    });
-
-  // ---------------------------------------------------------------
-  // Diagnostic: relative humidity
-  // ---------------------------------------------------------------
-  Kokkos::parallel_for("kessler_relhum",
-    Kokkos::RangePolicy<typename KT::ExeSpace>(0, ncols * nlev_packs),
-    KOKKOS_LAMBDA(const int idx) {
-      const int col = idx / nlev_packs;
-      const int kp  = idx % nlev_packs;
-      const Pack T_pi = pk(col, kp) * theta(col, kp);
-      const Pack qvs  = pc(col, kp) *
-        ekat::exp(f2x * (T_pi - Real(273)) / (T_pi - Real(36)));
-      relhum(col, kp) = qv(col, kp) / qvs * Real(100);
-    });
-  Kokkos::fence();
+    KOKKOS_LAMBDA(const int col, int& bad_split, int& no_conv) {
+      if (mask(col) == Real(err_bad_split)) ++bad_split;
+      if (mask(col) == Real(err_no_conv))   ++no_conv;
+    }, n_bad_split, n_no_conv);
+  EKAT_REQUIRE_MSG(n_bad_split == 0,
+    "Error! KESSLER: bad time splitting (dt = " + std::to_string(dt) +
+    ", columns with dt0 < 1e-12 = " + std::to_string(n_bad_split) + ").\n");
+  EKAT_REQUIRE_MSG(n_no_conv == 0,
+    "Error! KESSLER: sub-cycling cannot converge (columns with dt0 <= 0 or >= " +
+    std::to_string(max_pass) + " sub-cycles = " + std::to_string(n_no_conv) + ").\n");
 }
 
 // -----------------------------------------------------------------------

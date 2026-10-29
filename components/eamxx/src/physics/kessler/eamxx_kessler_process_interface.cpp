@@ -233,21 +233,6 @@ void KesslerMicrophysics::run_impl (const double dt )
 
   int nlevs = m_num_levs; // local var, to avoid accessing *this.
 
-  start_timer("EAMxx::kessler::run::preprocess");
-  Kokkos::parallel_for(
-      "Kessler_preprocess", KT::RangePolicy(0, m_num_cols * nlevs),
-      KOKKOS_CLASS_LAMBDA(const int i) {
-        const int icol = i / nlevs;
-        const int klev = i % nlevs;
-        pk(icol, klev / Pack::n)[klev % Pack::n]    = PF::exner_function(p_mid(icol, klev / Pack::n)[klev % Pack::n]);
-        theta(icol, klev / Pack::n)[klev % Pack::n] = PF::calculate_theta_from_T(T_mid(icol, klev / Pack::n)[klev % Pack::n],p_mid(icol, klev / Pack::n)[klev % Pack::n]);
-
-        // Vertical layer thickness
-        dz(icol, klev / Pack::n)[klev % Pack::n]  = PF::calculate_dz(pseudo_density(icol, klev / Pack::n)[klev % Pack::n], p_mid(icol, klev / Pack::n)[klev % Pack::n], T_mid(icol, klev / Pack::n)[klev % Pack::n], qv(icol, klev / Pack::n)[klev % Pack::n]);
-        rho(icol, klev / Pack::n)[klev % Pack::n] = inv_ggr*( pseudo_density(icol, klev / Pack::n)[klev % Pack::n]/dz(icol, klev / Pack::n)[klev % Pack::n] );
-      }
-    );
-
   // set up params_helpers struct
   params_helpers.rho        = rho;
   params_helpers.dz         = dz;
@@ -267,25 +252,57 @@ void KesslerMicrophysics::run_impl (const double dt )
   params_computed.temp_prev = T_mid_prev;
   params_computed.temp_tend = T_mid_tend;
 
-  // Compute z_mid and z_int into params_in (needed by kessler_run for heights)
-  // calculate_z_int() contains a team-level parallel_scan, which requires a special policy
-  using TPF = ekat::TeamPolicyFactory<KT::ExeSpace>;
-  const int nlev_packs   = ekat::npack<Pack>(m_num_levs);
+  // z_mid and z_int live in the params_helpers buffers (needed by kessler_run
+  // for heights)
+  const auto z_mid = params_helpers.z_mid;
+  const auto z_int = params_helpers.z_int;
+
+  start_timer("EAMxx::kessler::run::preprocess");
+  // One team per column (calculate_z_int contains a team-level
+  // parallel_scan, which needs the scan policy, as in SHOC's preprocess):
+  // Exner function, theta, layer thickness and density over whole packs,
+  // then z_int (a scan up from the surface) and z_mid. Same as the C++
+  // branch (ren/kessler-claude, performance_suggestions.md, I4).
+  using TPF     = ekat::TeamPolicyFactory<KT::ExeSpace>;
+  using IntPack = ekat::Pack<Int, SCREAM_PACK_SIZE>;
+  const int  nlev_packs  = ekat::npack<Pack>(nlevs);
   const auto scan_policy = TPF::get_thread_range_parallel_scan_team_policy(m_num_cols, nlev_packs);
+  const Real p0 = PC::P0.value;
 
-  Kokkos::parallel_for(scan_policy, KOKKOS_CLASS_LAMBDA (const KT::MemberType& team) {
-    const int i = team.league_rank();
+  Kokkos::parallel_for("Kessler_preprocess", scan_policy,
+    KOKKOS_CLASS_LAMBDA (const KT::MemberType& team) {
+      const int i = team.league_rank();
 
-    auto z_mid_i = ekat::subview(params_helpers.z_mid, i);
-    auto dz_i    = ekat::subview(params_helpers.dz, i);
-    auto z_int_i = ekat::subview(params_helpers.z_int, i);
-    Real z_surf  = 0.0; 
+      Kokkos::parallel_for(Kokkos::TeamVectorRange(team, nlev_packs), [&] (const int k) {
+        // Padding lanes (nlevs not a multiple of Pack::n) get benign inputs,
+        // so nothing divides by zero under the fpe build; their results
+        // are never read.
+        const auto valid = ekat::range<IntPack>(k*Pack::n) < nlevs;
+        Pack p    = p_mid(i,k);           p.set(!valid, p0);
+        Pack pdel = pseudo_density(i,k);  pdel.set(!valid, Real(1));
+        Pack T    = T_mid(i,k);           T.set(!valid, Real(1));
+        Pack q    = qv(i,k);              q.set(!valid, Real(0));
 
-    PF::calculate_z_int(team, nlevs, dz_i, z_surf, z_int_i);
-    team.team_barrier();
-    PF::calculate_z_mid(team, nlevs, z_int_i, z_mid_i);
-    team.team_barrier();
-  });
+        // calculate_theta_from_T(T, p) is T / exner_function(p); reuse the
+        // Exner value instead of computing its pow a second time.
+        const Pack exner = PF::exner_function(p);
+        pk(i,k)    = exner;
+        theta(i,k) = T / exner;
+
+        // Vertical layer thickness and density
+        dz(i,k)  = PF::calculate_dz(pdel, p, T, q);
+        rho(i,k) = inv_ggr * (pdel / dz(i,k));
+      });
+      team.team_barrier();
+
+      const auto dz_i    = ekat::subview(dz,    i);
+      const auto z_int_i = ekat::subview(z_int, i);
+      const auto z_mid_i = ekat::subview(z_mid, i);
+      PF::calculate_z_int(team, nlevs, dz_i, Real(0), z_int_i);
+      team.team_barrier();
+      PF::calculate_z_mid(team, nlevs, z_int_i, z_mid_i);
+    });
+  Kokkos::fence();
   stop_timer("EAMxx::kessler::run::preprocess");
 
   // Initialize fortran data holders in structs
@@ -343,33 +360,10 @@ void KesslerMicrophysics::run_impl (const double dt )
   // <!-- Tendency diagnostics -->
   // <scheme>sima_tend_diagnostics</scheme> // -> only writes out dTdt_total, dudt_total, dvdt_total to file. Can be set in the output_fields.yml file and taken care of by EAMxx
 
-  // Update with the new values from the run
-  Kokkos::parallel_for("update_output_1d",m_num_cols, KOKKOS_CLASS_LAMBDA (const int i) {
-    precl(i) = params_computed.precl(i);
-    }
-  );
-
-  Kokkos::parallel_for("update_output_2d",KT::RangePolicy(0, m_num_cols * nlevs), KOKKOS_CLASS_LAMBDA (const int idx) { // clean up
-    const int icol = idx/nlevs;
-    const int klev = idx%nlevs;
-
-    rho(icol,klev)        = params_helpers.rho(icol,klev);
-    dz(icol,klev)         = params_helpers.dz(icol,klev);
-    pk(icol,klev)         = params_helpers.pk(icol,klev);
-
-    qv(icol,klev)         = params_computed.qv(icol,klev);
-    qc(icol,klev)         = params_computed.qc(icol,klev);
-    qr(icol,klev)         = params_computed.qr(icol,klev);
-    theta(icol,klev)      = params_computed.theta(icol,klev);
-    relhum(icol,klev)     = params_computed.relhum(icol,klev);
-
-    T_mid_prev(icol,klev) = params_computed.temp_prev(icol,klev);
-    T_mid_tend(icol,klev) = params_computed.temp_tend(icol,klev);
-    T_mid(icol,klev)      = params_computed.temp(icol,klev);
-    st_energy(icol,klev)  = params_computed.st_energy(icol,klev);
-    // dont need to do anything for z_mid since we recompute it each time :(
-    }
-  );
+  // No copy back into the fields is needed: the params_helpers /
+  // params_computed C++ views were pointed at the field views above, so
+  // transpose<f2c> in kessler_eamxx_bridge_run already wrote the results
+  // into the fields.
 
   m_atm_logger->info("[EAMxx] kessler run_impl - end ");
 }

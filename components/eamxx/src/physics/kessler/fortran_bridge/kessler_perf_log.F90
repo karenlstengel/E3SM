@@ -1,29 +1,30 @@
 module kessler_perf_log
 
    !-----------------------------------------------------------------------
-   ! Fortran counterpart to kessler_perf_log.py (this same directory) --
-   ! same design, same CSV schema, so Fortran (CPU and GPU/OpenACC) timings
-   ! can be compared directly against the JAX-side summary. Intended to be
-   ! copied alongside the Fortran kessler.F90 sources at:
-   !   atmospheric_physics/schemes/kessler/
-   !   GPU_ports/atmospheric_physics/schemes/kessler/
+   ! Fortran counterpart to the JAX branch's kessler_perf_log.py
+   ! (ren/kessler-JAX) -- same design, same CSV schema, so Fortran (CPU and
+   ! GPU/OpenACC) timings can be compared directly against the JAX-side
+   ! summary. Compiled into the kessler library from fortran_bridge/ (see
+   ! CMakeLists.txt) for both the CPU and the OpenACC Fortran sources.
    !
    ! Set KESSLER_PERF_LOG_PATH to choose the CSV path; falls back to
    ! ./kessler_perf_log.csv in the run directory otherwise.
+   !
+   ! Wired up: the bind(C) wrappers in kessler_eamxx_bridge_main.F90 and
+   ! kessler_eamxx_bridge_update.F90 time each scheme call with
+   ! system_clock and pass it to log_call(); kessler_eamxx_bridge_finalize_c
+   ! (called from KesslerMicrophysics::finalize_impl) calls flush_log().
    !
    ! log_call() only ever touches in-process memory (a small table of
    ! running per-label totals) -- there is no file I/O per call. An earlier
    ! version opened the CSV and took a cross-process flock() on every call,
    ! which serializes every MPI rank against every other rank on every
-   ! timestep and measurably slows runs down (this is exactly what was
-   ! fixed on the Python side; mirrored here even though this module isn't
-   ! wired into any kessler_run yet, so it doesn't get reintroduced later).
+   ! timestep and measurably slows runs down (the same problem was fixed
+   ! on the Python side).
    !
-   ! flush_log() does the file I/O instead, and is meant to be called
-   ! exactly once per rank, at simulation finalize -- NOT YET WIRED UP;
-   ! whoever wires this module into a kessler_run should also add a call
-   ! to flush_log() at that scheme's finalize/timestep_final entry point,
-   ! mirroring kessler.py's finalize() -> KesslerMicrophysics::finalize_impl().
+   ! flush_log() does the file I/O instead, and is called exactly once per
+   ! rank, at simulation finalize, mirroring kessler.py's finalize() ->
+   ! KesslerMicrophysics::finalize_impl() on the JAX side.
    ! If a rank never reaches finalize (crash, MPI_Abort), that rank's
    ! timings are simply lost -- an accepted tradeoff for a dev/perf tool,
    ! not a science output.

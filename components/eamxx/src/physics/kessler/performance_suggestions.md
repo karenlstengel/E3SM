@@ -660,9 +660,10 @@ bit-identical to production, so production's `n_iter = max(npass)`.
 - I2 and I4 (section I) are in the code, uncommitted, and bit-for-bit in
   the full C++ queue matrix (section J; 1.15-1.33x more on CPU, 1.03-1.14x
   on GPU over D1 alone). The `preprocess` timer now fences (2026-10-29,
-  see I4). Still to do: commit them, and port I4 and the timer fence to
-  the bridge and JAX branches so all three implementations have the same
-  pre-processing cost and timers.
+  see I4). I4 and the fence are also in the bridge and JAX branches
+  (2026-10-29, uncommitted, not built yet; see I4). Still to do: commit
+  them, and build, check and rerun the bridge and JAX branches so all
+  three implementations have the same pre-processing cost and timers.
 - Further improvements after the port: see section I.
 - Load imbalance across ranks (G3): with the port, the rainiest CPU
   rank's Kessler time is ~7x the mean. That is real work (most of that
@@ -1145,6 +1146,16 @@ answers bit-for-bit identical, so the driver and G/H checks still apply.
   keep `theta = T / exner` a single division by the same Exner value),
   including the `Kokkos::fence()` before `stop_timer(...preprocess)`, so
   the three implementations' sub-timers measure the same thing.
+
+  **Ported to the bridge and JAX branches 2026-10-29 (uncommitted, not
+  built or run yet):** `run_impl` in
+  `E3SM_claude/E3SM` (`ren/kessler-bridge`, views `rho`, `pk`, ...,
+  `params_helpers.z_mid/z_int`) and `E3SM_claude/E3SM_jax`
+  (`ren/kessler-JAX`, views `*_v`) now has the same single kernel and the
+  fence, line for line as here except for the view names. Still to do:
+  build both, check bit-for-bit against their current builds
+  (`f90_*_514f63089f-*`, `jax_*_1e91745b13-*`) in ne16 runs, then rerun
+  their perf matrices.
 
 - [ ] **I5. Fuse the small update kernels** (BFB if `T_mid = T_mid_prev +
   T_mid_tend*dt` stays as written). `kessler_update_timestep_init`,

@@ -48,13 +48,18 @@ _LOG_PATH = os.environ.get("KESSLER_PERF_LOG_PATH", _DEFAULT_LOG_PATH)
 _LOG_ROOT, _LOG_EXT = os.path.splitext(_LOG_PATH)
 _RAW_PATH = _LOG_ROOT + ".raw" + (_LOG_EXT or ".csv")
 
-_RAW_HEADER = ["label", "rank", "count", "walltotal_s", "callmax_s", "callmin_s"]
+# callfirst_s is the first call's time. Don't assume the first call is the longest
+# one (callmax_s): a slow mid-run call (e.g. rain forming) can take longer than
+# a compile-cache hit.
+_RAW_HEADER = ["label", "rank", "count", "walltotal_s", "callmax_s", "callmin_s", "callfirst_s"]
 _SUMMARY_HEADER = ["label", "count", "walltotal_s", "wallmax_s", "wallmax_rank",
                     "wallmin_s", "wallmin_rank", "callmax_s", "callmax_rank"]
 
 _lock = threading.Lock()
-# label -> [count, walltotal_s, callmax_s, callmin_s]
+# label -> [count, walltotal_s, callmax_s, callmin_s, callfirst_s]
 _totals = {}
+# kessler.py's warmup() turns this off so its dummy calls don't count as run calls.
+_enabled = True
 
 # Rank env vars checked in order, covering the common MPI launchers
 # (OpenMPI, MPICH/Intel MPI, Slurm srun).
@@ -75,10 +80,21 @@ def _detect_rank():
 _RANK = _detect_rank()
 
 
+def set_enabled(enabled):
+    global _enabled
+    _enabled = bool(enabled)
+
+
 def log_call(label, ncol, nz, dt, elapsed):
-    full_label = "a:EAMxx::kessler::run::py_run::" + label
+    if _enabled:
+        log_event("a:EAMxx::kessler::run::py_run::" + label, elapsed)
+
+
+def log_event(full_label, elapsed):
+    """Add one timing under a full label, whether or not logging is enabled.
+    Used for one-time costs (import, warmup) and JAX's compile-stage events."""
     with _lock:
-        entry = _totals.setdefault(full_label, [0, 0.0, elapsed, elapsed])
+        entry = _totals.setdefault(full_label, [0, 0.0, elapsed, elapsed, elapsed])
         entry[0] += 1
         entry[1] += elapsed
         if elapsed > entry[2]:
@@ -99,8 +115,8 @@ def flush_log():
             writer = csv.writer(f)
             if os.fstat(f.fileno()).st_size == 0:
                 writer.writerow(_RAW_HEADER)
-            for label, (count, walltotal, callmax, callmin) in totals.items():
-                writer.writerow([label, _RANK, count, walltotal, callmax, callmin])
+            for label, (count, walltotal, callmax, callmin, callfirst) in totals.items():
+                writer.writerow([label, _RANK, count, walltotal, callmax, callmin, callfirst])
             f.flush()
             os.fsync(f.fileno())
 
@@ -108,7 +124,7 @@ def flush_log():
             rows = list(csv.reader(f))[1:]  # skip header
 
             summary = {}
-            for row_label, row_rank, row_count, row_total, row_cmax, row_cmin in rows:
+            for row_label, row_rank, row_count, row_total, row_cmax, *_ in rows:
                 row_rank = int(row_rank)
                 row_count = int(row_count)
                 row_total = float(row_total)

@@ -11,6 +11,8 @@
 
 #include <ekat_parameter_list.hpp>
 
+#include <any>
+#include <map>
 #include <string>
 
 namespace scream
@@ -70,6 +72,13 @@ public:
     std::shared_ptr<const AbstractGrid> m_grid;
     int m_num_cols;
     int m_num_levs;
+
+    // py_backend=device: contiguous copies (Field::clone) of the strided
+    // tracers qv/qc/qr, handed to Python instead of the tracer subfields,
+    // and their device py arrays (std::any, as AtmosphereProcess stores its
+    // py fields, so this header does not need pybind11).
+    std::map<std::string, Field>    m_py_contig;
+    std::map<std::string, std::any> m_py_contig_arrays;
 
     // Parameters structs to pass through fortran bridge
     // KMF::params_helpers params_helpers; // Helper variables 

@@ -253,3 +253,226 @@ side's summary CSV, so the two are directly comparable:
 ```
 label,count,walltotal_s,wallmax_s,wallmax_rank,wallmin_s,wallmin_rank,callmax_s,callmax_rank
 ```
+## Standalone pybind driver (`driver_kessler_py.cpp`)
+
+For debugging the cost of moving data between EAMxx's fields and JAX
+outside the full model. `driver_kessler_py.cpp` builds Kokkos "fields" laid
+out like EAMxx's (padded `(ncol, nlev)` views, `qv`/`qc`/`qr` as strided
+slices of one tracers view), and calls `kessler.py` exactly the way
+`KesslerMicrophysics` does: EAMxx's `PySession` to start Python and import
+the module, NumPy views of the field memory built as `create_py_field()`
+builds them, then `init`, `run` and `update` with `run_impl`'s arguments.
+It is not part of the CMake build.
+
+| file | contents |
+|------|----------|
+| `driver_kessler_py.cpp` | the driver |
+| `driver_kessler_cai.py` | Python side of the zero-copy device path (`--backend cai`) |
+| `driver_kessler_passes.py` | per-column sub-cycle pass counts of the JAX `kessler_run` (`--passes`) |
+| `driver_kessler_variants.py` | times and checks the `kessler_jax_experimental/` sub-cycle variants (`--variants`) |
+| `build_driver_kessler_py.sh` | builds the driver against a JAX case build (its Kokkos/EKAT, flags, Python and pybind11) |
+| `check_kessler_py_bfb.sh` | bit-for-bit check of every backend x `py_run_variant` over grids and rain fractions (run before model tests) |
+
+Backends (`--backend host,device,cai`):
+
+- `host`: `py_backend=host` as `run_impl` does it: `sync_to_host` of the 14
+  fields (one fence each; strided tracers through a contiguous helper, as
+  `Field::sync_to_host` does), `run`, `update`, `sync_to_dev` of the 12
+  outputs. Timed per stage: `sync_to_host`, `py_run`, `py_update`,
+  `sync_to_dev`.
+- `device`: `py_backend=device` as `run_impl` does it (see
+  [py_backend=device](#py_backenddevice)): NumPy arrays over the device
+  pointers, contiguous copies of the tracers, no host syncs.
+- `cai` (GPU only): each field goes to Python as an object with a
+  `__cuda_array_interface__`; `jnp.asarray` imports it on the GPU without a
+  host copy, `driver_kessler_cai.py` runs the existing device-resident
+  bridges (`*_bridge_device`, "contract 2"), and the driver copies the JAX
+  outputs back into the fields on the GPU through their own
+  `__cuda_array_interface__`. Strided tracers are packed into contiguous
+  device scratch first. No host transfers.
+
+Each backend starts every call from the same state, and each backend's
+outputs are compared bit for bit with the first backend's. The driver sets
+`JAX_PLATFORMS` (`cuda` on a GPU build), `XLA_PYTHON_CLIENT_PREALLOCATE=false`
+(so JAX does not reserve 75% of the GPU that Kokkos also allocates from) and
+`KESSLER_PERF_LOG_PATH` unless they are already set.
+
+Build and run on a compute node, with the case's modules and the JAX conda
+env active:
+
+```bash
+source <jax case>/case/.env_mach_specific.sh
+module load conda && conda activate /glade/work/kstengel/conda-envs/jax-kessler
+./build_driver_kessler_py.sh --case-build <builds>/jax_gpu/build --out ./driver_kessler_py_gpu
+./driver_kessler_py_gpu --grid ne16-gpu --backend host,device,cai --warmup 3 --repeat 10
+./driver_kessler_py_gpu --grid ne16-gpu --backend device --py-warmup --warmup 0 --per-call
+./driver_kessler_py_gpu --grid ne16-gpu --rain-frac 0.08 --passes
+./driver_kessler_py_gpu --grid ne16-gpu --variants auto,split,pallas
+./driver_kessler_py_gpu --grid ne16-gpu --backend host,device --run-variant current,pallas,split --py-warmup --warmup 0
+./driver_kessler_py_gpu --help
+```
+
+`--passes` runs `driver_kessler_passes.py` instead of the backends: the
+per-column sub-cycle pass counts of the JAX `kessler_run`, the work its
+`vmap(while_loop)` does compared with per-column loops, and timings of the
+device-resident bridge on all columns, on all columns without rain (one
+pass), and on only the multi-pass columns. The pass counts come from a copy
+of `kessler_run_core` with a counter in the loop; `kessler_jax/` itself is not
+changed, and the report checks the copy against the original bit for bit.
+
+`--run-variant LIST` runs each backend once per `kessler::py_run_variant`
+value through `kessler.set_run_variant()` and `kessler.run()`, as the model
+does, and compares all of them with the first.
+
+Checks on every run: outputs bit for bit with the first run's; with
+`--nsteps N`, calls are chained N at a time (each from the previous call's
+output, as model steps are) and every step is compared; every later chain
+must repeat the first chain bit for bit (a race, such as a missing barrier
+in a kernel, would show up here); every output finite and `qv`/`qc`/`qr`/
+`precl` non-negative. `check_kessler_py_bfb.sh --hw gpu|cpu` runs these over
+ne16/ne60, rain fractions 0/0.03/0.08/0.12, every backend and every variant
+(GPU: `current,vmap,split,pallas,auto` on host/device/cai; CPU:
+`current,vmap,split,map,split_map,auto` on host/device), 3 chained steps
+twice, and prints a pass/fail table.
+
+`--variants LIST` runs `driver_kessler_variants.py` instead: the sub-cycle
+variants in `kessler_jax_experimental/` (see its README.md) against the
+current `kessler_run_bridge_device`, with times and a bit-for-bit comparison.
+
+Results (2026-10-29): `GK_perf_utils/workflow/interactive/jax_driver_2026-10-29/RESULTS.md`.
+
+## py_backend=device
+
+`kessler::py_backend` (`namelist_defaults_eamxx.xml`, default `host`)
+chooses how the fields reach Python:
+
+- `host`: `run_impl` copies the 14 fields to host memory
+  (`sync_to_host`), `kessler.py` copies them to the GPU and back inside
+  every call, and `run_impl` copies the 12 outputs back to the device
+  (`sync_to_dev`).
+- `device`: no host copies. EAMxx passes NumPy arrays whose data pointers
+  are device addresses (`create_py_field<Device>`). Those arrays only carry
+  the pointer, shape and strides and must never be read as NumPy (that
+  dereferences GPU memory on the host and segfaults); upstream EAMxx's
+  `cld_fraction_cupy.py` re-wraps them with cupy for the same reason.
+  `kessler.set_backend("device")` (called from `initialize_impl`) turns on
+  the device path on a GPU: each array is wrapped in a
+  `__cuda_array_interface__` object, which `jnp.asarray` imports on the GPU
+  without a copy; `run`/`update` call the device-resident bridges
+  (`*_bridge_device`) and write the results back with device-to-device
+  `cudaMemcpy` through `ctypes` (`libcudart.so.12` from JAX's CUDA plugin,
+  so no cupy is needed). Because those arrays must be contiguous,
+  `initialize_impl` makes contiguous clones of the strided tracers
+  `qv`/`qc`/`qr` (`m_py_contig`), and `run_impl` copies into them before
+  the calls (timer `py_pack`) and out of them after (`py_unpack`). On a CPU
+  build device pointers are host pointers, and `kessler.py` uses its host
+  path.
+
+`initialize_impl` calls `set_backend` before `warmup` (`kessler::py_warmup`),
+and on the device path `warmup` passes its dummy fields the way EAMxx does
+(NumPy arrays over `cudaMalloc`'d device copies), through the same import
+and write-back. That matters for JAX's cache: arrays imported from device
+pointers are committed to the GPU, NumPy arrays given to `jnp.asarray` are
+not, and `jit` compiles separately for each. Warmed with host arrays, the
+device path recompiled all four bridges and `update()`'s `add`/`multiply`
+on the first call (~1.3 s at ne16) and `kessler_run`/`timestep_final` again
+on the second (~1 s). Check with
+`driver_kessler_py_gpu --backend device --py-warmup --warmup 0 --per-call`,
+which prints the JIT cache misses (JAX lowerings) of every call; it should
+print 0 for every call on both paths.
+
+In the driver, `device` matches `host` bit for bit on GPU (ne16, ne60) and
+CPU (ne16), and takes 13.4e-3 vs 22.2e-3 s per call at ne16 and 0.101 vs
+0.240 s at ne60 on one A100. To use it in a case:
+
+```bash
+./atmchange kessler::py_backend=device
+```
+
+and set `XLA_PYTHON_CLIENT_PREALLOCATE=false` in the run environment, as
+`JAX_PLATFORMS` is set: otherwise JAX reserves 75% of the GPU next to
+Kokkos (not yet tried in a model run).
+
+## Sub-cycle loop: restructuring prototypes (`kessler_jax_experimental/`)
+
+Almost all of the JAX `kessler_run` time is the rain sub-cycle.
+`kessler_jax/kessler_run.py` runs each column's sub-cycle as a
+`lax.while_loop` and `jax.vmap`s it over the columns. Under `vmap` JAX runs
+one loop until the slowest column is done and masks the finished columns,
+so every column does the slowest column's number of passes. On the
+driver's synthetic columns (`--passes`), every column needs either 1 pass
+(dry) or 17-144 (rainy), and the current loop does 12x to 40x the
+necessary work (17.7x at 8% rainy columns). On the GPU every loop iteration
+also reads the loop flag back on the host and launches several kernels.
+
+`kessler_jax_experimental/` (see its README.md) keeps `kessler_run_core`'s
+physics, copied unchanged, and changes only how the loop runs.
+`kessler_jax/` itself is not changed, so the LAFT translation stays as
+generated. Variants:
+
+- `split`: one pass on all columns (dry columns finish there), then the
+  loop on only the columns still running, gathered into a fixed-size
+  buffer and scattered back.
+- `map`: `lax.map` over columns, so each column runs its own loop, as in
+  the Fortran. Meant for the CPU.
+- `pallas`: the whole sub-cycle as one Pallas kernel (GPU). Each program
+  is one column, its levels are spread over the program's threads, and the
+  column state stays in registers: the C++ D1 structure (one team per
+  column). Each column stops after its own passes, and the loop's exit test
+  never leaves the GPU.
+- `auto`: `pallas` on a GPU, `map` otherwise.
+
+Pallas on the A100 compiles through Triton (JAX 0.6.2). It cannot slice
+values, so the level k+1 neighbour goes through memory (store,
+`plgpu.debug_barrier()`, gather load, barrier). Blocks must be powers of
+two, so the 58 levels are padded to 64. float64 `exp`/`pow`/`sqrt` match
+XLA's bit for bit, and float64 `dot` crashes Triton, so it is not used.
+
+Results with `--variants` (2026-10-29, deg0053, synthetic columns with 8%
+rainy columns, `kessler_run_bridge_device` only, s/call). Every variant
+matches the current code bit for bit (GPU at 3%, 8% and 12% rain, CPU at
+8%):
+
+| grid     | current  | split    | map      | pallas   | best speedup   | C++ D1   |
+|----------|---------:|---------:|---------:|---------:|---------------:|---------:|
+| GPU ne16 | 10.9e-3  | 5.8e-3   | -        | 1.5e-3   | 7.3x (pallas)  | 1.15e-3  |
+| GPU ne60 | 97.9e-3  | 27.6e-3  | -        | 7.4e-3   | 13.2x (pallas) | 7.56e-3  |
+| CPU ne16 | 33.9e-3  | 9.4e-3   | 3.4e-3   | -        | 9.8x (map)     | 3.70e-3  |
+| CPU ne60 | 0.511    | 0.138    | 48.6e-3  | -        | 10.5x (map)    | 52.3e-3  |
+
+GPU times vary by about 20% from run to run. At 3% rain Pallas is 8.6x
+(ne16) and 20.7x (ne60) faster.
+
+### Using a variant in a case: `kessler::py_run_variant`
+
+`kessler::py_run_variant` (`namelist_defaults_eamxx.xml`, default `current`)
+selects the variant at run time, so one build covers all of them:
+
+```bash
+./atmchange kessler::py_run_variant=pallas    # or auto, split, map, split_map, vmap
+```
+
+`initialize_impl` passes it to `kessler.set_run_variant()` after
+`set_backend()` and before `warmup()`, so `kessler::py_warmup` compiles the
+selected variant. `kessler.run()` then calls the variant's bridge on both
+`py_backend` paths (`update()` is unchanged). With `run.py`:
+`--jax-variant current pallas split --py-backend host device`.
+
+Checked through `kessler.py` in the driver (`check_kessler_py_bfb.sh`,
+2026-10-29, deg0027): every variant on every backend is bit for bit with
+`host/current` at every step of 3-step chains, repeats itself bit for bit,
+passes the sanity checks, and has 0 JIT cache misses after warmup, on GPU
+and CPU, ne16 and ne60, rain fractions 0, 0.03, 0.08 and 0.12 (16 of 16
+cases, 504 run/step comparisons). Per call (all of
+`kessler.run` + `update` + data movement), ne16, 8% rain:
+
+| s/call           | current | split   | map     | pallas  |
+|------------------|--------:|--------:|--------:|--------:|
+| GPU, host path   | 23.7e-3 | 18.9e-3 | -       | 13.1e-3 |
+| GPU, device path | 13.5e-3 | 9.7e-3  | -       | 4.1e-3  |
+| CPU              | 36.2e-3 | 11.5e-3 | 5.7e-3  | -       |
+
+Not done yet: a model run with a variant, and checking the rain against real
+model state (only synthetic columns so far). Details:
+`GK_perf_utils/workflow/interactive/jax_driver_2026-10-29/RESULTS.md`,
+sections 7 and 8.

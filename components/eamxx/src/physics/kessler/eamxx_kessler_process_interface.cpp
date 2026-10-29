@@ -14,6 +14,7 @@
 
 #ifdef EAMXX_HAS_PYTHON
 #include "share/atm_process/atmosphere_process_pyhelpers.hpp"
+#include "share/field/field_pyutils.hpp"
 #endif
 
 #include <array>
@@ -182,6 +183,36 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
     if (has_py_module()) {
       py_module_call("init", latvap, P0, rhoqr, gravit, Cpair, Rair);
       m_atm_logger->info("[EAMxx] kessler called python init");
+
+      // py_backend=device: Python gets the fields' device pointers and reads
+      // them as GPU memory (kessler.py set_backend), which needs contiguous
+      // arrays. qv/qc/qr are strided slices of the tracers field, so Python
+      // gets contiguous clones instead; run_impl copies into and out of them.
+      const auto& py_backend = m_params.get<std::string>("py_backend");
+      if (py_backend=="device") {
+        for (const std::string n : {"qv", "qc", "qr"}) {
+          const auto contig = get_field_out(n).clone("kessler_py_" + n);
+          m_py_contig.emplace(n, contig);
+          m_py_contig_arrays.emplace(n, create_py_field<Device>(contig));
+        }
+      }
+      py_module_call("set_backend", py_backend);
+      // How kessler_run's sub-cycle loop runs (kessler.py set_run_variant):
+      // "current" or a kessler_jax_experimental variant. Before warmup, so
+      // warmup compiles the selected one.
+      py_module_call("set_run_variant", m_params.get<std::string>("py_run_variant", "current"));
+
+      // Optional: compile the JAX kernels now, so the one-time cost lands in
+      // kessler::init instead of the first timestep (see warmup() in kessler.py).
+      // After set_backend and set_run_variant: warmup compiles for the selected path.
+      if (m_params.get<bool>("py_warmup", false)) {
+        const int lyr_surf = m_num_levs;   // same values run_impl passes
+        const int lyr_toa  = 1;
+        start_timer(m_timer_prefix + this->name() + "::init::py_warmup");
+        py_module_call("warmup", m_num_cols, m_num_levs, lyr_surf, lyr_toa);
+        stop_timer(m_timer_prefix + this->name() + "::init::py_warmup");
+        m_atm_logger->info("[EAMxx] kessler called python warmup");
+      }
     }
   #endif
   // kessler::kessler_eamxx_bridge_init(m_num_cols, m_num_levs, latvap, P0, rhoqr, gravit);
@@ -243,19 +274,51 @@ void KesslerMicrophysics::run_impl (const double dt )
   int nlevs = m_num_levs; // local var, to avoid accessing *this.
 
   start_timer("EAMxx::kessler::run::preprocess");
-  Kokkos::parallel_for(
-      "Kessler_preprocess", KT::RangePolicy(0, m_num_cols * nlevs),
-      KOKKOS_CLASS_LAMBDA(const int i) {
-        const int icol = i / nlevs;
-        const int klev = i % nlevs;
-        pk_v(icol, klev / Pack::n)[klev % Pack::n]    = PF::exner_function(p_mid_v(icol, klev / Pack::n)[klev % Pack::n]);
-        theta_v(icol, klev / Pack::n)[klev % Pack::n] = PF::calculate_theta_from_T(T_mid_v(icol, klev / Pack::n)[klev % Pack::n],p_mid_v(icol, klev / Pack::n)[klev % Pack::n]);
+  // One team per column (calculate_z_int contains a team-level
+  // parallel_scan, which needs the scan policy, as in SHOC's preprocess):
+  // Exner function, theta, layer thickness and density over whole packs,
+  // then z_int (a scan up from the surface) and z_mid. Same as the C++
+  // branch (ren/kessler-claude, performance_suggestions.md, I4).
+  using TPF     = ekat::TeamPolicyFactory<KT::ExeSpace>;
+  using IntPack = ekat::Pack<Int, SCREAM_PACK_SIZE>;
+  const int  nlev_packs  = ekat::npack<Pack>(nlevs);
+  const auto scan_policy = TPF::get_thread_range_parallel_scan_team_policy(m_num_cols, nlev_packs);
+  const Real p0 = PC::P0.value;
 
-        // Vertical layer thickness
-        dz_v(icol, klev / Pack::n)[klev % Pack::n]  = PF::calculate_dz(pseudo_density_v(icol, klev / Pack::n)[klev % Pack::n], p_mid_v(icol, klev / Pack::n)[klev % Pack::n], T_mid_v(icol, klev / Pack::n)[klev % Pack::n], qv_v(icol, klev / Pack::n)[klev % Pack::n]);
-        rho_v(icol, klev / Pack::n)[klev % Pack::n] = inv_ggr*( pseudo_density_v(icol, klev / Pack::n)[klev % Pack::n]/dz_v(icol, klev / Pack::n)[klev % Pack::n] );
-      }
-    );
+  Kokkos::parallel_for("Kessler_preprocess", scan_policy,
+    KOKKOS_CLASS_LAMBDA (const KT::MemberType& team) {
+      const int i = team.league_rank();
+
+      Kokkos::parallel_for(Kokkos::TeamVectorRange(team, nlev_packs), [&] (const int k) {
+        // Padding lanes (nlevs not a multiple of Pack::n) get benign inputs,
+        // so nothing divides by zero under the fpe build; their results
+        // are never read.
+        const auto valid = ekat::range<IntPack>(k*Pack::n) < nlevs;
+        Pack p    = p_mid_v(i,k);           p.set(!valid, p0);
+        Pack pdel = pseudo_density_v(i,k);  pdel.set(!valid, Real(1));
+        Pack T    = T_mid_v(i,k);           T.set(!valid, Real(1));
+        Pack q    = qv_v(i,k);              q.set(!valid, Real(0));
+
+        // calculate_theta_from_T(T, p) is T / exner_function(p); reuse the
+        // Exner value instead of computing its pow a second time.
+        const Pack exner = PF::exner_function(p);
+        pk_v(i,k)    = exner;
+        theta_v(i,k) = T / exner;
+
+        // Vertical layer thickness and density
+        dz_v(i,k)  = PF::calculate_dz(pdel, p, T, q);
+        rho_v(i,k) = inv_ggr * (pdel / dz_v(i,k));
+      });
+      team.team_barrier();
+
+      // z_mid and z_int (needed by kessler_run for heights)
+      const auto dz_i    = ekat::subview(dz_v,    i);
+      const auto z_int_i = ekat::subview(z_int_v, i);
+      const auto z_mid_i = ekat::subview(z_mid_v, i);
+      PF::calculate_z_int(team, nlevs, dz_i, Real(0), z_int_i);
+      team.team_barrier();
+      PF::calculate_z_mid(team, nlevs, z_int_i, z_mid_i);
+    });
 
   // // set up params_helpers struct
   // params_helpers.rho        = rho;
@@ -275,26 +338,6 @@ void KesslerMicrophysics::run_impl (const double dt )
   // params_computed.temp      = T_mid;
   // params_computed.temp_prev = T_mid_prev;
   // params_computed.temp_tend = T_mid_tend;
-
-  // Compute z_mid and z_int into params_in (needed by kessler_run for heights)
-  // calculate_z_int() contains a team-level parallel_scan, which requires a special policy
-  using TPF = ekat::TeamPolicyFactory<KT::ExeSpace>;
-  const int nlev_packs   = ekat::npack<Pack>(m_num_levs);
-  const auto scan_policy = TPF::get_thread_range_parallel_scan_team_policy(m_num_cols, nlev_packs);
-
-  Kokkos::parallel_for(scan_policy, KOKKOS_CLASS_LAMBDA (const KT::MemberType& team) {
-    const int i = team.league_rank();
-
-    auto z_mid_i = ekat::subview(z_mid_v, i);
-    auto dz_i    = ekat::subview(dz_v, i);
-    auto z_int_i = ekat::subview(z_int_v, i);
-    Real z_surf  = 0.0; 
-
-    PF::calculate_z_int(team, nlevs, dz_i, z_surf, z_int_i);
-    team.team_barrier();
-    PF::calculate_z_mid(team, nlevs, z_int_i, z_mid_i);
-    team.team_barrier();
-  });
 
   // <!-- MPAS and SE specific scaling of temperature for enforcing energy consistency:
   //       First, calculate the scaling based off cp_or_cv_dycore (from cam_thermo_water_update)
@@ -319,6 +362,7 @@ void KesslerMicrophysics::run_impl (const double dt )
       heat_flux(i)  = 0.0;
     });
   }
+  Kokkos::fence();
   stop_timer("EAMxx::kessler::run::preprocess");
   m_atm_logger->info("[EAMxx] kessler run_impl: done with pre-processing");
   // For python bindings we can't use the field views. Kokkos loops require using views so they are left above.
@@ -348,9 +392,14 @@ void KesslerMicrophysics::run_impl (const double dt )
                       py_phis, py_temp, py_temp_prev, py_temp_tend, py_st_energy;
 
       if (m_params.get<std::string>("py_backend")=="device") {
-        py_qv                = get_py_field_dev("qv");
-        py_qc                = get_py_field_dev("qc");
-        py_qr                = get_py_field_dev("qr");
+        // Contiguous copies of the strided tracers (see initialize_impl)
+        start_timer("EAMxx::kessler::run::py_pack");
+        for (auto& [n, contig] : m_py_contig) contig.deep_copy(get_field_out(n));
+        Kokkos::fence();   // Python reads the device memory on its own stream
+        stop_timer("EAMxx::kessler::run::py_pack");
+        py_qv                = std::any_cast<const pybind11::array&>(m_py_contig_arrays.at("qv"));
+        py_qc                = std::any_cast<const pybind11::array&>(m_py_contig_arrays.at("qc"));
+        py_qr                = std::any_cast<const pybind11::array&>(m_py_contig_arrays.at("qr"));
         py_rho               = get_py_field_dev("rho");
         py_z_mid             = get_py_field_dev("z_mid");
         py_pk                = get_py_field_dev("pk");
@@ -426,6 +475,15 @@ void KesslerMicrophysics::run_impl (const double dt )
       stop_timer("EAMxx::kessler::run::py_update");
       m_atm_logger->info("[EAMxx] kessler called python update");
 
+      if (m_params.get<std::string>("py_backend")=="device") {
+        // kessler.py has finished its device-to-device copies (it waits for
+        // them), so the clones hold the new tracers
+        start_timer("EAMxx::kessler::run::py_unpack");
+        for (auto& [n, contig] : m_py_contig) get_field_out(n).deep_copy(contig);
+        Kokkos::fence();
+        stop_timer("EAMxx::kessler::run::py_unpack");
+      }
+
       if (m_params.get<std::string>("py_backend")=="host") {
         start_timer("EAMxx::kessler::run::sync_to_dev");
         qv.sync_to_dev();
@@ -465,6 +523,9 @@ void KesslerMicrophysics::finalize_impl()
       // ("run"/"update"), is what keeps the perf logger itself cheap.
       py_module_call("finalize");
     }
+    // AtmosphereProcess::finalize() ends the py session right after this
+    // returns, so release the py arrays now (as it does with its own).
+    m_py_contig_arrays.clear();
   #endif
   m_atm_logger->info("[EAMxx] Kessler processes clean up.");
 }

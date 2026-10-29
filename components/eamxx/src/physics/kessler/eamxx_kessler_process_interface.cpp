@@ -233,39 +233,51 @@ void KesslerMicrophysics::run_impl (const double dt )
   const int ncols = m_num_cols;
 
   start_timer("EAMxx::kessler::run::preprocess");
-  Kokkos::parallel_for(
-      "Kessler_preprocess", KT::RangePolicy(0, m_num_cols * nlevs),
-      KOKKOS_CLASS_LAMBDA(const int i) {
-        const int icol = i / nlevs;
-        const int klev = i % nlevs;
-        pk(icol, klev / Pack::n)[klev % Pack::n]    = PF::exner_function(p_mid(icol, klev / Pack::n)[klev % Pack::n]);
-        theta(icol, klev / Pack::n)[klev % Pack::n] = PF::calculate_theta_from_T(T_mid(icol, klev / Pack::n)[klev % Pack::n],p_mid(icol, klev / Pack::n)[klev % Pack::n]);
-
-        // Vertical layer thickness
-        dz(icol, klev / Pack::n)[klev % Pack::n]  = PF::calculate_dz(pseudo_density(icol, klev / Pack::n)[klev % Pack::n], p_mid(icol, klev / Pack::n)[klev % Pack::n], T_mid(icol, klev / Pack::n)[klev % Pack::n], qv(icol, klev / Pack::n)[klev % Pack::n]);
-        rho(icol, klev / Pack::n)[klev % Pack::n] = inv_ggr*( pseudo_density(icol, klev / Pack::n)[klev % Pack::n]/dz(icol, klev / Pack::n)[klev % Pack::n] );
-      }
-    );
-
-  // Compute z_mid and z_int into params_in (needed by kessler_run for heights)
-  // calculate_z_int() contains a team-level parallelcan, which requires a special policy
-  using TPF = ekat::TeamPolicyFactory<KT::ExeSpace>;
-  const int nlev_packs   = ekat::npack<Pack>(m_num_levs);
+  // One team per column (calculate_z_int contains a team-level
+  // parallel_scan, which needs the scan policy, as in SHOC's preprocess):
+  // Exner function, theta, layer thickness and density over whole packs,
+  // then z_int (a scan up from the surface) and z_mid
+  // (performance_suggestions.md, I4).
+  using TPF     = ekat::TeamPolicyFactory<KT::ExeSpace>;
+  using IntPack = KMF::IntPack;
+  const int  nlev_packs  = ekat::npack<Pack>(m_num_levs);
   const auto scan_policy = TPF::get_thread_range_parallel_scan_team_policy(m_num_cols, nlev_packs);
+  const Real p0 = PC::P0.value;
 
-  Kokkos::parallel_for(scan_policy, KOKKOS_CLASS_LAMBDA (const KT::MemberType& team) {
-    const int i = team.league_rank();
+  Kokkos::parallel_for("Kessler_preprocess", scan_policy,
+    KOKKOS_CLASS_LAMBDA (const KT::MemberType& team) {
+      const int i = team.league_rank();
 
-    auto z_mid_i = ekat::subview(z_mid, i);
-    auto dz_i    = ekat::subview(dz, i);
-    auto z_int_i = ekat::subview(z_int, i);
-    Real zurf  = 0.0; 
+      Kokkos::parallel_for(Kokkos::TeamVectorRange(team, nlev_packs), [&] (const int k) {
+        // Padding lanes (nlevs not a multiple of Pack::n) get benign inputs,
+        // so nothing divides by zero under the fpe build; their results
+        // are never read.
+        const auto valid = ekat::range<IntPack>(k*Pack::n) < nlevs;
+        Pack p    = p_mid(i,k);           p.set(!valid, p0);
+        Pack pdel = pseudo_density(i,k);  pdel.set(!valid, Real(1));
+        Pack T    = T_mid(i,k);           T.set(!valid, Real(1));
+        Pack q    = qv(i,k);              q.set(!valid, Real(0));
 
-    PF::calculate_z_int(team, nlevs, dz_i, zurf, z_int_i);
-    team.team_barrier();
-    PF::calculate_z_mid(team, nlevs, z_int_i, z_mid_i);
-    team.team_barrier();
-  });
+        // calculate_theta_from_T(T, p) is T / exner_function(p); reuse the
+        // Exner value instead of computing its pow a second time.
+        const Pack exner = PF::exner_function(p);
+        pk(i,k)    = exner;
+        theta(i,k) = T / exner;
+
+        // Vertical layer thickness and density
+        dz(i,k)  = PF::calculate_dz(pdel, p, T, q);
+        rho(i,k) = inv_ggr * (pdel / dz(i,k));
+      });
+      team.team_barrier();
+
+      // z_mid and z_int (needed by kessler_run for heights)
+      const auto dz_i    = ekat::subview(dz,    i);
+      const auto z_int_i = ekat::subview(z_int, i);
+      const auto z_mid_i = ekat::subview(z_mid, i);
+      PF::calculate_z_int(team, nlevs, dz_i, Real(0), z_int_i);
+      team.team_barrier();
+      PF::calculate_z_mid(team, nlevs, z_int_i, z_mid_i);
+    });
 
   // <!-- MPAS and SE specific scaling of temperature for enforcing energy consistency:
   //       First, calculate the scaling based off cp_or_cv_dycore (from cam_thermo_water_update)
@@ -290,6 +302,7 @@ void KesslerMicrophysics::run_impl (const double dt )
       heat_flux(i)  = 0.0;
     });
   }
+  Kokkos::fence();
   stop_timer("EAMxx::kessler::run::preprocess");
   m_atm_logger->info("[EAMxx] kessler run_impl: done with pre-processing");
 

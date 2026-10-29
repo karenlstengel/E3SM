@@ -5,7 +5,7 @@
 # CMakeLists.txt.
 #
 # Usage:
-#   ./build_driver_kessler.sh [--case-build DIR] [--src-from-case] [--out EXE]
+#   ./build_driver_kessler.sh [--case-build DIR] [--src-from-case] [--out EXE] [--cxxflags FLAGS]
 #
 #   --case-build DIR  case EXEROOT to borrow Kokkos/EKAT/flags from
 #                     (default: CPP_ne16np4_1day_gpu, the failing case)
@@ -14,6 +14,8 @@
 #                     reconstructed into ./driver_src_<case>/, instead of the
 #                     working tree
 #   --out EXE         output executable (default: ./driver_kessler)
+#   --cxxflags FLAGS  extra compiler flags, added after the case's flags
+#                     (e.g. "-Minfo=vect" for an nvc++ vectorization report)
 #
 # Run on a GPU node, e.g.:
 #   qsub -I -A NTDD0004 -q main -l select=1:ncpus=4:ngpus=1 -l walltime=00:30:00
@@ -27,13 +29,15 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CASE_BUILD=/glade/derecho/scratch/kstengel/E3SM/e3sm_test/JAX_v_Fortran_perf/CPP_ne16np4_1day_gpu/build
 SRC_FROM_CASE=0
 OUT=$HERE/driver_kessler
+EXTRA_CXXFLAGS=""
 
 while [ $# -gt 0 ]; do
   case $1 in
     --case-build)    CASE_BUILD=$2; shift 2 ;;
     --src-from-case) SRC_FROM_CASE=1; shift ;;
     --out)           OUT=$2; shift 2 ;;
-    -h|--help)       sed -n '2,22p' "$0"; exit 0 ;;
+    --cxxflags)      EXTRA_CXXFLAGS=$2; shift 2 ;;
+    -h|--help)       sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1"; exit 2 ;;
   esac
 done
@@ -105,6 +109,6 @@ LIBS="$INST/lib64/libekat_kokkosutils.a $INST/lib64/libekat_core.a $INST/lib64/l
 
 echo "Compiler: $CXX"
 set -x
-$CXX -O2 $DEFINES $INCLUDES $CXXFLAGS -o "$OUT" "$DRIVER_CPP" $LIBS
+$CXX -O2 $DEFINES $INCLUDES $CXXFLAGS $EXTRA_CXXFLAGS -o "$OUT" "$DRIVER_CPP" $LIBS
 set +x
 echo "Built $OUT"

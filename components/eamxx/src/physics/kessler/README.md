@@ -37,6 +37,8 @@ Performance work, results and open items are tracked in
 | `CMakeLists.txt` | the `kessler` library; defines `EAMXX_HAS_KESSLER`, which registers the process in `physics/register_physics.hpp` |
 | `driver_kessler.cpp` | standalone test and benchmark driver for `kessler_run` (not built by CMake; see [Standalone driver](#standalone-driver)) |
 | `driver_kessler_hostloop.hpp` | the previous, host-loop version of `kessler_run`, kept as a reference for the driver |
+| `driver_kessler_variants.hpp` | experimental variants of `kessler_run` (skip-dry-pow, team scratch) for the driver to time and check |
+| `driver_kessler_preprocess.hpp` | the old and new versions of `run_impl`'s pre-processing, for the driver's `--preprocess` test |
 | `build_driver_kessler.sh` | builds the driver against an existing case build |
 | `performance_suggestions.md` | performance history, results, translation guide, open items |
 | `fortran_bridge/` | Fortran bridge sources. Not compiled on this branch; used on `ren/kessler-bridge` |
@@ -65,9 +67,11 @@ Fields:
 What `run_impl` does each call, in order (each step has an EAMxx timer
 under `EAMxx::kessler::run::`):
 
-1. `preprocess`: `pk` = Exner function, `theta` from `T_mid`, `dz` from
+1. `preprocess`: `pk` = Exner function, `theta = T_mid / pk`, `dz` from
    `pseudo_density`, and `rho = pseudo_density / (g * dz)`; then `z_int`
-   and `z_mid` from `dz` (a team-level scan from the surface).
+   and `z_mid` from `dz` (a team-level scan from the surface). One kernel,
+   one team per column (the scan policy, as in SHOC's preprocess), working
+   on whole packs; padding lanes get benign inputs.
 2. `kessler_update_timestep_init`: save `T_mid` in `T_mid_prev`, zero
    `T_mid_tend`.
 3. `kessler_run`: the microphysics; updates `theta`, `qv`, `qc`, `qr`,
@@ -114,7 +118,14 @@ Implementation details:
 
 - Level loops are `TeamVectorRange` over packs (`ekat::Pack`, size
   `SCREAM_PACK_SIZE`); math is Pack-aware (`ekat::pow/exp/sqrt/max/min`).
-  The vertical neighbour for sedimentation and the CFL limit, which may sit
+  On the CPU build nvc++ turns `ekat::pow`/`exp` on a 16-wide pack into
+  4 calls to its AVX2 vector routines (`__pd_pow_4`, `__pd_exp_4`).
+- The four powers of rain water (`qr` in autoconversion/collection, `r*qr`
+  in evaporation and in the fall speed) go through `detail::pow_nonneg`,
+  which returns 0 without calling `pow` when every lane of the pack is 0.
+  `pow(0, x > 0) = 0`, so results are identical; it skips the cost for
+  dry levels, which are most of the column even where it rains.
+- The vertical neighbour for sedimentation and the CFL limit, which may sit
   in the next pack, comes from `ekat::shift_left/shift_right`.
 - Team size from `ekat::TeamPolicyFactory::get_default_team_policy(ncols,
   nlev_packs)`, as in P3/SHOC: 1 thread per team on CPU; on GPU nlev_packs
@@ -146,8 +157,13 @@ columns with about nine kernels per pass until the slowest column was done.
 That did `max(passes) * ncols` work instead of `sum(passes)`, which made the
 CPU build 3-5.5x slower than Fortran with rain. The current version gives
 bit-identical answers; in model runs with rain, `kessler::run` on the
-slowest rank is 3-5x faster on CPU and 2.5-14x faster on GPU (performance_suggestions.md, sections B-D and G-H). The old
-version is kept in `driver_kessler_hostloop.hpp`.
+slowest rank is 3-6x faster on CPU and 2.5-14x faster on GPU
+(performance_suggestions.md, sections B-D and G-H). Skipping `pow` on dry
+packs and the packed pre-processing then gave another 1.15-1.33x on CPU
+and 1.03-1.14x on GPU, for 3.7-7.1x (CPU) and 2.6-15x (GPU) over the
+first port, and C++ is faster than Fortran in every perf case
+(performance_suggestions.md, section J). The old version is kept in
+`driver_kessler_hostloop.hpp`.
 
 `kessler_update_timestep_init`, `kessler_update_run` and
 `kessler_update_timestep_final` are the `kessler_update.F90` routines
@@ -264,15 +280,19 @@ the Kokkos/EKAT install and flags of an existing case build:
 ```bash
 source <case>/.env_mach_specific.sh
 ./build_driver_kessler.sh --case-build <EXEROOT> --out ./driver_kessler_cpu
-OMP_NUM_THREADS=1 ./driver_kessler_cpu --grid ne16-cpu --rain-frac 0.08 --impl both
+OMP_NUM_THREADS=1 ./driver_kessler_cpu --grid ne16-cpu --rain-frac 0.08 --impl all
 ./driver_kessler_cpu --perf --grid ne16-cpu --rain-frac 0.08 --kernel-timers
+./driver_kessler_cpu --preprocess --grid ne16-cpu --repeat 20
 ./driver_kessler_cpu --help
 ```
 
 It checks device vs host results, managed vs carved Workspace, garbage- vs
 NaN-filled scratch, strided vs contiguous tracers, latent-heat balance,
-`relhum`, and the expected rain pattern. `--impl both` also compares the
-current `kessler_run` with the old host-loop version bit for bit. Build and
+`relhum`, and the expected rain pattern. `--impl` takes a list of
+implementations (`prod`, `hostloop`, and the variants `base`, `i2`, `i6`,
+`i2i6`; `both` = `prod,hostloop`, `all` = every one), and each is compared
+with the production `kessler_run` bit for bit. `--preprocess` instead
+compares and times the old and new `run_impl` pre-processing. Build and
 run it on a compute node (an interactive GPU job runs both the CPU and the
 GPU binary).
 
@@ -281,17 +301,22 @@ GPU binary).
 - Standalone: all driver checks pass on CPU and GPU, and the current
   `kessler_run` matches the previous version bit for bit
   (performance_suggestions.md, D1 and F).
-- Model: runs with the current code match the previous C++ build bit for
-  bit in HOMME's global state statistics (`homme_atm.log`), rain and no
-  rain: ne16, ne30 and ne60 on CPU and GPU, 1 and 4 subcycles, 1 and 5
-  days (48 cases; performance_suggestions.md, G and H).
+- Model: the team-per-column `kessler_run` matches the previous C++ build
+  bit for bit in HOMME's global state statistics (`homme_atm.log`), rain
+  and no rain: ne16, ne30 and ne60 on CPU and GPU, 1 and 4 subcycles, 1
+  and 5 days (48 cases; performance_suggestions.md, G and H). The
+  skip-dry-pow and pre-processing changes match it bit for bit in the
+  same 48 cases (performance_suggestions.md, J).
 - Still open: a direct comparison of `precl`/`qr`/`qc`/`theta` with the
   Fortran reference (`fortran_bridge`, branch `ren/kessler-bridge`).
 
 ## Status and open items
 
-- The team-per-column `kessler_run` is not committed yet (branch
-  `ren/kessler-claude`).
+- The team-per-column `kessler_run` is committed (`223c6719b2`). The
+  skip-dry-pow change (`detail::pow_nonneg`) and the new pre-processing in
+  `run_impl` are not committed yet; the full C++ perf matrix with them
+  (case suffix `_updated`) is bit-for-bit and faster
+  (performance_suggestions.md, J).
 - `Workspace::f5` / `Buffer::f5` is allocated but unused; `dt0`,
   `time_counter` and `precl_acc` no longer need to be global arrays.
 - Remaining costs and possible improvements: performance_suggestions.md,

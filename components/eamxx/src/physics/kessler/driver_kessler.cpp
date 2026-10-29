@@ -53,10 +53,16 @@
  * Exit code 0 only if everything passes.
  *
  * Performance (see performance_suggestions.md, sections C and D):
- *   --impl prod|hostloop|both selects the production kessler_run (one
- *   team per column, item D1), the previous host-driven sub-cycle loop
- *   kept in driver_kessler_hostloop.hpp, or both. With both, every run is
- *   done for each, and prod is compared to hostloop bit for bit. --repeat/--warmup time repeated calls on the same input
+ *   --impl takes a comma-separated list of implementations: prod (the
+ *   production kessler_run, one team per column, item D1), hostloop (the
+ *   previous host-driven sub-cycle loop, driver_kessler_hostloop.hpp), and
+ *   the experimental variants in driver_kessler_variants.hpp: base (the
+ *   variant code without I2 or I6, i.e. production before I2 was ported
+ *   on 2026-10-28), i2 (skip pow on all-dry packs), i6 (per-level
+ *   scratch in team scratch) and i2i6 (both); "both" is prod,hostloop
+ *   and "all" is every one. Every run is done for each, and each
+ *   non-prod implementation is compared to prod bit for bit.
+ *   --repeat/--warmup time repeated calls on the same input
  *   (the state is restored, untimed, before each repeat), --kernel-timers
  *   adds a per-kernel breakdown (C3), and the hostloop runs print the
  *   per-column sub-cycle counts, i.e. how much work the host loop
@@ -84,6 +90,8 @@
 #include "kessler_functions.hpp"
 #include "kessler_functions_impl.hpp"  // needed for non-GPU / RDC builds
 #include "driver_kessler_hostloop.hpp"
+#include "driver_kessler_variants.hpp"
+#include "driver_kessler_preprocess.hpp"
 
 #include <Kokkos_Core.hpp>
 #include <ekat_subview_utils.hpp>
@@ -115,6 +123,21 @@ using KMF_H = scream::kessler::KesslerMicrophysicsFunctions<Real, HostDevice>;
 // ---------------------------------------------------------------------------
 // Options
 // ---------------------------------------------------------------------------
+// Implementations --impl can select (see the comment at the top).
+enum class Impl { prod, hostloop, base, i2, i6, i2i6 };
+const Impl all_impls[] = {Impl::prod, Impl::hostloop, Impl::base, Impl::i2, Impl::i6, Impl::i2i6};
+const char* impl_name (const Impl i) {
+  switch (i) {
+    case Impl::prod:     return "prod";
+    case Impl::hostloop: return "hostloop";
+    case Impl::base:     return "base";
+    case Impl::i2:       return "i2";
+    case Impl::i6:       return "i6";
+    case Impl::i2i6:     return "i2i6";
+  }
+  return "?";
+}
+
 struct Options {
   int  ncols      = 3433;   // ~ne16np4 columns per rank with 4 ranks
   int  nz         = 58;
@@ -127,11 +150,11 @@ struct Options {
   Real poison_val = 6966.7; // value seen in mask in the failed GPU run
   Real rain_frac  = 0;      // fraction of columns with cloud/rain (sub-cycles)
   bool strided    = true;   // also run with qv/qc/qr as strided tracer slices
-  bool prod       = true;   // production KMF::kessler_run
-  bool hostloop   = false;  // kessler_driver::kessler_run_hostloop (old kessler_run)
+  std::vector<Impl> impls = {Impl::prod};  // --impl
   int  repeat     = 1;      // timed repeats of the nsteps calls
   int  warmup     = 0;      // untimed repeats before those
   bool kernel_timers = false;
+  bool preprocess   = false;  // --preprocess: I4 test instead of kessler_run
 
   bool rain () const { return rain_frac > 0; }
 };
@@ -163,16 +186,26 @@ void usage () {
     "  --no-strided      skip the run with qv/qc/qr as strided slices of a\n"
     "                    tracers array (EAMxx's layout; combine with --rain,\n"
     "                    or a precl misread is invisible)\n"
-    "  --impl I          prod | hostloop | both (default prod): production\n"
-    "                    kessler_run, the previous host-loop version in\n"
-    "                    driver_kessler_hostloop.hpp, or both (compared bit\n"
-    "                    for bit)\n"
+    "  --impl LIST       comma-separated implementations (default prod):\n"
+    "                    prod      production kessler_run\n"
+    "                    hostloop  previous host-loop version\n"
+    "                              (driver_kessler_hostloop.hpp)\n"
+    "                    base      variant code without I2 or I6\n"
+    "                              (= production before I2 was ported)\n"
+    "                    i2        skip pow on all-dry packs\n"
+    "                    i6        per-level scratch in team scratch\n"
+    "                    i2i6      both (driver_kessler_variants.hpp)\n"
+    "                    both = prod,hostloop; all = every one. Each non-prod\n"
+    "                    implementation is compared to prod bit for bit.\n"
     "  --repeat N        time N repeats of the nsteps calls, restoring the\n"
     "                    input state before each (default 1)\n"
     "  --warmup N        untimed repeats before the timed ones (default 0)\n"
     "  --kernel-timers   per-kernel time breakdown of the timed repeats. Fences\n"
     "                    after every kernel, so on GPU take the total time from\n"
     "                    a run without it.\n"
+    "  --preprocess      instead of kessler_run, compare and time run_impl's\n"
+    "                    pre-processing, old vs new (I4, driver_kessler_preprocess.hpp);\n"
+    "                    uses --grid/--ncols/--nz, --repeat, --warmup, --host-ref\n"
     "  --perf            timing setup: --ws managed --no-poison --no-strided\n"
     "                    --no-host-ref --impl both --repeat 5 --warmup 1\n"
     "                    (options after it override it)\n");
@@ -212,18 +245,34 @@ bool parse (int argc, char** argv, Options& opt) {
     else if (a == "--rain-frac")   opt.rain_frac  = std::atof(next());
     else if (a == "--no-strided")  opt.strided    = false;
     else if (a == "--impl") {
-      const std::string m = next();
-      opt.prod = (m == "prod" || m == "both");
-      opt.hostloop = (m == "hostloop" || m == "both");
-      if (!opt.prod && !opt.hostloop) { usage(); std::exit(2); }
+      std::string m = next();
+      if (m == "both") m = "prod,hostloop";
+      if (m == "all")  m = "prod,hostloop,base,i2,i6,i2i6";
+      opt.impls.clear();
+      size_t pos = 0;
+      while (pos <= m.size()) {
+        const size_t end = std::min(m.find(',', pos), m.size());
+        const std::string name = m.substr(pos, end - pos);
+        bool found = false;
+        for (const Impl im : all_impls) {
+          if (name == impl_name(im)) {
+            found = true;
+            if (std::find(opt.impls.begin(), opt.impls.end(), im) == opt.impls.end())
+              opt.impls.push_back(im);
+          }
+        }
+        if (!found) { std::printf("Unknown --impl entry: '%s'\n", name.c_str()); usage(); std::exit(2); }
+        pos = end + 1;
+      }
     }
     else if (a == "--repeat")      opt.repeat     = std::max(1, std::atoi(next()));
     else if (a == "--warmup")      opt.warmup     = std::max(0, std::atoi(next()));
     else if (a == "--kernel-timers") opt.kernel_timers = true;
+    else if (a == "--preprocess")  opt.preprocess = true;
     else if (a == "--perf") {
       opt.managed = true;  opt.carved = false;
       opt.poison  = false; opt.strided = false; opt.host_ref = false;
-      opt.prod    = true;  opt.hostloop = true;
+      opt.impls   = {Impl::prod, Impl::hostloop};
       opt.repeat  = 5;     opt.warmup = 1;
     }
     else if (a.rfind("--kokkos", 0) == 0) { /* handled by Kokkos */ }
@@ -448,9 +497,6 @@ void install_kernel_timers () {
 // ---------------------------------------------------------------------------
 // One kessler_run experiment
 // ---------------------------------------------------------------------------
-enum class Impl { prod, hostloop };
-const char* impl_name (const Impl i) { return i == Impl::prod ? "prod" : "hostloop"; }
-
 struct RunResult {
   std::string label;
   bool threw = false;
@@ -585,17 +631,20 @@ RunResult run_case (const Impl impl, const std::string& run_label, const Options
       for (int s = 0; s < opt.nsteps; ++s) {
         kt.on = timed && opt.kernel_timers;
         Kokkos::Timer timer;
-        if (impl == Impl::prod) {
-          KMF::kessler_run(ncols, nz, opt.dt, lyr_surf, lyr_toa,
-                           rhoqr, latvap, pref, cpair, rair,
-                           rho, z_mid, pk, theta, qv_in, qc_in, qr_in,
-                           precl, relhum, wsh.ws);
-        } else {
-          kessler_driver::kessler_run_hostloop<KMF>(ncols, nz, opt.dt, lyr_surf, lyr_toa,
-                           rhoqr, latvap, pref, cpair, rair,
-                           rho, z_mid, pk, theta, qv_in, qc_in, qr_in,
-                           precl, relhum, wsh.ws, &n_active);
+        // Same arguments for every implementation; hostloop also reports
+        // its per-pass active-column counts.
+#define KESSLER_ARGS ncols, nz, opt.dt, lyr_surf, lyr_toa, rhoqr, latvap, pref, \
+                     cpair, rair, rho, z_mid, pk, theta, qv_in, qc_in, qr_in, \
+                     precl, relhum, wsh.ws
+        switch (impl) {
+          case Impl::prod:     KMF::kessler_run(KESSLER_ARGS); break;
+          case Impl::hostloop: kessler_driver::kessler_run_hostloop<KMF>(KESSLER_ARGS, &n_active); break;
+          case Impl::base:     kessler_driver::kessler_run_variant<KMF, false, false>(KESSLER_ARGS); break;
+          case Impl::i2:       kessler_driver::kessler_run_variant<KMF, true,  false>(KESSLER_ARGS); break;
+          case Impl::i6:       kessler_driver::kessler_run_variant<KMF, false, true >(KESSLER_ARGS); break;
+          case Impl::i2i6:     kessler_driver::kessler_run_variant<KMF, true,  true >(KESSLER_ARGS); break;
         }
+#undef KESSLER_ARGS
         Kokkos::fence();
         t += timer.seconds();
         kt.on = false;
@@ -799,6 +848,94 @@ bool compare (const RunResult& a, const RunResult& b, const Real rtol, const Rea
   return ok;
 }
 
+// ---------------------------------------------------------------------------
+// --preprocess: run_impl's pre-processing, old vs new (I4). Inputs from the
+// synthetic profile: p_mid = P0 * pk^(cp/R), T_mid = pk * theta,
+// pseudo_density = rho * g * (layer thickness from z_mid), and qv as a strided
+// slice of a tracers array, as EAMxx passes it. Compares pk, theta, dz, rho,
+// z_mid and z_int on the real levels bit for bit, and times both versions.
+// ---------------------------------------------------------------------------
+template <typename KMF>
+bool preprocess_test (const std::string& label, const Options& opt, const Profile& prof) {
+  using Pack = typename KMF::Pack;
+  using Dev  = typename KMF::Device;
+  const int ncols = opt.ncols, nz = opt.nz;
+  const Real cp = PC::Cpair.value, rd = PC::Rair.value, g = PC::gravit.value;
+
+  std::vector<Real> p(size_t(ncols) * nz), T(p.size()), pdel(p.size());
+  for (int c = 0; c < ncols; ++c) {
+    for (int k = 0; k < nz; ++k) {
+      const size_t i = size_t(c) * nz + k;
+      p[i] = PC::P0.value * std::pow(prof.pk[i], cp / rd);
+      T[i] = prof.pk[i] * prof.theta[i];
+      const Real zu = (k > 0)      ? prof.z_mid[i - 1] : 2 * prof.z_mid[i] - prof.z_mid[i + 1];
+      const Real zl = (k < nz - 1) ? prof.z_mid[i + 1] : 0;
+      pdel[i] = prof.rho[i] * g * 0.5 * (zu - zl);
+    }
+  }
+  auto p_mid = make_2d<KMF>("p_mid", p, ncols, nz);
+  auto T_mid = make_2d<KMF>("T_mid", T, ncols, nz);
+  auto pd    = make_2d<KMF>("pseudo_density", pdel, ncols, nz);
+  auto qv    = make_2d<KMF>("qv", prof.qv, ncols, nz);
+  using TracersView = Kokkos::View<Pack***, Kokkos::LayoutRight, Dev>;
+  TracersView tracers("tracers", ncols, 4, ekat::npack<Pack>(nz));
+  Kokkos::deep_copy(Kokkos::subview(tracers, Kokkos::ALL, 0, Kokkos::ALL), qv);
+  PView2d<KMF> qv_s = ekat::subview_1(tracers, 0);
+
+  const int np = ekat::npack<Pack>(nz), npi = ekat::npack<Pack>(nz + 1);
+  auto outputs = [&](const std::string& tag) {
+    kessler_driver::PreprocessViews<Dev> v;
+    v.T_mid = T_mid; v.p_mid = p_mid; v.pseudo_density = pd; v.qv = qv_s;
+    v.pk    = PView2d<KMF>("pk_"    + tag, ncols, np);
+    v.theta = PView2d<KMF>("theta_" + tag, ncols, np);
+    v.dz    = PView2d<KMF>("dz_"    + tag, ncols, np);
+    v.rho   = PView2d<KMF>("rho_"   + tag, ncols, np);
+    v.z_mid = PView2d<KMF>("z_mid_" + tag, ncols, np);
+    v.z_int = PView2d<KMF>("z_int_" + tag, ncols, npi);
+    return v;
+  };
+  const auto vo = outputs("old"), vn = outputs("new");
+
+  auto time_it = [&](auto&& fn) {
+    std::vector<double> t;
+    for (int r = 0; r < opt.warmup + opt.repeat; ++r) {
+      Kokkos::fence();
+      Kokkos::Timer timer;
+      fn();
+      Kokkos::fence();
+      if (r >= opt.warmup) t.push_back(timer.seconds());
+    }
+    return *std::min_element(t.begin(), t.end());
+  };
+  const double t_old = time_it([&]() { kessler_driver::preprocess_old<Dev>(ncols, nz, vo); });
+  const double t_new = time_it([&]() { kessler_driver::preprocess_new<Dev>(ncols, nz, vn); });
+
+  std::printf("\n=== preprocess (%s): ncols=%d nz=%d, qv column stride %d\n", label.c_str(), ncols, nz,
+              int(qv_s.stride(0)));
+  bool ok = true;
+  struct F { const char* name; PView2d<KMF> a, b; int n; };
+  const F fields[] = {{"pk", vo.pk, vn.pk, nz}, {"theta", vo.theta, vn.theta, nz},
+                      {"dz", vo.dz, vn.dz, nz}, {"rho", vo.rho, vn.rho, nz},
+                      {"z_mid", vo.z_mid, vn.z_mid, nz}, {"z_int", vo.z_int, vn.z_int, nz + 1}};
+  for (const auto& f : fields) {
+    const auto a = to_vec<KMF>(f.a, f.n), b = to_vec<KMF>(f.b, f.n);
+    size_t n_diff = 0; Real max_rel = 0; int n_bad = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+      if (!std::isfinite(b[i])) ++n_bad;
+      if (a[i] == b[i]) continue;
+      ++n_diff;
+      const Real rel = std::abs(a[i] - b[i]) / std::max(std::abs(a[i]), Real(1e-300));
+      if (!(rel <= max_rel)) max_rel = rel;
+    }
+    std::printf("  %-6s differing values: %zu of %zu (max rel %.3e), non-finite: %d %s\n", f.name,
+                n_diff, a.size(), double(max_rel), n_bad, (n_diff || n_bad) ? "<-- differs" : "");
+    ok = ok && n_diff == 0 && n_bad == 0;
+  }
+  std::printf("  time per call (best of %d): old %.4e s, new %.4e s, old/new %.2fx\n  %s\n",
+              opt.repeat, t_old, t_new, t_old / t_new, ok ? "MATCH" : "DIFFER");
+  return ok;
+}
+
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -824,6 +961,16 @@ int main (int argc, char** argv)
     if (opt.kernel_timers) install_kernel_timers();
 
     const Profile prof = build_profile(opt);
+
+    if (opt.preprocess) {
+      bool ok = preprocess_test<KMF_D>("device", opt, prof);
+      if (opt.host_ref) ok = preprocess_test<KMF_H>("host", opt, prof) && ok;
+      std::printf("\ndriver_kessler --preprocess: %s\n", ok ? "ALL MATCH" : "DIFFERENCES (see above)");
+      rc = ok ? 0 : 1;
+      Kokkos::finalize();
+      MPI_Finalize();
+      return rc;
+    }
     {
       int n_rainy = 0;
       for (char r : prof.rainy) n_rainy += r;
@@ -834,9 +981,7 @@ int main (int argc, char** argv)
     const Real nan = std::numeric_limits<Real>::quiet_NaN();
     const bool ws_carved = !opt.managed;  // workspace mode for the NaN run
 
-    std::vector<Impl> impls;
-    if (opt.prod) impls.push_back(Impl::prod);
-    if (opt.hostloop) impls.push_back(Impl::hostloop);
+    const std::vector<Impl>& impls = opt.impls;
 
     std::vector<RunResult> runs;
     for (const Impl im : impls) {
@@ -883,28 +1028,27 @@ int main (int argc, char** argv)
         all_ok = compare(*same_ws, *strided, Real(0), Real(0)) && all_ok;
       }
     }
-    // prod does the same arithmetic per column as the old host loop, so the
-    // two should match bit for bit on the same backend.
-    if (opt.prod && opt.hostloop) {
-      for (const auto& r : runs) {
-        if (r.label.rfind("prod:", 0) != 0) continue;
-        const RunResult* hl = find("hostloop:" + r.label.substr(5));
-        if (hl) all_ok = compare(r, *hl, Real(0), Real(0)) && all_ok;
-      }
+    // Every implementation does the same arithmetic per column as prod, so
+    // each should match prod bit for bit on the same backend.
+    auto run_part = [](const std::string& label) { return label.substr(label.find(':') + 1); };
+    for (const auto& r : runs) {
+      if (r.label.rfind("prod:", 0) == 0) continue;
+      const RunResult* pr = find("prod:" + run_part(r.label));
+      if (pr) all_ok = compare(r, *pr, Real(0), Real(0)) && all_ok;
     }
 
     // Timing summary: seconds per kessler_run call over the timed repeats.
     std::printf("\n--- timing (s per kessler_run call, %d timed repeat(s) x %d step(s), "
                 "%d warmup)\n", opt.repeat, opt.nsteps, opt.warmup);
-    std::printf("  %-32s %12s %12s %12s %14s\n", "run", "min", "mean", "max", "hostloop/this");
+    std::printf("  %-32s %12s %12s %12s %14s\n", "run", "min", "mean", "max", "prod/this");
     for (const auto& r : runs) {
       if (r.threw || r.times.empty()) continue;
       const double mn = *std::min_element(r.times.begin(), r.times.end());
       const double mx = *std::max_element(r.times.begin(), r.times.end());
       double mean = 0; for (double t : r.times) mean += t; mean /= r.times.size();
       std::string speedup = "";
-      if (r.label.rfind("prod:", 0) == 0) {
-        const RunResult* pr = find("hostloop:" + r.label.substr(5));
+      if (r.label.rfind("prod:", 0) != 0) {
+        const RunResult* pr = find("prod:" + run_part(r.label));
         if (pr && !pr->times.empty()) {
           char buf[32];
           std::snprintf(buf, sizeof(buf), "%.2fx",

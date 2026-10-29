@@ -15,6 +15,19 @@
 namespace scream {
 namespace kessler {
 
+namespace detail {
+// pow(x, e) for x >= 0 and e > 0, but returns 0 without calling pow when
+// every lane of x is 0. pow(+-0, e > 0) = +0, so the result is identical;
+// this only skips the cost for dry levels (qr = 0), which are most of the
+// column even when it rains (performance_suggestions.md, I2).
+template <typename PackT, typename RealT>
+KOKKOS_INLINE_FUNCTION
+PackT pow_nonneg (const PackT& x, const RealT e) {
+  if (!(x != RealT(0)).any()) return PackT(RealT(0));
+  return ekat::pow(x, e);
+}
+} // namespace detail
+
 /*
  * kessler_run
  *
@@ -58,6 +71,9 @@ namespace kessler {
  *  - Per-(col,level) fields are Pack-typed and operated on Pack-wide
  *    using ekat's Pack-aware math (ekat::exp/pow/sqrt/max/min) -- the
  *    same idiom SHOC uses throughout (e.g. shoc_assumed_pdf_impl.hpp).
+ *    The four rain powers (qr in autoconversion/collection, r*qr in
+ *    evaporation and the fall speed) go through detail::pow_nonneg,
+ *    which skips pow for packs with no rain at all; same results.
  *  - Sedimentation and the CFL limit need the scalar neighbor level
  *    (k + lyr_step), which generally falls in an adjacent Pack. That
  *    neighbor is assembled via ekat::shift_left/shift_right, the same
@@ -220,7 +236,7 @@ void KesslerMicrophysicsFunctions<S,D>::kessler_run(
         // Guard against round-off negative qr before computing velqr
         qr(col, kp)    = ekat::max(qr(col, kp), Real(0));
         velqr(col, kp) = Real(36.34) * rhalf(col, kp) *
-                         ekat::pow(qr(col, kp) * r(col, kp), Real(0.1364));
+                         detail::pow_nonneg(qr(col, kp) * r(col, kp), Real(0.1364));
       });
       team.team_barrier();
 
@@ -298,7 +314,7 @@ void KesslerMicrophysicsFunctions<S,D>::kessler_run(
               qc(col, kp) -
               (qc(col, kp) - dt0 *
                 ekat::max(Real(0.001) * (qc(col, kp) - Real(0.001)), Real(0))) /
-              (Real(1) + dt0 * Real(2.2) * ekat::pow(qr(col, kp), Real(0.875)));
+              (Real(1) + dt0 * Real(2.2) * detail::pow_nonneg(qr(col, kp), Real(0.875)));
             qc(col, kp) = ekat::max(qc(col, kp) - qrprod, Real(0));
             qr(col, kp) = ekat::max(qr(col, kp) + qrprod + sed(col, kp), Real(0));
 
@@ -317,8 +333,8 @@ void KesslerMicrophysicsFunctions<S,D>::kessler_run(
             // dim(qvs, qv) = max(qvs - qv, 0): evaporation only in subsaturated air
             const Pack rqr = r(col, kp) * qr(col, kp);
             const Pack A = dt0 *
-              ((Real(1.6) + Real(124.9) * ekat::pow(rqr, Real(0.2046))) *
-               ekat::pow(rqr, Real(0.525)) /
+              ((Real(1.6) + Real(124.9) * detail::pow_nonneg(rqr, Real(0.2046))) *
+               detail::pow_nonneg(rqr, Real(0.525)) /
                (Real(2550000) * pc(col, kp) / (Real(3.8) * qvs) + Real(540000))) *
               (ekat::max(qvs - qv(col, kp), Real(0)) / (r(col, kp) * qvs));
             const Pack B   = ekat::max(-prod - qc(col, kp), Real(0));
@@ -333,7 +349,7 @@ void KesslerMicrophysicsFunctions<S,D>::kessler_run(
 
             // Terminal fall speed with the updated qr, and its CFL limit
             const Pack v = Real(36.34) * rhalf(col, kp) *
-                           ekat::pow(qr(col, kp) * r(col, kp), Real(0.1364));
+                           detail::pow_nonneg(qr(col, kp) * r(col, kp), Real(0.1364));
             velqr(col, kp) = v;
             cfl_min(kp, v, lmin);
           },

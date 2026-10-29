@@ -1,7 +1,8 @@
 # Kessler Kokkos Performance Suggestions
 
-Last updated 2026-10-28. Code state: branch `ren/kessler-claude` at
-`7ecd5d94bb` plus the uncommitted `kessler_run` port (D1); the original
+Last updated 2026-10-29. Code state: branch `ren/kessler-claude` at
+`223c6719b2` (which commits the team-per-column `kessler_run`, D1) plus the
+uncommitted skip-dry-pow (I2) and pre-processing (I4) changes; the original
 perf numbers in B and C refer to the pre-port code at `49bf6ccdde`. Model
 performance numbers come from `GK_perf_utils/kessler_perf_trends.md` and
 the run cases in sections G and H; standalone numbers come from
@@ -11,8 +12,9 @@ the run cases in sections G and H; standalone numbers come from
 team-per-column version of `kessler_run` (fix D1) gives bit-identical
 results and, with rain, is 10-33x faster on CPU and 9-22x faster on GPU
 (standalone, one rank's worth of columns, ne16 and ne60). It is now
-ported into `kessler_functions_impl.hpp` (uncommitted); the old host-loop
-version is kept for comparison in `driver_kessler_hostloop.hpp`.
+`kessler_run` in `kessler_functions_impl.hpp` (committed in `223c6719b2`);
+the old host-loop version is kept for comparison in
+`driver_kessler_hostloop.hpp`.
 
 Full model, ne16 1 day, run on an interactive GPU node (section G): the
 port is bit-for-bit identical to the previous C++ build (HOMME global
@@ -28,6 +30,17 @@ Fortran in every case. At ne60 CPU with rain, the case the problem was
 reported on, `kessler::run` went from 65.5 to 9.5 s/day (steady state,
 slowest rank), against Fortran's 11.8.
 
+After that, two smaller bit-for-bit changes were made and checked in ne16
+model runs (section I): skipping `pow` for dry levels (I2, `kessler_run`
+1.14x faster on CPU with rain) and faster pre-processing in `run_impl`
+(I4, `preprocess` 1.2x on CPU, 1.8-2.6x on GPU). The full C++ matrix was
+rerun with them under the same suffix `_updated` (section J): all 48
+cases bit-for-bit, and `kessler::run` on the slowest rank another
+1.15-1.33x faster than D1 alone on CPU and 1.03-1.14x on GPU. ne60 CPU
+with rain is now 7.4 s/day (steady state), against 65.5 originally and
+11.8 for Fortran. The D1-only results are kept in section H and
+`results_updated_2026-10-28.txt`.
+
 ## Contents
 
 - [0. Translation guide: Fortran -> C++/Kokkos (for LLM-assisted ports)](#0-translation-guide-fortran---ckokkos-for-llm-assisted-ports)
@@ -40,6 +53,7 @@ slowest rank), against Fortran's 11.8.
 - [G. Full-model check of the port on an interactive node (2026-10-28)](#g-full-model-check-of-the-port-on-an-interactive-node-2026-10-28)
 - [H. Queue runs of the port (suffix `_updated`, 2026-10-28)](#h-queue-runs-of-the-port-suffix-_updated-2026-10-28)
 - [I. Review after the port: remaining costs and possible improvements](#i-review-after-the-port-remaining-costs-and-possible-improvements)
+- [J. Queue runs with I2 + I4 (suffix `_updated`, rerun 2026-10-28)](#j-queue-runs-with-i2--i4-suffix-_updated-rerun-2026-10-28)
 
 ---
 
@@ -227,6 +241,93 @@ SHOC).
   compared with the Fortran reference.
 - [ ] This file updated with commit, build and results.
 
+### 0.7 Kokkos lessons and best practices
+
+General Kokkos/EKAT lessons from the Kessler work (D1, I2-I6, and the
+timing work in F-J), for any EAMxx physics kernel. The rules in 0.2
+say what the port must do; this section says why, and what was learned
+about Kokkos along the way.
+
+**Parallel structure**
+
+- Match the parallel structure to where the work is. Data-dependent
+  work per column (sub-cycling, iteration) belongs inside one team per
+  column, so each column does only its own passes. Moving that loop to
+  the host cost 10-33x on CPU and 9-22x on GPU in Kessler (F), more
+  than any kernel-level tuning could win back.
+- Kernel launches and host syncs are not free. The old host loop did
+  ~9 launches and a reduction to the host per pass; on GPU the gain from
+  I4 was mostly one launch fewer per call (J). Fuse kernels that run over
+  the same columns, and keep reductions to the host to one per call,
+  after the main kernel.
+- A team-level `parallel_scan` (e.g. `PF::calculate_z_int`) needs the
+  policy from `TPF::get_thread_range_parallel_scan_team_policy`, not the
+  default team policy; use that policy for the whole kernel that
+  contains the scan, as SHOC's preprocess does (I4).
+- Team size: use `ekat::TeamPolicyFactory`, not `Kokkos::AUTO`. For
+  short columns (58 levels, Pack 1 on GPU) AUTO picked 128 threads,
+  half of them idle; 64 was up to 1.5x faster (F). Measure team size
+  when the level count changes a lot.
+- Values every thread in a team computes from team-wide inputs (the
+  result of a team reduction, a scalar read from a view) can be
+  team-local variables, one identical copy per thread, with no
+  broadcast. Write per-column results once, inside
+  `Kokkos::single(Kokkos::PerTeam(team), ...)`.
+- `team_barrier()` only where a loop reads data another thread wrote
+  in the previous loop (e.g. a neighbouring pack). Fusing loops that
+  touch only their own pack removes barriers as well as passes.
+
+**CPU and GPU from one source**
+
+- On the derecho CPU build the backend is Serial with Pack 16: a team is
+  one thread and `TeamVectorRange` is a plain loop, so all of the CPU
+  speed comes from the Pack (SIMD) and from not doing wasted work. On
+  GPU, Pack 1, the parallelism is the threads. Code written over packs
+  with `ekat::` math runs well on both.
+- nvc++ vectorizes `ekat::pow`/`exp` on a 16-wide pack into four AVX2
+  vector calls (`__pd_pow_4`, `__pd_exp_4`), even with `-Mnofma -Kieee`
+  (I3). Check this in the binary (`nm`/`objdump`) rather than from
+  `-Minfo` alone: its line numbers are ambiguous across inlined headers.
+- Skipping work per pack (I2: no `pow` when a whole pack has no rain)
+  pays on CPU, where one test skips 16 lanes (1.15-1.33x in the model).
+  On GPU each thread tests its own level and threads in a warp wait for
+  the slowest one, so the same change gave only 1.03-1.14x (J). Test a
+  whole pack (`(x != 0).any()`), never branch per lane inside a pack.
+- Transcendental functions dominate the cost of physics kernels once
+  the structure is right. Reusing a value instead of recomputing it
+  (I4: `theta = T / exner` with the Exner value just computed, instead
+  of a second `pow`) gave 1.85x on CPU where packing and fusing alone
+  gave 1.1x. Look for repeated `pow`/`exp`/`log` first; keep the
+  arithmetic identical if the change must be bit-for-bit.
+- Team scratch (level-0 `team_scratch`, shared memory on GPU) did not
+  help (I6): a column's per-level arrays already stay in cache on CPU
+  and L1/L2 on GPU. Do not expect it to pay unless the data is reused
+  across many threads or does not fit in cache.
+- nvcc restrictions on extended (`KOKKOS_LAMBDA`) lambdas: a variable
+  cannot be captured for the first time inside an `if constexpr` branch
+  (make it outside, as `driver_kessler_variants.hpp` does). In a class
+  member, use `KOKKOS_CLASS_LAMBDA` and copy members to local variables
+  first, so the device code does not read through `this`.
+
+**Measuring**
+
+- Fence before stopping a timer. Kokkos kernels are asynchronous on GPU,
+  so a timer stopped without `Kokkos::fence()` measures the launch, and
+  the kernel is charged to the next fenced timer (`run_impl`'s
+  `preprocess` timer did this until 2026-10-29, I4). The driver's `--kernel-timers` fences after
+  every kernel, so use it for the breakdown and an unfenced run for the
+  total.
+- Time a standalone driver at one rank's production size (columns per
+  rank, levels, Pack size, team size) on both backends, with warm-up
+  runs and best-of-N, before running the model. Then check the model's
+  slowest rank: the driver numbers carried over (I2 on CPU: 1.3x standalone,
+  1.15-1.29x in the model with rain), but the model adds EAMxx overhead
+  (property checks, preprocessing) the driver does not see.
+- Keep every experimental variant in the driver behind a compile-time
+  switch and compare it bit for bit with production
+  (`driver_kessler_variants.hpp`, `--impl all`). This made it cheap to
+  test I2 and I6 and drop the one that did not help.
+
 ---
 
 ## A. Current state
@@ -255,15 +356,22 @@ Done and present in the code:
    host-loop version (`driver_kessler_hostloop.hpp`), check that they
    agree bit for bit, and report per-column sub-cycle counts and
    per-kernel times. See section F.
-5. **D1 ported (2026-10-28, uncommitted):** `kessler_run` in
+5. **D1 ported (2026-10-28, committed in `223c6719b2`):** `kessler_run` in
    `kessler_functions_impl.hpp` is now one team per column. See D1. The
-   Workspace and the process interface are unchanged so far.
+   Workspace is unchanged so far.
 6. **New builds and interactive-node cases (2026-10-28):** the port is built
    as `builds/cpp_{cpu,gpu}_7ecd5d94bb-dirty9022632f` (`workflow/build.sh`;
    `builds/cpp_cpu` and `builds/cpp_gpu` now point at them). The original
    builds (`cpp_{cpu,gpu}_49bf6ccdde-dirty349ee6c7`) are untouched. 12
    ne16 1-day cases (`_port_*` and `_base_*`) were run on interactive node
    deg0053. See section G.
+7. **I2 and I4 (2026-10-28, uncommitted):** `kessler_run` skips `pow` on
+   all-dry packs (`detail::pow_nonneg`), and `run_impl`'s pre-processing
+   is one packed team-per-column kernel. Built as
+   `builds/cpp_{cpu,gpu}_223c6719b2-dirtyf15739b6`; bit-for-bit in ne16
+   interactive runs and in the full 48-case queue matrix (section J). I3
+   (vectorization) and the I6 team-scratch variant were checked and
+   left out (no gain). See section I.
 
 **Corrections** (written against the pre-port code; the D1 port replaced
 the host loop, so the first three items below no longer apply). The
@@ -447,7 +555,7 @@ bit-identical to production, so production's `n_iter = max(npass)`.
 ## D. Possible fixes, in priority order
 
 - [x] **D1. Move the sub-cycle loop into the kernel, one team per column, like
-  Fortran.** (PORTED 2026-10-28, uncommitted; ne16 full-model check done on
+  Fortran.** (PORTED 2026-10-28, committed in `223c6719b2`; ne16 full-model check done on
   an interactive node, G; full queue matrix done and bit-for-bit, H.)
   Now `kessler_run` itself (`kessler_functions_impl.hpp`); it was
   prototyped as `kessler_run_team` in a driver header first. Same
@@ -549,6 +657,12 @@ bit-identical to production, so production's `n_iter = max(npass)`.
   every queue run (H), including ne60 CPU (65.5 -> 9.5 s/day, below
   Fortran's 11.8). Still to do: compare against the `fortran_bridge`
   reference.
+- I2 and I4 (section I) are in the code, uncommitted, and bit-for-bit in
+  the full C++ queue matrix (section J; 1.15-1.33x more on CPU, 1.03-1.14x
+  on GPU over D1 alone). The `preprocess` timer now fences (2026-10-29,
+  see I4). Still to do: commit them, and port I4 and the timer fence to
+  the bridge and JAX branches so all three implementations have the same
+  pre-processing cost and timers.
 - Further improvements after the port: see section I.
 - Load imbalance across ranks (G3): with the port, the rainiest CPU
   rank's Kessler time is ~7x the mean. That is real work (most of that
@@ -559,7 +673,8 @@ bit-identical to production, so production's `n_iter = max(npass)`.
 - `driver_kessler.cpp`'s `--help` text: fixed (2026-10-28).
 - Check sub-cycle counts from real model state against the synthetic
   `--rain-frac` profile (C2).
-- Compiler vectorization report for the CPU build (C4): now item I3.
+- Compiler vectorization report for the CPU build (C4): done as item I3
+  (pow/exp are vectorized).
 
 ---
 
@@ -571,7 +686,9 @@ Files:
 |-------------------------------|-----------------------------------------------------------------------------------------------|
 | `driver_kessler.cpp`          | test driver (checks, comparisons, timing)                                                     |
 | `driver_kessler_hostloop.hpp` | the pre-D1 `kessler_run` (host-driven sub-cycle loop), `kessler_driver::kessler_run_hostloop`, for comparison |
-| `build_driver_kessler.sh`     | builds the driver against a case build (`--src-from-case` also copies the `.hpp`)             |
+| `driver_kessler_variants.hpp` | experimental variants of `kessler_run` (I2, I6), `kessler_driver::kessler_run_variant`         |
+| `driver_kessler_preprocess.hpp` | old and new `run_impl` pre-processing (I4), for `--preprocess`                                 |
+| `build_driver_kessler.sh`     | builds the driver against a case build (`--src-from-case` also copies the `.hpp`; `--cxxflags` adds flags) |
 
 Build (from this directory) on the interactive compute node, not a
 login node, with the matching case's module environment:
@@ -599,8 +716,10 @@ CUDA_VISIBLE_DEVICES=0 ./driver_kessler_gpu --perf --grid ne16-gpu --rain-frac 0
 ./driver_kessler_cpu --perf --grid ne60-cpu --rain-frac 0.08 --kernel-timers
 ```
 
-New options: `--impl prod|hostloop|both`, `--rain-frac F`, `--grid G`,
-`--repeat N`, `--warmup N`, `--kernel-timers`, `--host-ref`,
+New options: `--impl LIST` (comma-separated: `prod`, `hostloop`, and the I2/I6 variants
+in `driver_kessler_variants.hpp`: `base`, `i2`, `i6`, `i2i6`; `both`, `all`), `--rain-frac F`, `--grid G`,
+`--repeat N`, `--warmup N`, `--kernel-timers`, `--host-ref`, `--preprocess`
+(compare and time the old and new pre-processing instead of `kessler_run`),
 `--perf` (= `--ws managed --no-poison --no-strided --no-host-ref
 --impl both --repeat 5 --warmup 1`). `--help` lists them all.
 
@@ -752,6 +871,15 @@ get a build tag that matches the checkout.
 
 ## H. Queue runs of the port (suffix `_updated`, 2026-10-28)
 
+**Note (2026-10-28, evening):** the C++ matrix was resubmitted with I2 and
+I4 (build `cpp_{cpu,gpu}_223c6719b2-dirtyf15739b6`) under the same suffix
+`_updated`, using `workflow/cpp_batch_{11,14,51,54}.sh` (`run.py --force`).
+`--force` deletes and recreates each case, so the `CPP_*_updated` case
+directories now hold the I2+I4 runs, and the numbers in this section (D1
+only) can no longer be regenerated from them. They are kept here and in
+`GK_perf_utils/workflow/interactive/results_updated_2026-10-28.txt`. The
+I2+I4 results are in section J.
+
 The full original perf matrix (`CPP_<res>_<1|5>day_<cpu|gpu>_sc<1|4>_<rain|noRain>`)
 rerun through the queue with the port build
 (`cpp_{cpu,gpu}_7ecd5d94bb-dirty9022632f`), same layouts as the originals
@@ -838,8 +966,9 @@ What this shows:
 ## I. Review after the port: remaining costs and possible improvements
 
 Review of `kessler_functions_impl.hpp` (ported `kessler_run`) and
-`eamxx_kessler_process_interface.cpp` `run_impl`, 2026-10-28. No code was
-changed. Timer breakdown from the `_updated` queue runs (ne16, 1 day,
+`eamxx_kessler_process_interface.cpp` `run_impl`, 2026-10-28. The review
+itself changed no code; I2 and I4 below were implemented afterwards, so
+the timer table is from before them. Timer breakdown from the `_updated` queue runs (ne16, 1 day,
 s per simulated day; mean over ranks, slowest rank in [ ]):
 
 | timer                       | cpu sc1 rain  | cpu sc1 noRain | gpu sc1 rain  | gpu sc1 noRain |
@@ -877,7 +1006,7 @@ answers bit-for-bit identical, so the driver and G/H checks still apply.
     check per call on GPU at ne16) is a question for EAMxx's
     property-check code.
 
-- [ ] **I2. Skip pow on all-dry packs (BFB).** Each pass does 4 pow and 1 exp
+- [x] **I2. Skip pow on all-dry packs (BFB).** Each pass does 4 pow and 1 exp
   per level: `pow(qr, 0.875)` in qrprod, `pow(rqr, 0.2046)` and
   `pow(rqr, 0.525)` in the evaporation term A, and `pow(qr*r, 0.1364)`
   for velqr. Where qr == 0 these are exactly 0 (`pow(0, x>0) = +0`),
@@ -891,20 +1020,131 @@ answers bit-for-bit identical, so the driver and G/H checks still apply.
   depending on how deep the rain is. Validate with
   `driver_kessler.cpp --impl both` (bit for bit vs hostloop).
 
-- [ ] **I3. CPU vectorization report** (was C4, still open). The micro math is
+  **Ported 2026-10-28 (uncommitted; checked in the model with I4, below).** Production
+  `kessler_run` now calls `detail::pow_nonneg` (in
+  `kessler_functions_impl.hpp`) for the four rain powers. After the port
+  the driver checks all pass and production still matches `hostloop` and
+  every variant bit for bit (CPU and GPU, 0/8/50% rain, 3 steps).
+  Production vs production-before-I2 (`--impl prod,base`), 8% rain: CPU
+  1.30x (ne16), 1.34x (ne60); GPU 1.11x (ne16), ~1.0x (ne60, noisy run:
+  1.18x in the variant test below).
+
+  **Model check 2026-10-28 (with I4, interactive node deg0022):** build
+  `cpp_{cpu,gpu}_223c6719b2-dirtyf15739b6` (I2 + I4) vs
+  `cpp_{cpu,gpu}_7ecd5d94bb-dirty9022632f` (before both), ne16 1 day, CPU 64
+  ranks and GPU 4 ranks, rain and noRain (cases `*_i2i4*` vs `*_pre*`;
+  `GK_perf_utils/workflow/interactive/results_i2i4_2026-10-28.txt`). HOMME
+  global state statistics bit-for-bit in all four pairs. Slowest rank,
+  s/day, old -> new:
+
+  | ne16                     | rain                    | noRain                  |
+  |--------------------------|-------------------------|-------------------------|
+  | cpu `kessler_run` (I2)   | 1.953 -> 1.718 (1.14x)  | 0.080 -> 0.056 (1.43x)  |
+  | cpu `preprocess` (I4)    | 0.039 -> 0.032 (1.22x)  | 0.039 -> 0.033 (1.18x)  |
+  | cpu `kessler::run`       | 2.041 -> 1.796 (1.14x)  | 0.179 -> 0.170 (1.05x)  |
+  | gpu `kessler_run` (I2)   | 0.078 -> 0.075 (1.04x)  | 0.0052 -> 0.0043 (1.2x) |
+  | gpu `preprocess` (I4)    | 0.016 -> 0.006 (2.62x)  | 0.011 -> 0.006 (1.83x)  |
+  | gpu `kessler::run`       | 0.172 -> 0.163 (1.06x)  | 0.101 -> 0.095 (1.06x)  |
+
+  I2 gains less in the model than standalone (1.14x vs 1.3x on CPU with
+  rain): the slowest rank is the rainiest, so fewer of its packs are dry.
+  Over all ranks (mean) CPU `kessler::run` with rain went 0.291 -> 0.234
+  (1.24x). Whole-model run times did not change beyond noise.
+
+  Variant test before the port (standalone driver, deg0022):
+  `kessler_run_variant<KMF, SkipDryPow=true, ...>` in
+  `driver_kessler_variants.hpp` (`--impl i2`). Bit-for-bit with production
+  on CPU and GPU (0, 8%, 50% rain, 3 steps, all driver checks). Speedup vs
+  production, s per call, best of 10:
+
+  | grid / rain    | cpu i2 | gpu i2 |
+  |----------------|-------:|-------:|
+  | ne16, 0        | 1.64x  | 1.12x  |
+  | ne16, 0.08     | 1.34x  | 1.08x  |
+  | ne16, 0.12     | 1.33x  | 1.14x  |
+  | ne60, 0        | 1.60x  | 1.22x  |
+  | ne60, 0.08     | 1.38x  | 1.18x  |
+  | ne60, 0.12     | 1.31x  | 1.19x  |
+
+  (The synthetic no-rain profile has `qr = 0` everywhere, so every pow is
+  skipped; the `base` variant, the same code with both switches off, ran
+  at 0.94-1.06x of production, which bounds the noise.) A small change,
+  bit-for-bit, ~25-30% off the CPU kernel with rain, so it was ported.
+
+- [x] **I3. CPU vectorization report** (was C4). The micro math is
   the remaining CPU cost, and it is not known whether nvc++
   vectorizes `ekat::pow`/`exp` over 16-wide packs under `-Mnofma
   -Kieee`. Compile the driver with `-Minfo=vect` (no code change) and
   check the `kessler_run` micro loop. If pow/exp do not vectorize,
   this could be worth more than I2.
 
-- [ ] **I4. Preprocess is unpacked scalar work** (BFB if the formulas stay the
+  **Done 2026-10-28: pow and exp are vectorized; nothing to gain.**
+  `build_driver_kessler.sh --cxxflags "-Minfo=vect,inline"` gave the report
+  (`GK_perf_utils/workflow/interactive/variants_2026-10-28/vect_report.log`),
+  but its line numbers are ambiguous across inlined headers, so the CPU
+  binary was checked directly (`nm`/`objdump`). In production
+  `kessler_run` every `ekat::exp` is a call to `__pd_exp_4` (nvc++'s vector
+  exp, 4 doubles, AVX2: the widest the AMD Milan CPUs support), and
+  `ekat::pow` calls `__pd_pow_4` with a scalar `__pd_pow_1` fallback that
+  only runs if nvc++'s run-time aliasing check fails. A 16-wide pack takes
+  4 vector calls. `ekat::pow` is called out of line rather than inlined,
+  which is cheap next to 16 pows.
+
+- [x] **I4. Preprocess is unpacked scalar work** (BFB if the formulas stay the
   same). `run_impl`'s `Kessler_preprocess` indexes
   `(icol, klev / Pack::n)[klev % Pack::n]` for every level in a
   RangePolicy, so it does not use the packs. 0.021 s/day on CPU,
   ~60% of the kernel's own time without rain. Write it over packs
   (`PF::exner_function` etc. have Pack overloads), or fold it, and
   the z_int/z_mid scan, into the per-column kernel.
+
+  **Tested 2026-10-28 (standalone driver, deg0022), before it went into
+  `run_impl`: bit-for-bit, ~1.85x on CPU.** `driver_kessler.cpp --preprocess` runs the
+  current pre-processing (`preprocess_old`, copied from `run_impl`) and the
+  new one (`preprocess_new`), both in `driver_kessler_preprocess.hpp`, on
+  synthetic columns with `qv` as a strided tracer slice, and compares `pk`,
+  `theta`, `dz`, `rho`, `z_mid`, `z_int` on the real levels. The new
+  version is one team per column (scan policy, as SHOC), works on whole
+  packs, guards padding lanes, and computes `theta = T / pk` from the Exner
+  value it just made: `calculate_theta_from_T(T, p)` is `T /
+  exner_function(p)`, so this is the same arithmetic with one `pow` per
+  level instead of two. Results, all six outputs identical on CPU (Pack
+  16), GPU and host, ne16 and ne60:
+
+  | per call   | old       | new       | old/new |
+  |------------|----------:|----------:|--------:|
+  | CPU ne16   | 2.75e-4 s | 1.47e-4 s | 1.87x   |
+  | CPU ne60   | 3.90e-3 s | 2.11e-3 s | 1.85x   |
+  | GPU ne16   | 4.29e-5 s | 3.64e-5 s | 1.18x   |
+  | GPU ne60   | 3.17e-4 s | 2.15e-4 s | 1.48x   |
+
+  Without the Exner reuse (packing and fusing only) the CPU gain was just
+  1.09-1.12x: the cost is the pows, not the indexing. In the model this is
+  roughly 0.006 s/day per rank off `kessler::run` at ne16 CPU sc1 (about
+  7% without rain), 4x that at sc4, plus one kernel launch fewer per call
+  on GPU. The `preprocess` block is the same in the bridge and JAX
+  branches (variable names differ), so the change carries over; apply it
+  to all three to keep the comparison fair.
+
+  **Put into `run_impl` 2026-10-28 (uncommitted) and checked in the
+  model** together with I2: bit-for-bit, `preprocess` 1.2x faster on CPU
+  and 1.8-2.6x on GPU at ne16 (table under I2). On GPU, read that number
+  with care: in these runs `run_impl` stopped the `preprocess` timer
+  without a `Kokkos::fence()` (as it did before I4), so the timer mostly
+  measured kernel launches, and the kernel itself was charged to the next
+  fenced timer (`kessler_update_timestep_init`). The gain shown is mostly
+  the launch saved. **Fixed 2026-10-29 (uncommitted, not yet in any
+  build):** `run_impl` now fences before stopping the `preprocess` timer,
+  like every other sub-timer. Runs from then on report the real GPU
+  `preprocess` time, and their `preprocess` and
+  `kessler_update_timestep_init` sub-timers are not comparable with
+  earlier runs (totals are). CPU (Serial) numbers are unaffected. Queue runs of the full
+  C++ matrix with I2 + I4 run 2026-10-28 (suffix `_updated`): all 48
+  bit-for-bit, results in section J. Still to do: the same change in the bridge and
+  JAX branches (same two kernels; variables `params_helpers.*` and `*_v`;
+  keep `theta = T / exner` a single division by the same Exner value),
+  including the `Kokkos::fence()` before `stop_timer(...preprocess)`, so
+  the three implementations' sub-timers measure the same thing.
 
 - [ ] **I5. Fuse the small update kernels** (BFB if `T_mid = T_mid_prev +
   T_mid_tend*dt` stays as written). `kessler_update_timestep_init`,
@@ -921,6 +1161,17 @@ answers bit-for-bit identical, so the driver and G/H checks still apply.
   - Shrink the Workspace (D6): drop `f5`; `dt0`, `time_counter` and
     `precl_acc` are now only written once at the end. Saves memory,
     not time.
+
+  **Team scratch tested 2026-10-28 (standalone driver): no gain.**
+  `kessler_run_variant<KMF, ..., TeamScratch=true>` (`--impl i6`) keeps
+  `r`, `rhalf`, `pc`, `velqr` and `sed` in Kokkos level-0 team scratch
+  (~2.3 KB per team; shared memory on GPU). Bit-for-bit with production.
+  Speedup vs production: CPU 0.98-1.05x, GPU 0.96-1.02x; combined with
+  I2 (`--impl i2i6`) CPU matches I2 alone and GPU is 0-7% better than I2
+  alone (1.12-1.28x), within the run-to-run spread. Each column's arrays
+  already stay in cache (CPU) or L1/L2 (GPU), so moving them gains
+  nothing measurable. Not worth porting for speed; the Workspace shrink
+  (memory only) can still be done separately.
 
 - [ ] **I7. Load imbalance.** The rainiest rank does 7-8x the mean Kessler
   work (H). That is domain decomposition, not Kessler code;
@@ -942,3 +1193,101 @@ Checked, no problem found: the per-column sub-cycle state, barriers
 (one after sed, one at the end of each pass; relhum runs after the last
 pass's barrier), the error codes and their single host check, and the
 `max_pass` limit (same 100000 as before).
+
+---
+
+## J. Queue runs with I2 + I4 (suffix `_updated`, rerun 2026-10-28)
+
+The full C++ perf matrix rerun with I2 (skip `pow` on dry packs) and I4
+(packed pre-processing) on top of D1: build
+`cpp_{cpu,gpu}_223c6719b2-dirtyf15739b6`, same 48 cases, layouts and
+suffix as H (`workflow/cpp_batch_{11,14,51,54}.sh`, `run.py --force`), so
+the `CPP_*_updated` case directories now hold these runs. All finished
+2026-10-28. Files in `GK_perf_utils/workflow/interactive/`:
+
+- `results_updated_i2i4_2026-10-29.txt`: `compare_updated.py` output,
+  these runs vs the original C++ cases and Fortran.
+- `results_d1_vs_i2i4_2026-10-29.txt`: these runs vs the D1-only runs
+  (`results_updated_2026-10-28.txt`), plus the `kessler_run` and
+  `preprocess` sub-timers.
+
+**Answers:** all 48 cases are bit-for-bit with the original C++ runs
+(HOMME global state statistics), so also with the D1-only runs.
+
+**`kessler::run`, slowest rank, s per simulated day, with rain** ("orig"
+= the original host-loop C++ cases, "D1" = section H, "vs" columns are
+speedups, F90 / C++ = how much faster C++ is than Fortran):
+
+| case                   |   orig |     D1 | D1 + I2 + I4 | vs D1 | vs orig |    F90 | F90 / C++ |
+|------------------------|-------:|-------:|-------------:|------:|--------:|-------:|----------:|
+| ne16 1day cpu sc1 rain |  4.163 |  1.204 |        1.049 | 1.15x |    4.0x |  1.380 |      1.3x |
+| ne16 1day cpu sc4 rain |  4.424 |  1.420 |        1.191 | 1.19x |    3.7x |  1.727 |      1.5x |
+| ne16 5day cpu sc1 rain |  3.746 |  0.883 |        0.685 | 1.29x |    5.5x |  1.022 |      1.5x |
+| ne16 5day cpu sc4 rain |  4.062 |  1.079 |        0.899 | 1.20x |    4.5x |  1.335 |      1.5x |
+| ne30 1day cpu sc1 rain | 14.469 |  3.883 |        3.189 | 1.22x |    4.5x |  4.524 |      1.4x |
+| ne30 1day cpu sc4 rain | 15.337 |  4.566 |        3.754 | 1.22x |    4.1x |  5.589 |      1.5x |
+| ne30 5day cpu sc1 rain | 13.460 |  2.847 |        2.431 | 1.17x |    5.5x |  3.463 |      1.4x |
+| ne30 5day cpu sc4 rain | 14.889 |  3.667 |        2.967 | 1.24x |    5.0x |  4.586 |      1.5x |
+| ne60 1day cpu sc1 rain | 65.510 | 19.650 |       16.663 | 1.18x |    3.9x | 23.298 |      1.4x |
+| ne60 1day cpu sc4 rain | 71.487 | 22.324 |       17.746 | 1.26x |    4.0x | 27.998 |      1.6x |
+| ne60 5day cpu sc1 rain | 65.515 | 11.550 |        9.237 | 1.25x |    7.1x | 14.134 |      1.5x |
+| ne60 5day cpu sc4 rain | 67.008 | 14.813 |       12.127 | 1.22x |    5.5x | 18.847 |      1.6x |
+| ne16 1day gpu sc1 rain |  0.858 |  0.172 |        0.163 | 1.06x |    5.3x |  1.761 |     10.8x |
+| ne16 1day gpu sc4 rain |  1.167 |  0.464 |        0.445 | 1.04x |    2.6x |  2.115 |      4.8x |
+| ne16 5day gpu sc1 rain |  0.890 |  0.175 |        0.162 | 1.08x |    5.5x |  1.801 |     11.1x |
+| ne16 5day gpu sc4 rain |  1.222 |  0.472 |        0.432 | 1.09x |    2.8x |  2.195 |      5.1x |
+| ne30 1day gpu sc1 rain |  1.897 |  0.231 |        0.215 | 1.07x |    8.8x |  3.633 |     16.9x |
+| ne30 1day gpu sc4 rain |  2.261 |  0.588 |        0.555 | 1.06x |    4.1x |  4.192 |      7.6x |
+| ne30 5day gpu sc1 rain |  1.959 |  0.231 |        0.214 | 1.08x |    9.2x |  3.732 |     17.4x |
+| ne30 5day gpu sc4 rain |  2.343 |  0.573 |        0.536 | 1.07x |    4.4x |  4.315 |      8.1x |
+| ne60 1day gpu sc1 rain |  6.362 |  0.496 |        0.456 | 1.09x |   14.0x | 18.572 |     40.7x |
+| ne60 1day gpu sc4 rain |  6.961 |  1.058 |        0.989 | 1.07x |    7.0x | 20.105 |     20.3x |
+| ne60 5day gpu sc1 rain |  6.736 |  0.486 |        0.454 | 1.07x |   14.8x | 19.726 |     43.4x |
+| ne60 5day gpu sc4 rain |  7.361 |  1.054 |        0.974 | 1.08x |    7.6x | 21.287 |     21.9x |
+
+Ranges over the 12 cases of each kind, I2 + I4 vs D1 only:
+
+|             | `kessler::run` slowest rank | mean over ranks | model run time | C++ vs Fortran (slowest rank) |
+|-------------|----------------------------:|----------------:|---------------:|------------------------------:|
+| cpu rain    | 1.15-1.29x                  | 1.17-1.29x      | 0.98-1.06x     | 1.3-1.6x faster               |
+| cpu noRain  | 1.12-1.33x                  | 1.15-1.31x      | 0.99-1.08x     | 1.9-2.9x faster               |
+| gpu rain    | 1.04-1.09x                  | 1.06-1.08x      | 0.99-1.01x     | 4.8-43x faster                |
+| gpu noRain  | 1.03-1.14x                  | 1.05-1.13x      | 1.00-1.01x     | 1.4-5.2x faster               |
+
+**ne60 CPU, steady state** ((5-day - 1-day)/4, as in H), s per
+simulated day:
+
+| ne60 cpu      | C++ orig |    D1 | D1 + I2 + I4 | Fortran |
+|---------------|---------:|------:|-------------:|--------:|
+| sc1, rain     |    65.52 |  9.53 |         7.38 |   11.84 |
+| sc4, rain     |    65.89 | 12.94 |        10.72 |   16.56 |
+| sc1, noRain*  |     3.10 |  1.48 |         1.26 |    3.47 |
+| sc4, noRain*  |     7.96 |  5.64 |         4.79 |   13.93 |
+
+(* the noRain IC develops rain after day 1.) The case the problem was
+reported on, ne60 CPU with rain, is now 7.4 s/day against 65.5 originally
+(8.9x) and Fortran's 11.8 (1.6x faster than Fortran).
+
+**Sub-timers, ne16 1 day sc1** (D1 numbers from the table at the top of
+section I; `kessler_run` = slowest rank, `preprocess` = mean over ranks):
+
+|                        | cpu rain       | cpu noRain     | gpu rain       | gpu noRain     |
+|------------------------|----------------|----------------|----------------|----------------|
+| `kessler_run` (I2)     | 1.148 -> 1.002 | 0.039 -> 0.026 | 0.078 -> 0.074 | 0.005 -> 0.004 |
+| `preprocess` (I4)      | 0.021 -> 0.015 | 0.021 -> 0.015 | 0.012 -> 0.006 | 0.012 -> 0.006 |
+
+What this shows:
+
+- The queue runs agree with the ne16 interactive check (I2, I4): CPU
+  `kessler::run` is 1.15-1.33x faster than D1 alone, rain or not; GPU
+  1.03-1.14x. The CPU gain is larger at sc4 without rain (1.3x), where
+  `preprocess` runs 4 times per physics step and `kessler_run` itself is
+  cheap. (In these runs the GPU `preprocess` number mostly measures kernel launches; see
+  the timer note under I4.)
+- Against the original C++ build, CPU with rain is now 3.7-7.1x faster
+  and GPU with rain 2.6-14.8x; against Fortran, C++ is faster in all 48
+  cases (CPU with rain 1.3-1.6x).
+- Whole-model run times are unchanged within noise: Kessler is a small
+  part of the step once D1 is in.
+- The remaining CPU cost with rain is the sub-cycling on the rainiest
+  rank (I7); on GPU it is mostly the property checks (I1).

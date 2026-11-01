@@ -147,23 +147,23 @@ void KesslerMicrophysics::initialize_impl (const RunType /* run_type */)
   kessler::kessler_eamxx_bridge_init(m_num_cols, m_num_levs, latvap, P0, rhoqr, cpair, rair, gravit);
 
   #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
-    // Allocate host mirror views for GPU -> CPU Fortran bridge
-
-    params_helpers.h_rho        = KMF::view_2dh<Real>("kessler.h_rho",       m_num_cols, m_num_levs);
-    params_helpers.h_pk         = KMF::view_2dh<Real>("kessler.h_pk",        m_num_cols, m_num_levs);
-    params_helpers.h_z_mid      = KMF::view_2dh<Real>("kessler.h_z_mid",     m_num_cols, m_num_levs);
-    params_helpers.h_phis       = KMF::view_1dh<Real>("kessler.h_phis",      m_num_cols);
-
-    params_computed.h_theta     = KMF::view_2dh<Real>("kessler.h_theta",     m_num_cols, m_num_levs);
-    params_computed.h_qv        = KMF::view_2dh<Real>("kessler.h_qv",        m_num_cols, m_num_levs);
-    params_computed.h_qc        = KMF::view_2dh<Real>("kessler.h_qc",        m_num_cols, m_num_levs);
-    params_computed.h_qr        = KMF::view_2dh<Real>("kessler.h_qr",        m_num_cols, m_num_levs);
-    params_computed.h_precl     = KMF::view_1dh<Real>("kessler.h_precl",     m_num_cols);
-    params_computed.h_relhum    = KMF::view_2dh<Real>("kessler.h_relhum",    m_num_cols, m_num_levs);
-    params_computed.h_temp_prev = KMF::view_2dh<Real>("kessler.h_temp_prev", m_num_cols, m_num_levs);
-    params_computed.h_temp      = KMF::view_2dh<Real>("kessler.h_temp",      m_num_cols, m_num_levs);
-    params_computed.h_temp_tend = KMF::view_2dh<Real>("kessler.h_temp_tend", m_num_cols, m_num_levs);
-    params_computed.h_st_energy = KMF::view_2dh<Real>("kessler.h_st_energy", m_num_cols, m_num_levs);
+    // Host copies of the Fortran-layout arrays for the GPU -> CPU Fortran
+    // bridge: one block, carved in the order of the f_ arrays (init_buffers),
+    // so the bridge moves each group the Fortran reads or writes in one copy
+    {
+      const size_t n2 = size_t(m_num_cols) * m_num_levs;
+      m_h_fortran_block = Kokkos::View<Real*, Kokkos::HostSpace>("kessler.h_fortran_block",
+                                                                 12 * n2 + 2 * size_t(m_num_cols));
+      Real* h = m_h_fortran_block.data();
+      KMF::view_2dh<Real>* h2[12] = { &params_helpers.h_rho, &params_helpers.h_pk, &params_helpers.h_z_mid,
+                                      &params_computed.h_theta, &params_computed.h_qv, &params_computed.h_qc,
+                                      &params_computed.h_qr, &params_computed.h_temp, &params_computed.h_relhum,
+                                      &params_computed.h_temp_prev, &params_computed.h_temp_tend,
+                                      &params_computed.h_st_energy };
+      for (auto* v : h2) { *v = KMF::view_2dh<Real>(h, m_num_cols, m_num_levs); h += n2; }
+      params_computed.h_precl = KMF::view_1dh<Real>(h, m_num_cols); h += m_num_cols;
+      params_helpers.h_phis   = KMF::view_1dh<Real>(h, m_num_cols);
+    }
   #endif
 
   if (has_energy_fixer()) {
@@ -305,9 +305,9 @@ void KesslerMicrophysics::run_impl (const double dt )
   Kokkos::fence();
   stop_timer("EAMxx::kessler::run::preprocess");
 
-  // Initialize fortran data holders in structs
-  params_helpers.init(m_num_cols, nlevs);
-  params_computed.init(m_num_cols, nlevs);
+  // (The Fortran-layout arrays are not zero-filled each call: the c2f
+  // transposes overwrite every element the Fortran reads, and the Fortran
+  // writes every element of the rest.)
 
   double dt_timestep = dt;
 
@@ -458,6 +458,11 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
   Real* r_mem = reinterpret_cast<Real*>(r1_mem);
   //----------------------------------------------------------------------------
   // 2D "f_" views
+  // Order matters: the arrays the Fortran reads (f_rho .. f_temp) and the ones
+  // it writes (f_theta .. f_st_energy) are each one contiguous range, which
+  // the GPU -> CPU bridge copies to/from the host in one piece
+  // (kessler_eamxx_bridge_run). initialize_impl carves the host copies in
+  // the same order.
   KMF::fview_2dl<Real>* midlv_f_ptrs[num_2d_midlv_f] = { &params_helpers.f_rho,
                                                          &params_helpers.f_pk,
                                                          &params_helpers.f_z_mid,
@@ -465,15 +470,21 @@ void KesslerMicrophysics::init_buffers(const ATMBufferManager &buffer_manager)
                                                          &params_computed.f_qv,
                                                          &params_computed.f_qc,
                                                          &params_computed.f_qr,
+                                                         &params_computed.f_temp,
                                                          &params_computed.f_relhum,
                                                          &params_computed.f_temp_prev,
-                                                         &params_computed.f_temp,
                                                          &params_computed.f_temp_tend,
                                                          &params_computed.f_st_energy
                                                         };
   for (int i=0; i<num_2d_midlv_f; ++i) {
     *midlv_f_ptrs[i] = KMF::fview_2dl<Real>(r_mem, m_num_cols, m_num_levs);
     r_mem += midlv_f_ptrs[i]->size();
+  }
+  {
+    const size_t n2 = size_t(m_num_cols) * m_num_levs;
+    EKAT_REQUIRE_MSG(params_computed.f_temp.data() == params_helpers.f_rho.data() + 7 * n2 &&
+                     params_computed.f_st_energy.data() == params_computed.f_theta.data() + 8 * n2,
+                     "Error! Kessler's Fortran-layout arrays are not in the expected order.\n");
   }
   //----------------------------------------------------------------------------
   Pack* spk_mem = reinterpret_cast<Pack*>(r_mem);

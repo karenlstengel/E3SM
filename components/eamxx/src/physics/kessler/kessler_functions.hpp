@@ -40,13 +40,28 @@ struct KesslerMicrophysicsFunctions
     template <typename S> using fview_1d  = typename ekat::template Unmanaged<view_1d<S> >;
     template <typename S> using fview_2d  = typename ekat::template Unmanaged<view_2d<S> >;
     template <typename S> using fview_2dl = typename ekat::template Unmanaged<view_2dl<S> >;
-    template <typename S> using view_1dh  = typename view_1d<S>::HostMirror;
-    template <typename S> using view_2dh  = typename view_2dl<S>::HostMirror;
+    // Host copies of the Fortran-layout arrays, carved from one host block
+    // (see KesslerMicrophysics::initialize_impl), so a whole group of them
+    // moves between host and device in one copy
+    template <typename S> using view_1dh  = Kokkos::View<S*,  Kokkos::HostSpace, Kokkos::MemoryUnmanaged>;
+    template <typename S> using view_2dh  = Kokkos::View<S**, Kokkos::LayoutLeft, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>;
   #else 
     template <typename S> using fview_1d  = typename KT::template view_1d<S>;
     template <typename S> using fview_2d  = typename KT::template view_2d<S>;
     template <typename S> using fview_2dl = typename KT::template lview<S **>;
   #endif
+
+  // C++ <-> Fortran layout copies (transposes): one work item per (column,
+  // level), with no integer division per item. The index that varies
+  // fastest (across a GPU warp, or in the innermost CPU loop) is the one the
+  // written array is contiguous in: columns when writing the Fortran
+  // (LayoutLeft) arrays, levels when writing EAMxx's (column, level-pack)
+  // arrays. So writes are contiguous and only the reads are strided, the
+  // cheaper side (c2f, which wrote strided, cost ~4x f2c on the GPU).
+  using C2FPolicy = Kokkos::MDRangePolicy<typename KT::ExeSpace,
+                      Kokkos::Rank<2, Kokkos::Iterate::Left, Kokkos::Iterate::Left>>;
+  using F2CPolicy = Kokkos::MDRangePolicy<typename KT::ExeSpace,
+                      Kokkos::Rank<2, Kokkos::Iterate::Right, Kokkos::Iterate::Right>>;
 
   // ----------------------------------------
   // Structs
@@ -92,84 +107,21 @@ struct params_helpers {
     static constexpr int num_2d_f       = 3;  // number of 2D fields (f_rho, f_pk, f_z_mid)
     static constexpr int num_2d_intlv_c = 1;  // for z_int, which is an interface variable.
 
-    // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
-    void init(int ncol_in, int pver_in) { // TODO - Kokko-ize this
-      Real init_fill_value = 0;
-
-      // using MDPolicy = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
-      // MDPolicy mdp({0,0}, {ncol_in, pver_in});
-
-      // Kokkos::parallel_for(Kokkos::MDRangePolicy<typename KT::ExeSpace, Kokkos::Rank<2>>({0, 0}, {ncol_in, pver_in}),
-      //   KOKKOS_CLASS_LAMBDA(const int i, const int j) {
-      Kokkos::parallel_for(
-        "init params_computed", KT::RangePolicy(0, ncol_in * pver_in),
-        KOKKOS_CLASS_LAMBDA(const int i) {
-          const int icol = i / pver_in;
-          const int klev = i % pver_in;
-          f_rho(icol, klev) = init_fill_value;
-          f_pk(icol, klev) = init_fill_value;
-          f_z_mid(icol, klev) = init_fill_value;
-
-          f_phis(icol) = init_fill_value;
-          }
-        );
-
-    }; // End init
-
-    // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
+    // Fortran-layout copies of the inputs. They are inputs only, so nothing
+    // is copied back (f2c is a no-op), and they are not zero-filled first:
+    // c2f overwrites every element.
     template <ekat::TransposeDirection::Enum D>
-    void transpose(int ncol_in, int pver_in) { 
-      // auto pver_in_packs = ekat::npack<Pack>(pver_in);
-
+    void transpose(int ncol_in, int pver_in) {
       if (D == ekat::TransposeDirection::c2f) {
-
         Kokkos::parallel_for(
-          "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in),
-          KOKKOS_CLASS_LAMBDA(const int i) {
-            const int icol            = i / pver_in;
-            const int klev            = i % pver_in;
-
-            f_rho(icol, klev) = rho(icol, klev / Pack::n)[klev % Pack::n];
-            f_pk(icol, klev) = pk(icol, klev / Pack::n)[klev % Pack::n];
+          "transpose c2f helpers", C2FPolicy({0, 0}, {ncol_in, pver_in}),
+          KOKKOS_CLASS_LAMBDA(const int icol, const int klev) {
+            f_rho(icol, klev)   = rho(icol, klev / Pack::n)[klev % Pack::n];
+            f_pk(icol, klev)    = pk(icol, klev / Pack::n)[klev % Pack::n];
             f_z_mid(icol, klev) = z_mid(icol, klev / Pack::n)[klev % Pack::n];
-
-            f_phis(icol) = phis(icol);
+            if (klev == 0) f_phis(icol) = phis(icol);
           }
         );
-        #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
-          // Copy from device to host mirrors for Fortran
-          start_timer("EAMxx::kessler::run::sync_to_host");
-          Kokkos::deep_copy(h_rho,   f_rho);
-          Kokkos::deep_copy(h_pk,    f_pk);
-          Kokkos::deep_copy(h_z_mid, f_z_mid);
-          Kokkos::deep_copy(h_phis,  f_phis);
-          stop_timer("EAMxx::kessler::run::sync_to_host");
-        #endif
-      }
-      if (D == ekat::TransposeDirection::f2c) {  // Not needed but leaving in just in case/temporary
-        #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
-          // Copy from host mirrors back to device
-          start_timer("EAMxx::kessler::run::sync_to_dev");
-          Kokkos::deep_copy(f_rho,   h_rho);
-          Kokkos::deep_copy(f_pk,    h_pk);
-          Kokkos::deep_copy(f_z_mid, h_z_mid);
-          Kokkos::deep_copy(f_phis,  h_phis);
-          stop_timer("EAMxx::kessler::run::sync_to_dev");
-        #endif
-
-        Kokkos::parallel_for(
-            "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in),
-            KOKKOS_CLASS_LAMBDA(const int i) {
-              const int icol = i / pver_in;
-              const int klev = i % pver_in;
-
-              rho(icol, klev / Pack::n)[klev % Pack::n] = f_rho(icol, klev);
-              pk(icol, klev / Pack::n)[klev % Pack::n] = f_pk(icol, klev);
-              z_mid(icol, klev / Pack::n)[klev % Pack::n] = f_z_mid(icol, klev);
-
-              phis(icol) = f_phis(icol); // could skip this
-            }
-          );
       }
     }; // End transpose
 }; // End Struct params_helpers
@@ -238,114 +190,45 @@ struct params_computed {
     static constexpr int num_2d_f       = 9; // number of 2D fields (f_theta, f_qv, f_qc, f_qr, f_relhum, f_temp_prev, f_temp, f_temp_tend, f_st_energy)
     static constexpr int num_2d_intlv_c = 0; // no interface variables here.
 
-    // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
-    void init(int ncol_in, int pver_in) {
-      Real init_fill_value = 0.0;
-
-      // using MDPolicy = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
-      // MDPolicy mdp({0,0}, {ncol_in, pver_in});
-      
-      // Kokkos::parallel_for(Kokkos::MDRangePolicy<typename KT::ExeSpace, Kokkos::Rank<2>>({0, 0}, {ncol_in, pver_in}),
-      //   KOKKOS_CLASS_LAMBDA(const int i, const int j) {
-      Kokkos::parallel_for(
-        "init params_computed", KT::RangePolicy(0, ncol_in * pver_in),
-        KOKKOS_CLASS_LAMBDA(const int i) {
-          const int icol = i / pver_in;
-          const int klev = i % pver_in;
-          f_theta(icol, klev) = init_fill_value;
-          f_qv(icol, klev) = init_fill_value;
-          f_qc(icol, klev) = init_fill_value;
-          f_qr(icol, klev) = init_fill_value;
-          f_relhum(icol, klev) = init_fill_value;
-
-          f_precl(icol) = init_fill_value;
-
-          f_temp_prev(icol, klev) = init_fill_value;
-          f_temp(icol, klev) = init_fill_value;
-          f_temp_tend(icol, klev) = init_fill_value;
-          f_st_energy(icol, klev) = init_fill_value;
-          }
-        );
-    }; // End init
-
-    // Modified from the ZM implementation in components/eamxx/src/physics/zm/zm_functions.hpp
+    // Copies between EAMxx's arrays and the Fortran-layout ones, only of what
+    // the Fortran needs: c2f the arrays it reads (theta, qv, qc, qr: inout in
+    // kessler_run; temp: inout in the update), f2c the ones it writes (those,
+    // plus relhum, precl, temp_prev, temp_tend, st_energy, which it only
+    // writes, every element, so they are not copied in). Nothing is
+    // zero-filled first: c2f overwrites every element it copies, and the
+    // Fortran overwrites the rest.
     template <ekat::TransposeDirection::Enum D>
-    void transpose(int ncol_in, int pver_in) { // TODO - Kokko-ize this
-      // auto pver_in_packs = ekat::npack<Pack>(pver_in);
-
+    void transpose(int ncol_in, int pver_in) {
       if (D == ekat::TransposeDirection::c2f) {
-
         Kokkos::parallel_for(
-          "transpose c2f", KT::RangePolicy(0, ncol_in * pver_in),
-          KOKKOS_CLASS_LAMBDA(const int i) {
-            const int icol = i / pver_in;
-            const int klev = i % pver_in;
-            f_theta(icol, klev) = theta(icol, klev / Pack::n)[klev % Pack::n];
-            f_qv(icol, klev) = qv(icol, klev / Pack::n)[klev % Pack::n];
-            f_qc(icol, klev) = qc(icol, klev / Pack::n)[klev % Pack::n];
-            f_qr(icol, klev) = qr(icol, klev / Pack::n)[klev % Pack::n];
-            f_relhum(icol, klev) = relhum(icol, klev / Pack::n)[klev % Pack::n];
-            f_precl(icol) = precl(icol);
-
-            f_temp_prev(icol, klev) = temp_prev(icol, klev / Pack::n)[klev % Pack::n];
-            f_temp(icol, klev) = temp(icol, klev / Pack::n)[klev % Pack::n];
-            f_temp_tend(icol, klev) = temp_tend(icol, klev / Pack::n)[klev % Pack::n];
-            f_st_energy(icol, klev) = st_energy(icol, klev / Pack::n)[klev % Pack::n];
-            
+          "transpose c2f computed", C2FPolicy({0, 0}, {ncol_in, pver_in}),
+          KOKKOS_CLASS_LAMBDA(const int icol, const int klev) {
+            const int kp = klev / Pack::n, kl = klev % Pack::n;
+            f_theta(icol, klev) = theta(icol, kp)[kl];
+            f_qv(icol, klev)    = qv(icol, kp)[kl];
+            f_qc(icol, klev)    = qc(icol, kp)[kl];
+            f_qr(icol, klev)    = qr(icol, kp)[kl];
+            f_temp(icol, klev)  = temp(icol, kp)[kl];
           }
         );
-        #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
-          // Copy from device to host mirrors for Fortran
-          start_timer("EAMxx::kessler::run::sync_to_host");
-          Kokkos::deep_copy(h_theta, f_theta);
-          Kokkos::deep_copy(h_qv, f_qv);
-          Kokkos::deep_copy(h_qc, f_qc);
-          Kokkos::deep_copy(h_qr, f_qr);
-          Kokkos::deep_copy(h_relhum, f_relhum);
-          Kokkos::deep_copy(h_precl, f_precl);
-          Kokkos::deep_copy(h_temp_prev, f_temp_prev);
-          Kokkos::deep_copy(h_temp, f_temp);
-          Kokkos::deep_copy(h_temp_tend, f_temp_tend);
-          Kokkos::deep_copy(h_st_energy, f_st_energy);
-          stop_timer("EAMxx::kessler::run::sync_to_host");
-        #endif
       }
       if (D == ekat::TransposeDirection::f2c) {
-        #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
-          // Copy from host mirrors back to device
-          start_timer("EAMxx::kessler::run::sync_to_dev");
-          Kokkos::deep_copy(f_theta, h_theta);
-          Kokkos::deep_copy(f_qv, h_qv);
-          Kokkos::deep_copy(f_qc, h_qc);
-          Kokkos::deep_copy(f_qr, h_qr);
-          Kokkos::deep_copy(f_relhum, h_relhum);
-          Kokkos::deep_copy(f_precl, h_precl);
-          Kokkos::deep_copy(f_temp_prev, h_temp_prev);
-          Kokkos::deep_copy(f_temp, h_temp);
-          Kokkos::deep_copy(f_temp_tend, h_temp_tend);
-          Kokkos::deep_copy(f_st_energy, h_st_energy);
-          stop_timer("EAMxx::kessler::run::sync_to_dev");
-        #endif
-
         Kokkos::parallel_for(
-            "transpose f2c", KT::RangePolicy(0, ncol_in * pver_in),
-            KOKKOS_CLASS_LAMBDA(const int i) {
-              const int icol = i / pver_in;
-              const int klev  = i % pver_in;
-              theta(icol, klev / Pack::n)[klev % Pack::n] = f_theta(icol, klev);
-              qv(icol, klev / Pack::n)[klev % Pack::n] = f_qv(icol, klev);
-              qc(icol, klev / Pack::n)[klev % Pack::n] = f_qc(icol, klev);
-              qr(icol, klev / Pack::n)[klev % Pack::n] = f_qr(icol, klev);
-              relhum(icol, klev / Pack::n)[klev % Pack::n] = f_relhum(icol, klev);
-
-              precl(icol) = f_precl(icol);
-
-              temp_prev(icol, klev / Pack::n)[klev % Pack::n] = f_temp_prev(icol, klev);
-              temp(icol, klev / Pack::n)[klev % Pack::n] = f_temp(icol, klev);
-              temp_tend(icol, klev / Pack::n)[klev % Pack::n] = f_temp_tend(icol, klev);
-              st_energy(icol, klev / Pack::n)[klev % Pack::n] = f_st_energy(icol, klev);
-            }
-          );
+          "transpose f2c computed", F2CPolicy({0, 0}, {ncol_in, pver_in}),
+          KOKKOS_CLASS_LAMBDA(const int icol, const int klev) {
+            const int kp = klev / Pack::n, kl = klev % Pack::n;
+            theta(icol, kp)[kl]     = f_theta(icol, klev);
+            qv(icol, kp)[kl]        = f_qv(icol, klev);
+            qc(icol, kp)[kl]        = f_qc(icol, klev);
+            qr(icol, kp)[kl]        = f_qr(icol, klev);
+            relhum(icol, kp)[kl]    = f_relhum(icol, klev);
+            temp_prev(icol, kp)[kl] = f_temp_prev(icol, klev);
+            temp(icol, kp)[kl]      = f_temp(icol, klev);
+            temp_tend(icol, kp)[kl] = f_temp_tend(icol, klev);
+            st_energy(icol, kp)[kl] = f_st_energy(icol, klev);
+            if (klev == 0) precl(icol) = f_precl(icol);
+          }
+        );
       }
     }; // End transpose
 }; // End params_computed 

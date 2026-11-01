@@ -30,12 +30,13 @@ fork, so they can be compared against this one:
 | file | contents |
 |------|----------|
 | `eamxx_kessler_process_interface.hpp/.cpp` | `KesslerMicrophysics`, the EAMxx `AtmosphereProcess`: field requests, buffer setup, pre-processing, the bridge call |
-| `kessler_functions.hpp` | `KesslerMicrophysicsFunctions<Scalar, Device>` (KMF): view types and the `params_helpers` / `params_computed` structs that hold each field in C++ layout and in Fortran layout, with their `init()` and `transpose()` |
+| `kessler_functions.hpp` | `KesslerMicrophysicsFunctions<Scalar, Device>` (KMF): view types and the `params_helpers` / `params_computed` structs that hold each field in C++ layout and in Fortran layout, with their `transpose()` |
 | `fortran_bridge/kessler_eamxx_bridge.hpp/.cpp` | C++ side of the bridge: `kessler_eamxx_bridge_init/run/finalize`, which transpose the data and call the `bind(C)` Fortran routines |
 | `fortran_bridge/kessler_eamxx_bridge_main.F90` | Fortran side for `kessler_init` / `kessler_run` (`bind(C)` wrappers) |
 | `fortran_bridge/kessler_eamxx_bridge_update.F90` | Fortran side for `kessler_update_*`, plus applying the temperature tendency |
 | `fortran_bridge/kessler_perf_log.F90` | per-routine wall-clock totals of the Fortran calls, written to a CSV at finalize |
 | `fortran_bridge/ccpp_kinds.F90` | not compiled; the build uses `ccpp_kinds.F90` from atmospheric_physics (see [Building](#building)) |
+| `driver_bridge_transpose.cpp`, `build_driver_bridge_transpose.sh` | standalone check and timing of the C++ <-> Fortran layout copies against their previous version (`driver_bridge_transpose_ref.hpp`); not built by CMake |
 | `CMakeLists.txt` | the `kessler` library: bridge sources, the external Fortran sources, include paths; defines `EAMXX_HAS_KESSLER` |
 | `bridge/`, `kessler_jax/` | only stale `__pycache__` directories |
 
@@ -77,20 +78,23 @@ What `run_impl` does each call (timers under `EAMxx::kessler::run::`):
    surface) and `z_mid`. Same code as the C++ branch (its
    `performance_suggestions.md`, item I4). The timer is fenced, so on GPU
    it measures the kernel, not only its launch.
-3. Zero the Fortran-layout holders (`params_*.init()`).
-4. `F90_run`: `kessler_eamxx_bridge_run`, which
-   - transposes every field into Fortran layout (`F90_run::transpose_c2f`),
-   - on a GPU build without OpenACC, copies them to host mirrors
-     (`sync_to_host`),
+3. `F90_run`: `kessler_eamxx_bridge_run`, which
+   - transposes into Fortran layout the fields the Fortran reads
+     (`F90_run::transpose_c2f`): `rho`, `pk`, `z_mid`, `phis`, `theta`,
+     `qv`, `qc`, `qr`, `T_mid`,
+   - on a GPU build without OpenACC, copies those to the host
+     (`sync_to_host`, inside the c2f timer),
    - calls `kessler_run`, then `kessler_update_timestep_init`,
      `kessler_update_run`, `T = T_prev + T_tend * dt`, and
      `kessler_update_timestep_final`, all in Fortran,
    - copies back (`sync_to_dev`) and transposes back
-     (`F90_run::transpose_f2c`). Because of step 1 this writes the results
+     (`F90_run::transpose_f2c`) the fields the Fortran writes: `theta`,
+     `qv`, `qc`, `qr`, `T_mid`, `relhum`, `precl`, `T_mid_prev`,
+     `T_mid_tend`, `st_energy`. Because of step 1 this writes the results
      straight into the fields; no copy back is needed.
 
 HOMME takes its forcing from the change in `T_mid` across physics, so the
-temperature update in step 4 is what carries the latent heating to the
+temperature update in step 3 is what carries the latent heating to the
 dynamics. `kessler_update_run` itself only accumulates `T_tend`; in
 CAM-SIMA, `apply_tendency_of_air_temperature` applies it, so the bridge
 does that step itself (`kessler_eamxx_bridge_update.F90`).
@@ -161,6 +165,31 @@ column-major order (column index fastest). Each field therefore has a
 second, Fortran-layout view (`f_*`, `LayoutLeft`, `Real`), and
 `transpose<c2f>()` / `transpose<f2c>()` in `kessler_functions.hpp` copy
 between them, reading single levels as `x(col, k / Pack::n)[k % Pack::n]`.
+
+They copy only what is needed (2026-11-01): c2f only the arrays the
+Fortran reads, f2c only the ones it writes (`params_helpers` holds inputs
+only, so it has no f2c). Arrays the Fortran only writes (`relhum`,
+`precl`, `T_mid_prev`, `T_mid_tend`, `st_energy`) are not copied in: the
+Fortran writes every element. Nothing is zero-filled first (there used to
+be an `init()` kernel for that every call). Each direction is one 2-D
+`MDRangePolicy` (no integer division per element), with the index the
+written array is contiguous in varying fastest (columns for c2f, levels
+for f2c), so writes are contiguous and only the reads are strided. Results
+are unchanged, bit for bit (`driver_bridge_transpose.cpp`). Per call, old
+(zero-fill + c2f + f2c) vs new, one rank's columns:
+
+| build | columns | old | new | speedup |
+|-------|--------:|----:|----:|--------:|
+| CPU (Serial, one core) | 108 | 0.41 ms | 0.13 ms | 3.1x |
+| CPU (Serial, one core) | 1519 | 6.2 ms | 3.1 ms | 2.0x |
+| GPU with OpenACC | 3457 | 0.29 ms | 0.09 ms | 3.0x |
+| GPU with OpenACC | 48601 | 4.5 ms | 1.2 ms | 3.6x |
+| GPU without OpenACC (incl. host copies) | 3457 | 3.9 ms | 2.0 ms | 1.9x |
+| GPU without OpenACC (incl. host copies) | 48601 | 46 ms | 30 ms | 1.5x |
+
+In the model the CPU copies cost more than in the driver (ne60: about
+13 ms per call per direction, 1.26 s/day), probably because 128 ranks
+share the node's memory bandwidth.
 Tracers (`qv`, `qc`, `qr`) are strided slices of EAMxx's bundled tracer
 field; indexing through the packed view handles the stride, so never pass
 `.data()` of a tracer view to Fortran directly.
@@ -174,9 +203,18 @@ allocation, as P3, SHOC and ZM do:
 - `init_buffers()` hands consecutive pieces of the buffer to the views, in
   a fixed order.
 
+The order of the `f_` views matters: the ones the Fortran reads
+(`f_rho` .. `f_temp`) and the ones it writes (`f_theta` .. `f_st_energy`)
+are each one contiguous range (checked in `init_buffers()`), so the GPU
+build without OpenACC copies each direction to or from the host in one
+piece. `initialize_impl` carves the host copies from one host block in the
+same order.
+
 To add a field: add the C++ and `f_` members to the struct, raise its
-counts, add it to the pointer lists in `init_buffers()`, to `init()`, and
-to both directions of `transpose()`. The C++ views of fields the process
+counts, add it to the pointer lists in `init_buffers()` (keeping the read
+and write ranges contiguous, and updating the range lengths in
+`kessler_eamxx_bridge_run` and the host carving in `initialize_impl`), and
+to the directions of `transpose()` it needs. The C++ views of fields the process
 already owns (`rho`, `theta`, `qv`, ...) are also carved, but `run_impl`
 re-points them at the field views every call, so only `z_mid`, `z_int` and
 the `f_` views actually use their buffer memory.
@@ -190,7 +228,7 @@ OpenACC Fortran flags in
 |-------|--------------------------------------------|-----------------|------------------------|
 | CPU (`nvidia`) | Serial, host | host, standard source | `f_` views (host memory) |
 | GPU with OpenACC (`nvidiagpu`, `OPENACC_GPU_OFFLOAD=TRUE`) | CUDA | GPU, OpenACC source, `-acc -gpu=cc80` | `f_` views: device pointers, used with `deviceptr` in the OpenACC loops |
-| GPU without OpenACC (`nvidiagpu`, `OPENACC_GPU_OFFLOAD=FALSE`; "gpucpu") | CUDA | host, one core per rank, standard source | host mirrors `h_*` (allocated in `initialize_impl`), copied with `deep_copy` every call |
+| GPU without OpenACC (`nvidiagpu`, `OPENACC_GPU_OFFLOAD=FALSE`; "gpucpu") | CUDA | host, one core per rank, standard source | host copies `h_*` (one host block, carved in `initialize_impl`), copied every call: one copy per direction for the 2-D arrays plus one for `phis` / `precl` |
 
 The `#if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)`
 blocks in `kessler_functions.hpp`, `kessler_eamxx_bridge.cpp` and
@@ -339,12 +377,16 @@ The C++/Fortran/JAX comparison uses scripts outside this repository, in
 ## Status and open items
 
 - The pre-processing kernel and its fenced timer match the C++ branch
-  (2026-10-29, uncommitted, not built yet). Next: build, check bit for bit
-  against the current `f90_*_514f63089f-*` builds at ne16, then rerun the
-  perf matrix.
+  (committed in `025012875a`, built 2026-10-29 as `f90_*_025012875a`; no
+  model runs with it yet).
 - The Fortran `errflg` is not checked after the calls.
-- Per call, the `params_*.init()` zero-fill before the transpose is an
-  extra kernel that could be dropped (the transpose overwrites every
-  value).
+- 2026-11-01, not built yet: the layout copies above (only what the
+  Fortran needs, no zero-fill, contiguous writes, one host copy per
+  direction on the GPU build without OpenACC), and in the external Fortran
+  sources the OpenACC `kessler_run` restructured to one gang per column
+  and `pow` skipped for dry levels in both versions
+  (`GPU_ports/.../schemes/kessler/bench/README.md`). Those sources are
+  outside this repository, so `build.sh` needs `--force` to rebuild an
+  already-built commit with them.
 - The atmospheric_physics paths in `CMakeLists.txt` are hard-coded to one
   user's scratch.

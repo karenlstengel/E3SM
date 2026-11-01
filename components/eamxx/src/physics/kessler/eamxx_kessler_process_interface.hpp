@@ -75,6 +75,12 @@ public:
     KMF::params_helpers params_helpers; // Helper variables 
     KMF::params_computed params_computed; // Variables computed in the run_impl function
 
+    #if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)
+      // Host memory for the h_ copies of the Fortran-layout arrays (Fortran on
+      // the host): one block, carved in the order of the f_ arrays
+      Kokkos::View<Real*, Kokkos::HostSpace> m_h_fortran_block;
+    #endif
+
 }; // class Kessler
 
 } // namespace scream

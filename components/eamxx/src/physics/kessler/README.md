@@ -242,7 +242,8 @@ from and repeats itself bit for bit. The OpenACC versions differ from the
 serial one by at most 1.7e-9 relative (GPU `pow`/`exp`). (The starting
 OpenACC version kept applying two unmasked updates to finished columns with
 `dt0 = max(dt - elapsed, 0)`; that `dt0` is exactly 0 in these tests, so
-they change nothing.) Model runs have not been done yet.
+they change nothing.) Model runs with the serial version and OpenACC v7:
+see [Status and open items](#status-and-open-items).
 
 Building the benchmark's serial versions on a GPU node needs `-noacc`: the
 node's environment (`CRAY_ACCEL_TARGET=nvidia80`) makes nvfortran enable
@@ -508,15 +509,23 @@ The C++/Fortran/JAX comparison uses scripts outside this repository, in
 
 ## Status and open items
 
-- Built 2026-11-01 as `f90_{cpu,gpu,gpucpu}_4b2cebd3f7`: this branch at
-  `4b2cebd3f7` (the pre-processing kernel and fenced timer of `025012875a`,
-  and the layout copies above) with the external Fortran of that time. The
-  CPU and gpucpu builds have the serial version described above; the GPU
-  build has OpenACC step v1, not the final v7, so it needs rebuilding
-  (`build.sh --submit f90 gpu --force`: only the external source changed).
-  No model runs yet. All of it keeps the results the same, so the runs
-  should be bit for bit with the 2026-10-16 Fortran runs in
-  `homme_atm.log`.
+- Built 2026-11-01 from this branch at `4b2cebd3f7` (the pre-processing
+  kernel and fenced timer of `025012875a`, and the layout copies above)
+  with the external Fortran of that time:
+  - `f90_cpu_4b2cebd3f7` and `f90_gpucpu_4b2cebd3f7`: the serial version
+    described above.
+  - `f90_gpu_4b2cebd3f7-dirtycecd5348`: OpenACC v7. Its OpenACC kernels sit
+    at the lines of the current v7 source (collapse(2) initialisation,
+    thread-per-column first CFL step and first sub-step, the
+    `vector_length(64)` gang-per-column loop, precl, relhum). The repository
+    diff of this build is only this README.
+  - `f90_gpu_4b2cebd3f7` (no suffix) compiled OpenACC v1, before the v7
+    source was in place. Do not use it; it has no run cases.
+- Model runs (`GK_perf_utils/data/run_manifest.csv`): 24 cases on each of
+  the three builds above (72 in all), created 2026-11-02, all
+  `case.run success`. They have not yet been compared with the 2026-10-16
+  Fortran runs. All the changes keep the results the same, so they should
+  be bit for bit in `homme_atm.log`.
 - The Fortran `errflg` is not checked after the calls.
 - The changes in the external Fortran checkouts are uncommitted. Changing
   only those (not this repository) leaves the build tag the same, so

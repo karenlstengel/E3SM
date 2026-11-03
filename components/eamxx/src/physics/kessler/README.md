@@ -2,12 +2,14 @@
 
 The Kessler (1969) warm-rain microphysics scheme as an EAMxx atmosphere
 process (`kessler`). On this branch (`ren/kessler-bridge`) the physics is the
-original CCPP/CAM-SIMA Fortran from
+CCPP/CAM-SIMA Fortran from
 [ESCOMP/atmospheric_physics](https://github.com/ESCOMP/atmospheric_physics)
 (`schemes/kessler/kessler.F90` and `kessler_update.F90`), called from the
-C++ process through a C++/Fortran bridge in `fortran_bridge/`. The same
-Fortran can run on the CPU, on the host cores of a GPU node, or on the GPU
-through OpenACC.
+C++ process through a C++/Fortran bridge in `fortran_bridge/`. It runs on
+the CPU or the host cores of a GPU node (the serial scheme), or on the GPU
+(an OpenACC port of it). Both are compiled from checkouts outside this
+repository, each with local performance changes that keep the results the
+same (see [The Fortran Kessler versions](#the-fortran-kessler-versions)).
 
 The scheme has three moisture categories: water vapor (`qv`), cloud water
 (`qc`) and rain water (`qr`, which falls relative to the air). It does
@@ -130,6 +132,123 @@ the matching signature for each build. The Fortran `z` argument of
 `kessler_run` is the height of each level (`z_mid`), not a layer
 thickness.
 
+## The Fortran Kessler versions
+
+The bridge compiles one of two versions of `schemes/kessler/kessler.F90`
+(see [External Fortran sources](#external-fortran-sources)). Both have
+local changes (2026-11-01, uncommitted in their checkouts) that change
+speed only; the versions before them are kept in each checkout's
+`schemes/kessler/reference/`, and
+`GPU_ports/atmospheric_physics/schemes/kessler/bench/` holds a standalone
+benchmark that builds and compares all four (README and results there).
+
+**Serial version** (CPU and gpucpu builds): the scheme's own structure, a
+loop over columns with each column's sub-cycling `do while` inside, so
+every column does only its own sub-steps. Change: the four powers of rain
+water (`(qr*r)**0.1364` in both fall-speed computations, `qr**0.875` in
+autoconversion and collection, `(r*qr)**0.2046` and `**0.525` in
+evaporation) are skipped where `qr = 0`. `pow(0, e > 0) = 0`, so the
+results are the same bit for bit; most levels are dry even in raining
+columns. The same change as the C++ branch's item I2.
+
+**OpenACC version** (GPU build). The port this branch started from ran
+the sub-cycling as a host loop: every sub-step launched about ten kernels
+over all columns, with finished columns masked, plus a reduction read back
+on the host to test convergence, until the slowest column was done, so
+every column did the slowest column's number of sub-steps (up to ~140 with
+rain). It also created and deleted its device work arrays and printed the
+iteration count on every call. The C++ branch had the same structure in its
+first port. The version now in use (v7 of the tuning steps below):
+
+- **Sub-cycling: one gang per column** (the C++ branch's item D1 in
+  OpenACC), its levels spread over the gang's 64 vector lanes; each column
+  runs its own sub-steps and stops when it reaches `dt`. The kernel runs at
+  most 32 sub-steps per column per launch and is launched again while any
+  column has not reached `dt` (one reduction read back per launch: ~5
+  launches per call with rain). nvfortran spreads the level loops over the
+  vector lanes only inside a counted loop without an `exit` (inside a
+  `do while`, or a loop that exits, it runs them one level at a time;
+  checked with `-Minfo=accel`), so a column that is done just skips its
+  remaining sub-steps of a launch.
+- **The column copied into shared memory for its sub-steps.** In the
+  `(ncol, nz)` Fortran arrays a column's levels are `ncol` elements apart,
+  so every access a warp makes over levels touches 32 cache lines. Each
+  running column is copied into gang-private arrays at the start of a
+  launch (nvfortran places them in CUDA shared memory; up to
+  `nz_max = 128` levels), its sub-steps work there, and the updated
+  `theta`, `qv`, `qc`, `qr`, `velqr` are written back at the end.
+- **Columns on the vector lanes where no level neighbour is needed:**
+  the point-wise initialisation and the relative humidity
+  (`collapse(2)`, column index innermost, so a warp reads consecutive
+  columns), the first CFL step and the precipitation rate (one thread per
+  column).
+- **First sub-step one thread per column** when there are at least
+  `lanes_first_step_min_cols = 20000` columns (ne60: 48601 per GPU rank):
+  every column needs at least one sub-step, and most need only that one
+  (all of them without rain). The thread does the levels in order from the
+  surface up; each level's sedimentation reads the level above before that
+  level is updated, so it is the same computation. Only the columns still
+  running go on to the gang-per-column kernel, which is not launched at all
+  without rain. With fewer columns there are too few threads to keep the
+  GPU busy this way, and the gang kernel does all sub-steps (measured
+  crossover ~12000 columns without rain, ~24000 with rain).
+- Work arrays and the per-column sub-cycling state stay on the device
+  between calls, the print is gone, the constant `f5` and `xk` are scalars,
+  `pow` is skipped for dry levels as in the serial version, and a column
+  that cannot reach `dt` (`dt0` reaching 0, or 100000 sub-steps) returns an
+  error instead of looping forever.
+
+### Performance report (2026-11-01)
+
+Standalone, with `GPU_ports/atmospheric_physics/schemes/kessler/bench/`
+(synthetic columns as in the C++ and JAX drivers: 58 levels, top-down, a
+given fraction of rainy columns; one A100 or one CPU core; one rank's
+columns). Every step was kept only if it stayed bit for bit with the
+OpenACC version this branch started from, at ne16 and ne60, rain fractions
+0-12%, over 3-step chains, and was faster beyond the ~10% run-to-run spread.
+
+OpenACC `kessler_run`, s/call, every call from the start state (min of 10):
+
+| step | change | ne16 (3457), no rain | ne16, 8% rain | ne60 (48601), no rain | ne60, 8% rain |
+|------|--------|------:|------:|------:|------:|
+| start | host loop over sub-steps | 0.341e-3 | 24.5e-3 | 3.29e-3 | 266e-3 |
+| v1 | one gang per column, sub-cycling inside it | 0.295e-3 | 2.20e-3 | 3.02e-3 | 26.1e-3 |
+| v2 | + column in shared memory for the sub-steps | 0.283e-3 | 1.72e-3 | 3.59e-3 | 7.70e-3 |
+| v3 | + columns on the lanes for initialisation and relhum | 0.267e-3 | 1.71e-3 | 2.28e-3 | ~7.4e-3 |
+| v7 | + first sub-step one thread per column (>= 20000 columns) | **0.267e-3** | **1.73e-3** | **0.848e-3** | **6.46e-3** |
+| | final vs start | 1.3x | 14x | 3.9x | 41x |
+
+Tried and not kept (`bench/versions/README.md`): moving the error checks
+into the sub-cycling kernel's reduction (v4; 5-10% slower with rain at
+ne16) and counting the running columns in a separate thread-per-column
+kernel (v5; +3-7% at ne60, -2-3% at ne16). Where the time goes now (nsys,
+ne60, per call): without rain 0.73 ms of kernels (thread-per-column first
+sub-step 0.41 ms, initialisation 0.21 ms, relhum 0.09 ms); with 8% rain
+7.2 ms (gang-per-column sub-cycling 6.0 ms in 5 launches, its reductions
+0.44 ms). For comparison, the C++ team-per-column `kessler_run` on the same
+columns (before its I2 change, which gave another 1.03-1.14x on GPU):
+1.15e-3 (ne16, 8% rain) and 7.56e-3 (ne60, 8% rain).
+
+Serial version, one core: skipping `pow` for dry levels, 1.8x without rain
+and 1.5-1.7x with 3-12% rain (ne16: 108 columns, ne60: 1519), bit for bit.
+
+The bridge's C++ <-> Fortran layout copies: see
+[Working with a Fortran bridge](#working-with-a-fortran-bridge-in-an-atmosphere-process),
+item 3 (2-3.6x, bit for bit).
+
+Results: the new serial version is bit for bit with the old one, and every
+OpenACC step is bit for bit with the OpenACC version this branch started
+from and repeats itself bit for bit. The OpenACC versions differ from the
+serial one by at most 1.7e-9 relative (GPU `pow`/`exp`). (The starting
+OpenACC version kept applying two unmasked updates to finished columns with
+`dt0 = max(dt - elapsed, 0)`; that `dt0` is exactly 0 in these tests, so
+they change nothing.) Model runs have not been done yet.
+
+Building the benchmark's serial versions on a GPU node needs `-noacc`: the
+node's environment (`CRAY_ACCEL_TARGET=nvidia80`) makes nvfortran enable
+OpenACC by default. EAMxx's CPU builds run on CPU nodes and are not
+affected.
+
 ## Working with a Fortran bridge in an atmosphere process
 
 How this process connects C++ fields to the Fortran scheme, as a pattern
@@ -165,6 +284,9 @@ column-major order (column index fastest). Each field therefore has a
 second, Fortran-layout view (`f_*`, `LayoutLeft`, `Real`), and
 `transpose<c2f>()` / `transpose<f2c>()` in `kessler_functions.hpp` copy
 between them, reading single levels as `x(col, k / Pack::n)[k % Pack::n]`.
+Tracers (`qv`, `qc`, `qr`) are strided slices of EAMxx's bundled tracer
+field; indexing through the packed view handles the stride, so never pass
+`.data()` of a tracer view to Fortran directly.
 
 They copy only what is needed (2026-11-01): c2f only the arrays the
 Fortran reads, f2c only the ones it writes (`params_helpers` holds inputs
@@ -190,9 +312,6 @@ are unchanged, bit for bit (`driver_bridge_transpose.cpp`). Per call, old
 In the model the CPU copies cost more than in the driver (ne60: about
 13 ms per call per direction, 1.26 s/day), probably because 128 ranks
 share the node's memory bandwidth.
-Tracers (`qv`, `qc`, `qr`) are strided slices of EAMxx's bundled tracer
-field; indexing through the packed view handles the stride, so never pass
-`.data()` of a tracer view to Fortran directly.
 
 **4. Memory.** The Fortran-layout views, and C++ helpers that are not
 fields (`z_mid`, `z_int`), are carved from the process's `ATMBufferManager`
@@ -233,8 +352,11 @@ OpenACC Fortran flags in
 The `#if defined(EAMXX_ENABLE_GPU) && !defined(EAMXX_ENABLE_OPENACC)`
 blocks in `kessler_functions.hpp`, `kessler_eamxx_bridge.cpp` and
 `initialize_impl` select the host-mirror path. With OpenACC, the Fortran
-must treat the incoming arrays as device memory (`deviceptr`) and create
-its own scratch on the device (`!$acc enter data create`).
+must treat the incoming arrays as device memory (`deviceptr`) and keep its
+own scratch on the device: the OpenACC `kessler_run` creates its work
+arrays with `!$acc enter data create` on the first call and keeps them
+(again only if `ncol` or `nz` change), rather than creating and deleting
+them every call.
 
 **6. Build.** `CMakeLists.txt` puts the bridge `.cpp`/`.F90` files, the
 scheme's `.F90` files and the CCPP framework modules they use into one
@@ -295,6 +417,16 @@ from a checkout of atmospheric_physics at a fixed path:
 |-------|---------------------------|--------|
 | OpenACC off (CPU, gpucpu) | `/glade/derecho/scratch/kstengel/E3SM/atmospheric_physics` | ESCOMP/atmospheric_physics, tag `atmos_phys0_20_000` |
 | OpenACC on (GPU) | `/glade/derecho/scratch/kstengel/E3SM/GPU_ports/atmospheric_physics` | OpenACC port, `johnmauff/atmospheric_physics`, branch `openacc-fixes` |
+
+Both checkouts carry uncommitted local changes in `schemes/kessler/`: the
+interface changes this branch needs (`cpair`/`rair` passed to
+`kessler_init` as scalars instead of per-point arrays to `kessler_run`)
+and the performance changes in
+[The Fortran Kessler versions](#the-fortran-kessler-versions), with the
+earlier versions in `schemes/kessler/reference/`. `build.sh` records only
+this repository's commit and diff, so a build's provenance does not show
+which state of these checkouts it compiled; note it with the runs, or
+commit those checkouts first.
 
 From the selected checkout it compiles `schemes/kessler/kessler.F90`,
 `schemes/kessler/kessler_update.F90`,
@@ -376,17 +508,18 @@ The C++/Fortran/JAX comparison uses scripts outside this repository, in
 
 ## Status and open items
 
-- The pre-processing kernel and its fenced timer match the C++ branch
-  (committed in `025012875a`, built 2026-10-29 as `f90_*_025012875a`; no
-  model runs with it yet).
+- Built 2026-11-01 as `f90_{cpu,gpu,gpucpu}_4b2cebd3f7`: this branch at
+  `4b2cebd3f7` (the pre-processing kernel and fenced timer of `025012875a`,
+  and the layout copies above) with the external Fortran of that time. The
+  CPU and gpucpu builds have the serial version described above; the GPU
+  build has OpenACC step v1, not the final v7, so it needs rebuilding
+  (`build.sh --submit f90 gpu --force`: only the external source changed).
+  No model runs yet. All of it keeps the results the same, so the runs
+  should be bit for bit with the 2026-10-16 Fortran runs in
+  `homme_atm.log`.
 - The Fortran `errflg` is not checked after the calls.
-- 2026-11-01, not built yet: the layout copies above (only what the
-  Fortran needs, no zero-fill, contiguous writes, one host copy per
-  direction on the GPU build without OpenACC), and in the external Fortran
-  sources the OpenACC `kessler_run` restructured to one gang per column
-  and `pow` skipped for dry levels in both versions
-  (`GPU_ports/.../schemes/kessler/bench/README.md`). Those sources are
-  outside this repository, so `build.sh` needs `--force` to rebuild an
-  already-built commit with them.
+- The changes in the external Fortran checkouts are uncommitted. Changing
+  only those (not this repository) leaves the build tag the same, so
+  `build.sh` then needs `--force` to rebuild.
 - The atmospheric_physics paths in `CMakeLists.txt` are hard-coded to one
   user's scratch.

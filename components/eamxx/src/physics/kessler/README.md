@@ -536,10 +536,12 @@ this branch; `ren/kessler-bridge` uses it.
   cases).
 - Driver: the copy of `kessler_run_core` used for pass counts matches the
   original bit for bit.
-- Model: the JAX build runs the perf matrix (ne16, ne30, ne60; CPU, GPU and
-  gpucpu; rain and no rain) with `py_backend=host` and the translated loop.
-  The `py_backend=device` path, warmup on the device path and the
-  `py_run_variant` variants have not been run in the model yet.
+- Model: the JAX builds run the perf matrix (ne16, ne30, ne60; CPU, GPU and
+  gpucpu; rain and no rain). Since 2026-10-29 the `c333c4e23c` builds have
+  also run `py_backend=device`, warmup on the device path, and the
+  `py_run_variant` variants (see [Status and open items](#status-and-open-items)).
+  The runs have finished; their history output has not yet been compared
+  between variants.
 - Still open: a direct comparison of `precl`/`qr`/`qc`/`theta` with the
   Fortran reference (`ren/kessler-bridge`) and the C++ branch.
 
@@ -549,9 +551,18 @@ this branch; `ren/kessler-bridge` uses it.
   `py_backend=device`, warmup on the device path, `kessler::py_run_variant`
   with `kessler_jax_experimental/`, and the driver and its checks. Built as
   `jax_gpu_c333c4e23c` and `jax_cpu_c333c4e23c` (2026-10-29).
-- Model runs with `py_backend=device` and the variants (builds submitted
-  2026-10-29): first a bit-for-bit comparison of history output between
-  variants, then the perf matrix.
+- Model runs with `py_backend=device` and the variants
+  (`GK_perf_utils/data/run_manifest.csv`, created 2026-10-29 to 11-02, all
+  with `kessler::py_warmup=true`, all `case.run success`):
+  - `jax_cpu_c333c4e23c` (cpu) and `jax_gpu_c333c4e23c` (gpucpu):
+    `current`, `map` and `split`, `py_backend=host`.
+  - `jax_gpu_c333c4e23c` (gpu): `current`, `pallas` and `split`, each with
+    `py_backend=host` and `device`.
+  - 27 cases per combination, except `split` with `py_backend=host` on gpu
+    and on gpucpu: 8 each (1-day sc1 no-rain at ne16/ne30/ne60, and sc1 rain
+    at ne16 only). There are no sc4 or ne30/ne60 rain cases for those two.
+  Still to do: a bit-for-bit comparison of history output between variants
+  and backends, then the perf-matrix comparison.
 - The variants' speed-ups were measured on synthetic columns; the number of
   rainy columns and their pass counts in real model states are not checked
   yet.
